@@ -1,0 +1,25 @@
+# Local Arduino CLI
+.arduino/
+arduino-cli.yaml
+
+# Claude Code
+.claude/settings.local.json
+
+# Temporary files
+status.txt
+
+# Arduino build output
+build/
+*.bin
+*.elf
+*.map
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
