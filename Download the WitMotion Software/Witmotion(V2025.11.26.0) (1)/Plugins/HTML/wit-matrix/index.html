@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>矩阵曲面图</title>
+	<meta charset="utf-8">
+    <script src="./js/echarts.min.js"></script>
+    <script src="./js/echarts-gl.min.js"></script>
+</head>
+<body style="margin: 0;padding: 0;">
+<div id="main" style="width: 100%;height:100%;position: absolute;"></div>
+</body>
+
+<script type="text/javascript">
+    var chartDom = document.getElementById('main');
+    var myChart = echarts.init(chartDom);
+    var option;
+
+    var data = [
+        [0,0,0,0,0,0,0,0],
+        [0,0,6,0,0,2,0,0],
+        [0,0,0,0,0,0,0,0],
+        [0,1,0,0,0,1,0,1],
+        [0,0,0,2,0,8,0,0],
+        [0,2,0,0,0,0,0,1],
+        [0,0,0,4,0,1,0,0],
+        [0,0,0,0,0,0,0,0]
+    ];
+
+    option = {
+        tooltip: {},
+        backgroundColor: '#fff',
+        visualMap: {
+            show: true,
+            dimension: 2,
+            min: 0,
+            // 最大距离
+            max: 100,
+            inRange: {
+                color: [
+                    '#313695',
+                    '#4575b4',
+                    '#74add1',
+                    '#abd9e9',
+                    '#e0f3f8',
+                    '#ffffbf',
+                    '#fee090',
+                    '#fdae61',
+                    '#f46d43',
+                    '#d73027',
+                    '#a50026'
+                ]
+            },
+            textStyle: {
+                // 取色器字体颜色
+                color: '#333'
+            }
+        },
+        xAxis3D: {
+            type: 'value',
+            nameTextStyle: {
+                // 标题颜色
+                color:'#333'
+            },
+            axisLine: {
+                lineStyle: {
+                    // 线段颜色
+                    color:'#333'
+                }
+            }
+        },
+        yAxis3D: {
+            type: 'value',
+            nameTextStyle: {
+                // 标题颜色
+                color:'#333'
+            },
+            axisLine: {
+                lineStyle: {
+                    // 线段颜色
+                    color:'#333'
+                }
+            }
+        },
+        zAxis3D: {
+            type: 'value',
+            min: 0,
+            max: 100,
+            nameTextStyle: {
+                // 标题颜色
+                color:'#333'
+            },
+            axisLine: {
+                lineStyle: {
+                    // 线段颜色
+                    color:'#333'
+                }
+            }
+        },
+        grid3D: {
+            viewControl: {
+            // projection: 'orthographic'
+            }
+        },
+        series: [
+            {
+                type: 'surface',
+                wireframe: {
+                    // show: false
+                },
+                equation: {
+                    x: {
+                        min: 0,
+                        max: 7,
+                        step: 1
+                    },
+                    y: {
+                        min: 0,
+                        max: 7,
+                        step: 1
+                    },
+                    z: function (x, y) {
+                        return data[x][y];
+                    }
+                }
+            }
+        ]
+    };
+    
+    // 页面加载时
+    window.onload = function () {
+        var result = getUrlVars();
+        if (result != undefined) {
+            theme = result;
+
+            if(result === 'darkBlue'){
+                // 暗蓝主题
+                option.backgroundColor = '#213347';
+                option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+            } else if(result === 'dark'){
+                // 深色主题
+                option.backgroundColor = '#000000';
+                option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+            }
+        }
+
+        option && myChart.setOption(option);
+    }
+
+    // 接口方法 ----------------------------------------------------------------------
+    // 主题默认为亮色
+    var theme = light;
+
+    function getUrlVars() {
+        var vars = [], hash;
+        var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
+        for (var i = 0; i < hashes.length; i++) {
+            hash = hashes[i].split('=');
+            vars.push(hash[0]);
+            vars[hash[0]] = hash[1];
+        }
+        return vars["theme"];
+    }
+
+    // 更改矩阵的数据
+    function setMatrixData(data) {
+        this.data = JSON.parse(data);
+        this.option.series[0].z = this.data
+        this.reloadChart();
+    }
+
+    // 更改X轴最大高度
+    function setXHeightMax(data) {
+        option.series[0].equation.x.max = data - 1;
+        this.reloadChart();
+    }
+
+    // 更改Y轴最大高度
+    function setYHeightMax(data) {
+        option.series[0].equation.y.max = data - 1;
+        this.reloadChart();
+    }
+    
+    // 设置Z轴最大高度
+    function setZHeightMax(data) {
+        option.zAxis3D.max = data;
+        this.reloadChart();
+    }
+
+    // 设置颜色最大值
+    function setColorHeightMax(data) {
+        option.visualMap.max = data;
+        this.reloadChart();
+    }
+    
+    // 设置颜色组
+    function setColorGroup(data) {
+        option.visualMap.inRange.color = data;
+        this.reloadChart();
+    }
+
+    // 重新加载图表
+    function reloadChart() {
+        myChart.setOption(option)
+    }
+    </script>
+</html>
+

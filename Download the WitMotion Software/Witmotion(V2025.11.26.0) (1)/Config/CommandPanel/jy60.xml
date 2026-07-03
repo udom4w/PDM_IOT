@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+
+    <!-- 全局变量 -->
+    <Variables>
+        <Var id="comm_rate" type="short" default="1" desc="波特率(bps)" />
+        <Var id="mode" type="short" default="0" desc="模式" />
+        <Var id="direction" type="short" default="0" desc="安装方向" />
+        <Var id="bandwidth" type="short" default="0" desc="测量带宽" />
+    </Variables>
+
+    <!-- 全局指令 -->
+    <Commands>
+    </Commands>
+    
+    <!-- 全局函数 -->
+    <Functions>
+
+        <Function id="set_comm_rate_func" desc="设置波特率">
+            <![CDATA[
+                var comm_rate = Variables.Get("comm_rate");
+
+                Device.SendHex("FF AA  " + ((short)comm_rate.Value).ToString("X2"), 100);
+
+                Thread.Sleep(50);
+                int baudrate = ((short)comm_rate.Value) switch
+                {
+                    100 => 9600,
+                    99 => 115200,
+                    _ => 9600,
+                };
+				
+				Device.ChangeBaudrate(baudrate);
+            ]]>
+        </Function>
+
+        <Function id="set_bandwidth_func" desc="设置带宽">
+            <![CDATA[
+                var bandwidth = Variables.Get("bandwidth");
+
+                Device.SendHex("FF AA  " + ((short)bandwidth.Value).ToString("X2"), 100);
+            ]]>
+        </Function>
+
+        <Function id="set_direction_func" desc="设置安装方向">
+            <![CDATA[
+                var direction = Variables.Get("direction");
+
+                Device.SendHex("FF AA  " + ((short)direction.Value).ToString("X2"), 100);
+            ]]>
+        </Function>
+
+        <Function id="sleep_func" desc="休眠">
+            <![CDATA[
+                Device.SendHex("FF AA 60", 100);
+            ]]>
+        </Function>
+
+        <Function id="set_z_axis_reset_func" desc="设置Z轴归零">
+            <![CDATA[
+                Device.SendHex("FF AA 02", 100);
+            ]]>
+        </Function>
+        <Function id="set_acc_calibration_func" desc="加计校准">
+            <![CDATA[
+                Device.SendHex("FF AA 67", 100);
+            ]]>
+        </Function>
+
+    </Functions>
+    <!-- 控件配置 -->
+    <UITemplate>
+      
+        <!-- 子控件 -->
+        <Controls desc="控件配置">
+            <CAccordionGroup id="system_configuration" desc="系统配置分组" text-zh="系统配置"
+                text-en="System Configuration" orientation="vertical">
+                <Controls>
+                    <CButton id="sleep_button" text-zh="休眠" text-en="Sleep" onclick="sleep_func"/>
+                    <CLable text-zh="安装方向：" text-en="Direction:"></CLable>
+                    <CDropdown variable="direction" onchange="set_direction_func">
+                        <Items>     
+                            <Item value="0" text-zh="水平" text-en="Horizontal"></Item>
+                            <Item value="1" text-zh="垂直" text-en="Vertical"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="calibration_configuration" text-zh="校准配置"
+                text-en="Calibration Configuration">
+                <Controls>
+                    <CButton text-zh="Z轴归零" text-en="Z-axis Reset" onclick="set_z_axis_reset_func"/>
+                    <CButton text-zh="加计校准" text-en="Acc calibration" onclick="set_acc_calibration_func"/>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="range_configuration" text-zh="范围" text-en="Range">
+                <Controls>
+                    <CLable text-zh="测量带宽" text-en="bandwidth"></CLable>
+                    <CDropdown variable="bandwidth" onchange="set_bandwidth_func">
+                        <Items>
+                            <Item value="0x81" text-zh="256Hz" text-en="256Hz"></Item>
+                            <Item value="0x82" text-zh="188Hz" text-en="188Hz"></Item>
+                            <Item value="0x83" text-zh="98Hz" text-en="98Hz"></Item>
+                            <Item value="0x84" text-zh="42Hz" text-en="42Hz"></Item>
+                            <Item value="0x85" text-zh="20Hz" text-en="20Hz"></Item>
+                            <Item value="0x86" text-zh="10Hz" text-en="10Hz"></Item>
+                            <Item value="0x87" text-zh="5Hz" text-en="5Hz"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+            <CAccordionGroup id="comm_configuration" text-zh="通讯" text-en="Communication">
+                <Controls>
+                    <!-- 通讯速率 -->
+                    <CLable text-zh="波特率" text-en="comm_rate"></CLable>
+                    <CDropdown variable="comm_rate" onchange="set_comm_rate_func">
+                        <Items>
+                            <Item value="100" text-zh="9600" text-en="9600"></Item>
+                            <Item value="99" text-zh="115200" text-en="115200"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+        </Controls>
+    </UITemplate>
+</root>

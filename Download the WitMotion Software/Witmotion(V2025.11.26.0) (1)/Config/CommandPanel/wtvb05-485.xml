@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+
+    <!-- 全局变量 -->
+    <Variables>
+        <Var id="comm_rate" type="short" default="1" desc="波特率(bps)" />
+        <Var id="addr" type="short" default="0x00" desc="设备地址" />
+    </Variables>
+
+    <!-- 全局指令 -->
+    <Commands>
+        <Cmd id="unlock_reg" desc="解锁寄存器" data="FF AA 69 88 B5" type="hex" delay="100"/>
+        <Cmd id="save_reg" desc="保存配置" data="FF AA 00 00 00" type="hex" delay="100"/>
+    </Commands>
+    
+    <!-- 全局函数 -->
+    <Functions>
+        <Function id="read_param_func" desc="读取维特协议参数">
+            <![CDATA[
+                Plugins.WitNormal.ReadReg(new List<WitNormalRegMapping>
+                { 
+                    new WitNormalRegMapping(){ Reg = 0x04, Var = "comm_rate" },
+                    new WitNormalRegMapping(){ Reg = 0x1A, Var = "addr" }
+                });
+            ]]>
+        </Function>
+
+        <Function id="set_comm_rate_func" desc="设置波特率">
+            <![CDATA[
+                var comm_rate = Variables.Get("comm_rate");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex("FF AA 04 " + comm_rate.ToHex(false), 100);
+                Device.SendRef("save_reg");
+
+                Thread.Sleep(50);
+                int baudrate = ((short)comm_rate.Value) switch
+                {
+                    1 => 4800,
+                    2 => 9600,
+                    3 => 19200,
+                    4 => 38400,
+                    5 => 57600,
+                    6 => 115200,
+                    7 => 230400,
+                    _ => 9600,
+                };
+				
+				Device.ChangeBaudrate(baudrate);
+            ]]>
+        </Function>
+        
+        <Function id="reset_func" desc="恢复设置">
+            <![CDATA[
+                Device.SendHex("FF AA 00 01 00", 100);
+            ]]>
+        </Function>
+
+         <Function id="save_func" desc="重启">
+            <![CDATA[
+                Device.SendHex("FF AA 00 FF 00", 100);
+            ]]>
+        </Function>
+
+    </Functions>
+
+    <!-- 控件配置 -->
+    <UITemplate on-read-param="read_param_func">
+        <!-- 子控件 -->
+        <Controls desc="控件配置">
+            <CAccordionGroup id="system_configuration" desc="系统配置分组" text-zh="系统配置"
+                text-en="System Configuration" orientation="vertical">
+                <Controls>
+                    <CButton id="reset_button" text-zh="恢复设置" text-en="Reset" onclick="reset_func" />
+                     <CButton id="save_button" text-zh="重启" text-en="Save" onclick="save_func" /> 
+                </Controls>
+            </CAccordionGroup>
+            <CAccordionGroup id="comm_configuration" text-zh="通讯" text-en="Communication">
+                <Controls>
+                    <!-- 通讯速率 -->
+                    <CLable text-zh="通讯速率" text-en="Communication Rate"></CLable>
+                    <CDropdown variable="comm_rate" onchange="set_comm_rate_func">
+                        <Items>
+                            <Item value="1" text-zh="4800" text-en="4800"></Item>
+                            <Item value="2" text-zh="9600" text-en="9600"></Item>
+                            <Item value="3" text-zh="19200" text-en="19200"></Item>
+                            <Item value="4" text-zh="38400" text-en="38400"></Item>
+                            <Item value="5" text-zh="57600" text-en="57600"></Item>
+                            <Item value="6" text-zh="115200" text-en="115200"></Item>
+                            <Item value="7" text-zh="230400" text-en="230400"></Item>
+                        </Items>
+                    </CDropdown>
+                    
+                    <!-- 设备地址 -->
+                    <CLable text-zh="设备地址" text-en="Device Address"></CLable>
+                    <!-- <CNumberInput variable="addr" /> -->
+                    <CHexInput variable="addr"/>
+                    <CButton text-zh="设置" text-en="Set" onclick="set_addr_func"/>
+                </Controls>
+            </CAccordionGroup>
+        </Controls>
+    </UITemplate>
+</root>

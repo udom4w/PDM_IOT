@@ -1,0 +1,937 @@
+<?xml version="1.0"?>
+<RegSchemeOption xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <UnlockCmd>
+    <sendData>FF AA 69 88 B5</sendData>
+    <sendHex>true</sendHex>
+  </UnlockCmd>
+  <SaveCmd>
+    <sendData>FF AA 00 00 00</sendData>
+    <sendHex>true</sendHex>
+  </SaveCmd>
+  <RegOptions>
+    <RegOption>
+      <addr>00</addr>
+      <name>保存</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>01</addr>
+      <name>校准模式</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>02</addr>
+      <name>输出内容</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>03</addr>
+      <name>输出速率</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>04</addr>
+      <name>串口波特率</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>05</addr>
+      <name>加速度X零偏</name>
+      <CsScript>x / 10000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>06</addr>
+      <name>加速度Y零偏</name>
+      <CsScript>x / 10000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>07</addr>
+      <name>加速度Z零偏</name>
+      <CsScript>x / 10000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>08</addr>
+      <name>角速度X零偏</name>
+      <CsScript>x / 10000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>09</addr>
+      <name>角速度Y零偏</name>
+      <CsScript>x / 10000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>0a</addr>
+      <name>角速度Z零偏</name>
+      <CsScript>x / 10000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>0b</addr>
+      <name>磁场X零偏</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>0c</addr>
+      <name>磁场Y零偏</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>0d</addr>
+      <name>磁场Z零偏</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>0e</addr>
+      <name>D0引脚模式</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>0f</addr>
+      <name>D1引脚模式</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>10</addr>
+      <name>D2引脚模式</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>11</addr>
+      <name>D3引脚模式</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>12</addr>
+      <name></name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>13</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>14</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>15</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>16</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>17</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>18</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>19</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>1a</addr>
+      <name>设备地址</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>1b</addr>
+      <name>关闭LED灯</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>1c</addr>
+      <name>磁场X校准范围</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>1d</addr>
+      <name>磁场Y校准范围</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>1e</addr>
+      <name>磁场Z校准范围</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>1f</addr>
+      <name>带宽</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>20</addr>
+      <name>陀螺仪量程</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>21</addr>
+      <name>加速度量程</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>22</addr>
+      <name>休眠</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>23</addr>
+      <name>安装方向</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>24</addr>
+      <name>算法</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>25</addr>
+      <name>动态滤波</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>26</addr>
+      <name>GPS波特率</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>27</addr>
+      <name>读取寄存器</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>28</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>29</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>2a</addr>
+      <name>加速度滤波</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>2b</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>2c</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>2d</addr>
+      <name>指令启动</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>2e</addr>
+      <name>版本号</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>2f</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>30</addr>
+      <name>年月</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>31</addr>
+      <name>日时</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>32</addr>
+      <name>分秒</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>33</addr>
+      <name>毫秒</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>34</addr>
+      <name>加速度x</name>
+      <CsScript>x * 16.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>35</addr>
+      <name>加速度y</name>
+      <CsScript>x * 16.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>36</addr>
+      <name>加速度z</name>
+      <CsScript>x * 16.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>37</addr>
+      <name>角速度x</name>
+      <CsScript>x * 2000.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>38</addr>
+      <name>角速度y</name>
+      <CsScript>x * 2000.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>39</addr>
+      <name>角速度z</name>
+      <CsScript>x * 2000.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>3a</addr>
+      <name>磁场x</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>3b</addr>
+      <name>磁场y</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>3c</addr>
+      <name>磁场z</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>3d</addr>
+      <name>角度x</name>
+      <CsScript>x * 180.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>3e</addr>
+      <name>角度y</name>
+      <CsScript>x * 180.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>3f</addr>
+      <name>角度z</name>
+      <CsScript>x * 180.0 / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>40</addr>
+      <name>温度</name>
+      <CsScript>x / 100.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>41</addr>
+      <name>D0引脚状态</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>42</addr>
+      <name>D1引脚状态</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>43</addr>
+      <name>D2引脚状态</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>44</addr>
+      <name>D3引脚状态</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>45</addr>
+      <name>气压低16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>46</addr>
+      <name>气压高16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>47</addr>
+      <name>高度低16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>48</addr>
+      <name>高度高16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>49</addr>
+      <name>经度低16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>4a</addr>
+      <name>经度高16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>4b</addr>
+      <name>纬度低16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>4c</addr>
+      <name>纬度高16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>4d</addr>
+      <name>GPS海拔</name>
+      <CsScript>x / 10.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>4e</addr>
+      <name>GPS航向角</name>
+      <CsScript>x / 100.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>4f</addr>
+      <name>GPS地速低16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>50</addr>
+      <name>GPS地速高16位</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>51</addr>
+      <name>四元数0</name>
+      <CsScript>x / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>52</addr>
+      <name>四元数1</name>
+      <CsScript>x / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>53</addr>
+      <name>四元数2</name>
+      <CsScript>x / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>54</addr>
+      <name>四元数3</name>
+      <CsScript>x / 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>55</addr>
+      <name>卫星数</name>
+      <CsScript>x</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>56</addr>
+      <name>位置精度</name>
+      <CsScript>x / 100.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>57</addr>
+      <name>水平精度</name>
+      <CsScript>x / 100.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>58</addr>
+      <name>垂直精度</name>
+      <CsScript>x / 100.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>59</addr>
+      <name>报警信号延时</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>5a</addr>
+      <name>X轴角度报警最小值</name>
+      <CsScript>x * 180/ 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>5b</addr>
+      <name>X轴角度报警最大值</name>
+      <CsScript>x * 180/ 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>5c</addr>
+      <name>供电电压</name>
+      <CsScript>x / 100.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>5d</addr>
+      <name>报警引脚映射</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>5e</addr>
+      <name>Y轴角度报警最小值</name>
+      <CsScript>x * 180/ 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>5f</addr>
+      <name>Y轴角度报警最大值</name>
+      <CsScript>x * 180/ 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>60</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>61</addr>
+      <name>陀螺仪静止阈值</name>
+      <CsScript>x / 1000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>62</addr>
+      <name>角度报警电平</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>63</addr>
+      <name>陀螺仪自动校准时间</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>64</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>65</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>66</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>67</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>68</addr>
+      <name>报警连续触发时间</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>69</addr>
+      <name>解锁</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>6a</addr>
+      <name>陀螺仪变化值</name>
+      <CsScript>x * 180.0/ 3141.5926</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>6b</addr>
+      <name>GPS时区</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>6c</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>6d</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>6e</addr>
+      <name>角速度连续静止时间</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>6f</addr>
+      <name>角速度积分阈值</name>
+      <CsScript>x / 1000.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>  
+      <addr>71</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>72</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>73</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>74</addr>
+      <name>485数据应答延时</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>75</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+     <RegOption>
+      <addr>76</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>77</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+     <RegOption>
+      <addr>78</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+     <RegOption>
+      <addr>79</addr>
+      <name>横滚角零位参考值</name>
+      <CsScript>x * 180/ 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>7a</addr>
+      <name>俯仰角零位参考值</name>
+      <CsScript>x * 180/ 32768.0</CsScript>
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>7b</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+     <RegOption>
+      <addr>7c</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>7d</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>7e</addr>
+      <name />
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>7f</addr>
+      <name>设备编号1-2</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>80</addr>
+      <name>设备编号3-4</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>81</addr>
+      <name>设备编号5-6</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>82</addr>
+      <name>设备编号7-8</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>83</addr>
+      <name>设备编号9-10</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    <RegOption>
+      <addr>84</addr>
+      <name>设备编号11-12</name>
+      <CsScript />
+      <remarkZhcn />
+      <remarkEn />
+    </RegOption>
+    </RegOptions>
+</RegSchemeOption>

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(\\(Get-FileHash \"New folder\\\\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened.ino\" -Algorithm SHA256\\).Hash)",
+      "PowerShell(& \"C:\\\\Users\\\\HP\\\\AppData\\\\Local\\\\Programs\\\\Arduino IDE\\\\resources\\\\app\\\\lib\\\\backend\\\\resources\\\\arduino-cli.exe\" version)"
+    ]
+  }
+}

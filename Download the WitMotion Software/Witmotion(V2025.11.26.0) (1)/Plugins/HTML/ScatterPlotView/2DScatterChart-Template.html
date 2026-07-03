@@ -1,0 +1,96 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script src="js/echarts.min.js"></script>
+    <script type="text/javascript" src="js/jquery.min.js"></script>
+    <script type="text/javascript" src="js/jquery.easyui.min.js"></script>
+    <style>
+	html,
+	body {
+	padding: 0;
+	margin: 0;
+	border:none;
+                width: 100%;
+	height: 100%;
+	}
+	div {
+	padding: 0;
+	margin: 0;
+	border:none;
+	}
+    </style>	 
+</head>
+<body>
+    {EChartDiv}
+    <script type="text/javascript">
+        var dataArr=[];
+        var DivEchartArr=[];
+        var NumberOfPoints = 100;
+       //初始化
+       function Init(data){
+			var  items = $.parseJSON(data); //将这个字符串 转换成json对象	
+			dataArr = [items.length];
+			for (var i = 0; i < items.length; i++) {
+				DivEchartArr.push(echarts.init(document.getElementById(items[i].divId)));	
+				dataArr[i]=[];
+				var option={
+					title:{x:'center',text:items[i].sTitle, textStyle:{color:'white',fontSize:18,fontWeight:'bold'}},
+					xAxis:{scale:true, name:items[i].XAxisName,nameTextStyle:{color:'white'}, axisLabel:{color:'white'}},
+					yAxis:{scale:true, name:items[i].YAxisName,nameTextStyle:{color:'white'}, axisLabel:{color:'white'}},
+					color:['green','blue'],
+					series:[{
+						type:'scatter',symbolSize:5,
+						data:dataArr[i]
+					}]
+				};
+				DivEchartArr[i].setOption(option);
+			}
+
+			return 'ok';
+       }
+	   //Init('[{"divId":"Div_0","sTitle":"XY震动位移","XAxisName":"X轴","YAxisName":"Y轴"},{"divId":"Div_1","sTitle":"XZ震动位移","XAxisName":"X轴","YAxisName":"Z轴"},{"divId":"Div_2","sTitle":"YZ震动位移","XAxisName":"Y轴","YAxisName":"Z轴"}]');
+		//清空点数
+		function clearPoints(){
+			for (var i = 0; i < dataArr.length; i++){
+				dataArr[i]=[];
+				DivEchartArr[i].setOption({
+				  series : [ {
+					// 根据名字对应到相应的数据
+					data : dataArr[i]
+				  } ]
+				});
+			}
+		}
+		//设置点数
+       function NumberOfSetPoints(pCount){
+			NumberOfPoints = pCount;
+       }
+       function AddPoint(data){
+			if (dataArr[0].length > NumberOfPoints) {
+				clearPoints();
+				return;
+			}	
+            var  items = $.parseJSON(data); //将这个字符串 转换成json对象		
+            for (var i = 0; i < items.length; i++) {
+				DivEchartArr[i].hideLoading(); //隐藏加载动画
+				for(var j=0;j<items[i].data.length;j++){
+					dataArr[i].push([items[i].data[j].xValue,items[i].data[j].yValue]);
+				}
+
+			    //9.覆盖操作-根据数据加载数据图表
+				DivEchartArr[i].setOption({
+				series : [ {
+				// 根据名字对应到相应的数据
+				data : dataArr[i]
+				} ]
+				});
+            }
+       }
+	
+    </script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <!-- 全局变量 -->
+    <Variables>
+        <Var id="comm_rate" type="short" default="1" desc="波特率(bps)" />  
+    </Variables>
+
+    <!-- 全局函数 -->
+    <Functions>
+        <Function id="read_param_func" desc="读取维特协议参数">
+            <![CDATA[
+                Plugins.WitNormal.ReadReg(new List<WitNormalRegMapping>
+                {
+                    new WitNormalRegMapping(){ Reg = 0x04, Var = "comm_rate" },
+                });
+            ]]>
+        </Function>
+
+        <Function id="set_comm_rate_func" desc="设置波特率">
+            <![CDATA[
+                var comm_rate = Variables.Get("comm_rate");
+
+                Device.SendHex("FF AA 04 " + comm_rate.ToHex(false), 100);
+
+                Thread.Sleep(50);
+                int baudrate = ((short)comm_rate.Value) switch
+                {   
+                    1 => 9600,
+                    2 => 115200,
+                    _ => 9600,
+                };
+				Device.ChangeBaudrate(baudrate);
+            ]]>
+        </Function>
+
+        <Function id="set_z_axis_reset_func" desc="设置Z轴归零">
+            <![CDATA[
+                Device.SendHex("FF AA 27 4c 00", 100);
+            ]]>
+        </Function>
+        <Function id="set_gbalstlme_func" desc="自动获取零偏">
+            <![CDATA[
+                Device.SendHex("FF AA 4D 0A 00", 100);
+            ]]>
+        </Function>
+    </Functions>
+
+    <!-- 控件配置 -->
+    <UITemplate>
+        <!-- 子控件 -->
+        <Controls desc="控件配置">
+            <CAccordionGroup id="comm_configuration" text-zh="通讯" text-en="Communication">
+                <Controls>
+                    <!-- 通讯速率 -->
+                    <CLable text-zh="通讯速率" text-en="Communication Rate"></CLable>
+                    <CDropdown variable="comm_rate" onchange="set_comm_rate_func">
+                        <Items>
+                            <Item value="1" text-zh="4800" text-en="4800"></Item>
+                            <Item value="2" text-zh="9600" text-en="9600"></Item>
+                            <Item value="3" text-zh="19200" text-en="19200"></Item>
+                            <Item value="4" text-zh="38400" text-en="38400"></Item>
+                            <Item value="5" text-zh="57600" text-en="57600"></Item>
+                            <Item value="6" text-zh="115200" text-en="115200"></Item>
+                            <Item value="7" text-zh="230400" text-en="230400"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="calibration_configuration" text-zh="校准配置"
+                text-en="Calibration Configuration">
+                <Controls>
+                    <CButton text-zh="Z轴归零" text-en="Z-axis Reset" onclick="set_z_axis_reset_func"/>
+                    <CButton text-zh="自动获取零偏" text-en="gbalstlme" onclick="set_gbalstlme_func"/>
+                </Controls>
+            </CAccordionGroup>
+        </Controls>
+    </UITemplate>
+</root>

@@ -1,0 +1,313 @@
+<!--
+	此示例下载自 https://echarts.apache.org/examples/zh/editor.html?c=scatter-simple&code=G4QwTgBAJiAuIF4DaBdA3AKBvAdABwFcBnACwAoBvUAGwIFMAuJABgBpmVWA7EAW0YDkARmYNmo8TiEAmAMwDWGAJaw6vAMqwAntUYUMECAGMA9tRNgGAsHSgCMAX0cBKTNhD5i5KiFqMkQqzSKA6uWHAehKSUNPRMALSBwaFuEZ7RPn5MgfHJYe7p3rH-iay5IWEmeLBKJlwQCBD6hrAmZjV4DE0GhhCwYEoA5oN0lhACKmoKPYYgAB5KRAAKJkpcqmPNvS1aeIzjRmAmRET22w6KhgBGIEYA1oNHBFxQAMJmFl3Wgzdk0kIADiC0gA7EFZGxmDhZM4FBAAPTwwB90YA7f0AMwGAezNAH9qgHEnCBgH4gQA8FoB4fUM31-0gArFSgjS6bSoQDYaxEYAsBMA4_Gogk3QDAMYAgoMxgByMwBOQYA4OUA8AmAODNAGV6PURpnMYwEV2otzu02uFigowA6kooLASF0AERCE2sBHwwCd8YAxC0Avdoy1FCeXwq7a0bvJVfR4gLRwxGou2inqqOawTQ6fZbQyKz7jVXqgRW1GAcNNAOraIcMFx6ADMLLw4BsrBQrg4ADxusAAPgoRgcZwgOcMcwAggsiF0Y31dvsBMVNRAAJDzRYAGRAVzo1AYWyH-bAhdgxYEmXoDiMvEbQ6c2cuEC07cWXZmPb2XwH-5HHYnU5nc4XS5Xa7oG63PR3PWbECIoyUdE7CAkFPbtDCILReHdah1CUAAvfZpDYU9DHcBh3H3bZtHPcYiCMItRkbbNTx6FBHDQIA
+	⚠ 请注意，该图表不是 Apache ECharts 官方示例，而是由用户代码生成的。请注意鉴别其内容。
+-->
+<!DOCTYPE html>
+<html lang="zh-CN" style="height: 100%">
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="height: 100%; margin: 0">
+  <div id="container" style="height: 100%"></div>
+
+  
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <!-- Uncomment this line if you want to dataTool extension
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@5.4.3/dist/extension/dataTool.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to use gl extension
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts-gl@2/dist/echarts-gl.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to echarts-stat extension
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts-stat@latest/dist/ecStat.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to use map
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@4.9.0/map/js/china.js"></script>
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@4.9.0/map/js/world.js"></script>
+  -->
+  <!-- Uncomment these two lines if you want to use bmap extension
+  <script type="text/javascript" src="https://api.map.baidu.com/api?v=3.0&ak=YOUR_API_KEY"></script>
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@5.4.3/dist/extension/bmap.min.js"></script>
+  -->
+
+  <script type="text/javascript">
+    var lonPL = 360/31544206.0;
+	var latPL = 360/40030173.0;
+	var pl = 1.0;
+	var xMax=2000;
+	var yMax=2000;
+	var fColor='white';
+	var tooltipColor='rgba(33,51,71,0.8)';
+	function getParms(search){
+		if (search != '') {
+			var obj = {};
+			// window.location.search '' or start with '?'
+			search = search.substring(1);
+			var keypairArray = search.split('&');
+			for (i in keypairArray) {
+				keypair = keypairArray[i];
+				partArray = keypair.split('=');
+				if(partArray.length == 2){
+					obj[partArray[0]] = partArray[1];
+					if (partArray[0]=='SkinType'){
+						switch(partArray[1]){
+							case '0'://亮色
+								fColor='black';
+								tooltipColor='rgba(188,194,200,0.8)';
+							break;
+							case '1'://暗色
+								tooltipColor='rgba(47,46,25,0.8)';
+							break;
+							
+						}
+					}
+				}
+			}
+		}
+	}
+    var dom = document.getElementById('container');
+    var myChart = echarts.init(dom, null, {
+      renderer: 'canvas',
+      useDirtyRect: false
+    });
+    var app = {};
+    getParms(window.location.search);
+    var option;
+
+    var data=[];
+	var fistrXY=[22.12300,113.4879546];
+	var lonlat = getLonLatDistance(fistrXY);
+	
+	data.push({value:[0,0],name:'10:00:00.123',
+	itemStyle:{
+	  color:'red'
+	}
+	});
+	var xy = getLonLatDistance([22.12305-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	xy = getLonLatDistance([22.12306-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	xy = getLonLatDistance([22.12307-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	xy = getLonLatDistance([22.12308-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	xy = getLonLatDistance([22.12309-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	xy = getLonLatDistance([22.12310-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	xy = getLonLatDistance([22.12313-fistrXY[0],113.4879546-fistrXY[1]]);
+	data.push({value:[xy[0]*100.0,xy[1]*100.0]});
+	option = {
+	  title: {
+		text: 'Two Value-Axes in Polar'
+	  },
+	  tooltip: {
+		trigger: 'item',
+		axisPointer: {
+		  type: 'cross'
+		},
+	  backgroundColor: 'rgba(218,227,230,0.3)', //设置背景图片 rgba格式  'rgba(255,255,255,0.8)',//通过设置rgba调节背景颜色与透明度
+	  //color: 'black',
+	  borderWidth: "1", //边框宽度设置1
+	  //borderColor: 'gray', //设置边框颜色
+	  textStyle: {
+		color: 'black' //设置文字颜色
+	  },
+	  formatter:'{b}</br>{c}'
+	  },
+	  xAxis: {
+		type: 'value',
+		axisLabel:{
+			textStyle:{
+			color: fColor
+			},
+			formatter:'{value}cm'
+		},
+		max:xMax
+	  },
+	  yAxis: {
+		type: 'value',
+		axisLabel:{
+			textStyle:{
+			color: fColor
+			},
+			formatter:'{value}cm'
+		},
+		max:yMax
+	  },
+	  series: [
+		{
+		  symbolSize: 20,
+		  data:data,
+		  type: 'scatter'
+		}
+		
+	  ]
+	};
+
+    if (option && typeof option === 'object') {
+      myChart.setOption(option);
+    }
+
+    window.addEventListener('resize', myChart.resize);
+	var doc = document.documentElement;
+	if (doc.addEventListener) { 
+	// 此处是 mousewheel 事件，其他浏览器可能需要换成 DOMMouseScroll 
+	doc.addEventListener('mousewheel', handleMouseWheel, false); } 
+	else { 
+	// 兼容IE8及更早版本 
+	doc.attachEvent('onmousewheel', handleMouseWheel); 
+	}
+	function getLonLatDistance(lonlat){
+		return [lonlat[0]/lonPL,lonlat[1]/latPL];
+	}
+
+	function handleMouseWheel(event) { 
+
+		setTimeout(function(){
+			//要执行的代码
+			var delta = event.deltaY; 
+			if (delta < 0) { 
+				// 鼠标往上滚动 
+				if ((pl * 2.0)>=1000000)return;
+				pl = (pl * 2.0) ;
+				console.log('鼠标往上滚动'+pl);
+			} 
+			else if (delta > 0) { 
+			// 鼠标往下滚动 }
+				//
+				if ((pl / 2.0)<=0.000001)return;
+				pl = (pl / 2.0) ;
+				console.log('鼠标往下滚动'+pl);
+			}
+			loadData();
+			
+		}, 200); //ms为单位
+		
+	}
+	function setOption(nData){
+		option = {
+		  title: {
+			text: sTitle,
+			textStyle:{
+				color: fColor
+			}
+		  },
+		  tooltip: {
+			trigger: 'item',
+			axisPointer: {
+			  type: ''
+			},
+		  backgroundColor: tooltipColor, //设置背景图片 rgba格式  'rgba(255,255,255,0.8)',//通过设置rgba调节背景颜色与透明度
+		  //color: 'black',
+		  borderWidth: "1", //边框宽度设置1
+		  //borderColor: 'gray', //设置边框颜色
+		  textStyle: {
+			color: fColor //设置文字颜色
+		  },
+		  formatter:'{b}'//'{b}</br>{c}'
+		  },
+		  xAxis: {
+			type: 'value',
+			axisLabel:{
+			formatter:function(value)
+				{
+					var sVal= (value / pl) + 'cm';
+					if (value>=100){
+					    tVal = (value / pl)/100.0;
+						if (tVal>=1000)
+							sVal= (tVal /1000.0) + 'km';
+						else
+							sVal= tVal + 'm';
+							if (tVal<1){
+								sVal= (tVal * 100.0) + 'cm';
+							}
+					}
+					return  sVal;
+				}
+			},
+			//interval:1,
+			max:xMax
+		  },
+		  yAxis: {
+			type: 'value',
+			axisLabel:{
+			formatter:function(value)
+				{
+					var sVal= (value / pl) + 'cm';
+					if (value>=100){
+					    tVal = (value / pl)/100.0;
+						if (tVal>=1000)
+							sVal= (tVal /1000.0) + 'km';
+						else
+							sVal= tVal + 'm';
+							if (tVal<1){
+								sVal= (tVal * 100.0) + 'cm';
+							}
+					}
+					return  sVal;
+				}
+			},
+			max:yMax
+		  },
+		  series: [
+			{
+			  symbolSize: 10,
+			  data:nData,
+			  type: 'scatter'
+			}
+			
+		  ]
+		};
+
+		if (option && typeof option === 'object') {
+		  myChart.setOption(option);
+		}
+	}
+	var IsFirst = true;
+	var sTitle='';
+	
+	function loadData(){
+		var nData=[];
+		for(var i=0;i<data.length;i++){
+			if (i==0){
+					nData.push(
+					{value:[0,0],
+					name:data[i].dTime
+					});
+			}else{
+				if (i==data.length-1 ){
+					nData.push(
+					{value:[data[i].value[0]* pl,data[i].value[1]*pl],
+					name:data[i].dTime +'  ' + data[i].value[0].toFixed(0) +','+ data[i].value[1].toFixed(0),
+					itemStyle:{
+					  color:'red'
+					}
+					});
+				}else{
+					nData.push(
+					{value:[data[i].value[0]* pl,data[i].value[1]*pl],
+					name:data[i].dTime +'   ' + data[i].value[0].toFixed(0) +','+ data[i].value[1].toFixed(0),
+					});
+				}
+			}
+		}
+		setOption(nData);
+	}
+	function AddPoint(strJs){
+		var echartInfo = JSON.parse(strJs);
+		if (IsFirst){
+	        fistrXY=[echartInfo.datas[0].lon,echartInfo.datas[0].lat];
+			IsFirst=false;
+			data=[];
+			sTitle=echartInfo.title + '  ' +echartInfo.datas[0].lat+'°N,'+ echartInfo.datas[0].lon+'°E';
+		}
+		for(var i=0;i<echartInfo.datas.length;i++){
+			var xy = getLonLatDistance([echartInfo.datas[i].lon-fistrXY[0],echartInfo.datas[i].lat-fistrXY[1]]);
+			data.push({value:[xy[0]*100.0,xy[1]*100.0], dTime:echartInfo.datas[i].dTime});
+		}
+		loadData();
+	}
+  </script>
+</body>
+</html>

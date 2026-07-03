@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN" style="height: 100%">
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="height: 100%; margin: 0">
+  <div id="container" style="height: 100%"></div>
+
+  
+  <script type="text/javascript" src="./js/echarts.min.js"></script>
+
+  <script type="text/javascript">
+	var fColor='white';
+	var tooltipColor='rgba(33,51,71,0.8)';
+	function getParms(search){
+		if (search != '') {
+			var obj = {};
+			// window.location.search '' or start with '?'
+			search = search.substring(1);
+			var keypairArray = search.split('&');
+			for (i in keypairArray) {
+				keypair = keypairArray[i];
+				partArray = keypair.split('=');
+				if(partArray.length == 2){
+					obj[partArray[0]] = partArray[1];
+					if (partArray[0]=='SkinType'){
+						switch(partArray[1]){
+							case '0'://亮色
+								fColor='black';
+								tooltipColor='rgba(188,194,200,0.8)';
+							break;
+							case '1'://暗色
+								tooltipColor='rgba(47,46,25,0.8)';
+							break;
+							
+						}
+					}
+				}
+			}
+		}
+	}
+    var dom = document.getElementById('container');
+    var myChart = echarts.init(dom, null, {
+      renderer: 'canvas',
+      useDirtyRect: false
+    });
+	getParms(window.location.search);
+
+	
+    var app = {};
+    
+    var option;
+
+    const data1 = [];
+	const data2 = [];
+data1.push({ value: [22, 123], 
+label: {
+          show: true,
+          //position: 'center',
+          formatter: 'B19'
+        }
+ });
+data1.push({ value: [12, 95],       
+label: {
+          show: true,
+          //position: 'center',
+          formatter: 'B36', 
+        }
+
+      });
+	  
+data2.push({ value: [32, 222], 
+label: {
+          show: true,
+          //position: 'center',
+          formatter: 'B19', 
+        }
+ });
+data2.push({ value: [52.541, 197.5],       
+label: {
+          show: true,
+          //position: 'center',
+          formatter: 'B36', 
+        }
+
+      });
+	  
+
+option = {
+  title: {
+    text: 'Two Value-Axes in Polar'
+  },
+  legend: {
+    data: ['line123','line678']
+  },
+  polar: {
+    center: ['50%', '54%']
+  },
+  tooltip: {
+    trigger: 'axis',
+    axisPointer: {
+      type: 'cross'
+    }
+  },
+  angleAxis: {
+    type: 'value',
+    startAngle: 90,
+    max:360,
+	interval:15,
+    axisLabel:{
+      formatter: function(value)
+      {
+        var tVal='';
+        switch(value){
+          case 0:
+            tVal='N';
+          break;
+          case 90:
+            tVal='E';
+          break;
+          case 180:
+            tVal='S';
+          break;
+          case 270:
+            tVal='W';
+          break;
+          default:
+            tVal = value +'°';
+        }
+         return tVal;
+      }
+  }
+  },
+  radiusAxis: {
+    min: 0,
+	axisLabel:{
+	formatter:'{value}°'
+	}
+  },
+  series: [
+    {
+      symbolSize: 30,
+      coordinateSystem: 'polar',
+      name: '1line123',
+      type: 'scatter',
+      showSymbol: false,
+      data: null
+      
+    },
+    {
+      symbolSize: 30,
+      coordinateSystem: 'polar',
+      name: '1line678',
+      type: 'scatter',
+      showSymbol: false,
+      data: null
+      
+    }
+  ],
+  animationDuration: 2000
+};
+
+
+
+    if (option && typeof option === 'object') {
+      myChart.setOption(option);
+    }
+
+    window.addEventListener('resize', myChart.resize);
+	
+	function setOption(strJs){
+		var echartInfo = JSON.parse(strJs);
+		option = {
+		  title: {
+			text: echartInfo.title,
+			textStyle:{
+				color: fColor
+			}
+		  },
+		  legend: {
+			data: echartInfo.serieNames,
+			textStyle:{
+				color: fColor
+			}
+		  },
+		  polar: {
+			center: ['50%', '52%']
+		  },
+		  tooltip: {
+			trigger: 'item',
+			axisPointer: {
+			  type: 'cross'
+			},
+			  backgroundColor: tooltipColor, //设置背景图片 rgba格式 'rgba(255,255,255,0.8)',//通过设置rgba调节背景颜色与透明度
+			  //color: 'black',
+			  borderWidth: "1", //边框宽度设置1
+			  //borderColor: 'gray', //设置边框颜色
+			  textStyle: {
+				color: fColor //设置文字颜色
+			  },
+			  formatter:'{a}</br>{c}'
+		  },
+		  angleAxis: {
+			type: 'value',
+			startAngle: 90,
+			max:360,
+			interval:15,
+			axisLabel:{
+				textStyle:{
+				color: fColor
+				},
+			  formatter: function(value)
+			  {
+				var tVal='';
+				switch(value){
+				  case 0:
+					tVal='N';
+				  break;
+				  case 90:
+					tVal='E';
+				  break;
+				  case 180:
+					tVal='S';
+				  break;
+				  case 270:
+					tVal='W';
+				  break;
+				  default:
+					tVal = value +'°';
+				}
+				 return tVal;
+			  }
+			  
+			  
+		    }
+		  },
+		  radiusAxis: {
+			min: 0
+		  },
+		  series: echartInfo.series,
+		  animationDuration: 2000
+		};
+		if (option && typeof option === 'object') {
+		  myChart.setOption(option);
+		}
+	}
+
+  </script>
+</body>
+</html>

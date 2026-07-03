@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Categorys xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Category>
+    <NameCN>姿态传感器模组类</NameCN>
+    <NameEN>Attitude Sensors (Module type)</NameEN>
+    <Code>Attitude_Module</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器射频类</NameCN>
+    <NameEN>Attitude Sensors (RF type)</NameEN>
+    <Code>Attitude_RF</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器蓝牙类</NameCN>
+    <NameEN>Attitude Sensors (Bluetooth type)</NameEN>
+    <Code>Attitude_Bluetooth</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器惯导类</NameCN>
+    <NameEN>Attitude Sensors (Inertial Navigation type)</NameEN>
+    <Code>Attitude_INS</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器模拟量类</NameCN>
+    <NameEN>Attitude Sensors (Analog type)</NameEN>
+    <Code>Attitude_Analog</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器高精度类</NameCN>
+    <NameEN>Attitude Sensors (High-precision type)</NameEN>
+    <Code>Attitude_HighPrecision</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器物联类</NameCN>
+    <NameEN>Attitude Sensors (IoT type)</NameEN>
+    <Code>Attitude_IoT</Code>
+  </Category>
+  <Category>
+    <NameCN>姿态传感器专业应用类</NameCN>
+    <NameEN>Attitude Sensors (Professional application type)</NameEN>
+    <Code>Attitude_Professional</Code>
+  </Category>
+  <Category>
+    <NameCN>倾角仪传感器类</NameCN>
+    <NameEN>Tilt Sensors</NameEN>
+    <Code>Tilt_Sensor</Code>
+  </Category>
+  <Category>
+    <NameCN>室内定位传感器</NameCN>
+    <NameEN>Indoor Positioning Sensors</NameEN>
+    <Code>Indoor_Positioning</Code>
+  </Category>
+  <Category>
+    <NameCN>差分定位传感器</NameCN>
+    <NameEN>RTK Sensors</NameEN>
+    <Code>RTK_Sensor</Code>
+  </Category>
+  <Category>
+    <NameCN>震动传感器</NameCN>
+    <NameEN>Vibration Sensors</NameEN>
+    <Code>Vibration_Sensor</Code>
+  </Category>
+  <Category>
+    <NameCN>其它传感器</NameCN>
+    <NameEN>Other Sensors</NameEN>
+    <Code>Other_Sensors</Code>
+  </Category>
+  <Category>
+    <NameCN>磁场传感器</NameCN>
+    <NameEN>Magnetic Sensors</NameEN>
+    <Code>Magnetic_Sensors</Code>
+  </Category>
+    <Category>
+    <NameCN>GPS模块</NameCN>
+    <NameEN>GPS Modules</NameEN>
+    <Code>GPS_module</Code>
+  </Category>
+</Categorys>

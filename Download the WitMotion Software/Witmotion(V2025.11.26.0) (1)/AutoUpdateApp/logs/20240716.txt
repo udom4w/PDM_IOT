@@ -1,0 +1,32 @@
+
+＝＝＝＝＝＝＝＝＝＝                                   
+【日志级别】ERROR                                   
+【记录时间】2024-07-16 16:56:00,815                                   
+【线程编号】[1]                                   
+【执行时间】[2150]毫秒                                   
+【引发位置】                                   
+【引发行号】0                                   
+【消息描述】下载服务器上版本信息错误                                   
+【消息详情】System.Net.WebException: 无法连接到远程服务器 ---> System.Net.Sockets.SocketException: 由于目标计算机积极拒绝，无法连接。 43.139.85.26:7676
+   在 System.Net.Sockets.Socket.DoConnect(EndPoint endPointSnapshot, SocketAddress socketAddress)
+   在 System.Net.ServicePoint.ConnectSocketInternal(Boolean connectFailure, Socket s4, Socket s6, Socket& socket, IPAddress& address, ConnectSocketState state, IAsyncResult asyncResult, Exception& exception)
+   --- 内部异常堆栈跟踪的结尾 ---
+   在 System.Net.WebClient.DownloadDataInternal(Uri address, WebRequest& request)
+   在 System.Net.WebClient.DownloadData(Uri address)
+   在 HHUpdateApp.MainForm.DownloadUpdateInfo(String serverUrl)
+
+＝＝＝＝＝＝＝＝＝＝                                   
+【日志级别】ERROR                                   
+【记录时间】2024-07-16 16:57:13,080                                   
+【线程编号】[1]                                   
+【执行时间】[2158]毫秒                                   
+【引发位置】                                   
+【引发行号】0                                   
+【消息描述】下载服务器上版本信息错误                                   
+【消息详情】System.Net.WebException: 无法连接到远程服务器 ---> System.Net.Sockets.SocketException: 由于目标计算机积极拒绝，无法连接。 43.139.85.26:7676
+   在 System.Net.Sockets.Socket.DoConnect(EndPoint endPointSnapshot, SocketAddress socketAddress)
+   在 System.Net.ServicePoint.ConnectSocketInternal(Boolean connectFailure, Socket s4, Socket s6, Socket& socket, IPAddress& address, ConnectSocketState state, IAsyncResult asyncResult, Exception& exception)
+   --- 内部异常堆栈跟踪的结尾 ---
+   在 System.Net.WebClient.DownloadDataInternal(Uri address, WebRequest& request)
+   在 System.Net.WebClient.DownloadData(Uri address)
+   在 HHUpdateApp.MainForm.DownloadUpdateInfo(String serverUrl)

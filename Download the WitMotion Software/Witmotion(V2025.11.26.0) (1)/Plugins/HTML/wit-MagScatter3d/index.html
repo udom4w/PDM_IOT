@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>矩阵曲面图</title>
+	<meta charset="utf-8">
+    <script src="./js/echarts.min.js"></script>
+    <script src="./js/echarts-gl.min.js"></script>
+</head>
+<body style="margin: 0;">
+<div id="main" style="position: absolute;width: 100%;height:100%;"></div>
+</body>
+
+<script type="text/javascript">
+    var chartDom = document.getElementById('main');
+    var myChart = echarts.init(chartDom);
+    var option;
+	var fColor='black';
+	var sTitle='MagCali';
+	var tooltipColor='rgba(188,194,200,0.8)';
+    var data = [
+          [9,0,9,0,0.1],
+          [9,3,9,0,0.1],
+          [9,6,9,9,0.1],
+          [9,9,5,0,0.1],
+        ];
+	data=[];
+
+
+		option = {
+			  title: {
+				text: sTitle,
+				textStyle:{
+					color: fColor
+				}
+			  },
+		tooltip: {},
+		  visualMap: {
+			show: false,
+			dimension: 2,
+			min: -1,
+			max: 11,
+			inRange: {
+			  color: [
+				'#4169E155',
+				'#1E90FF55',
+				'#87CEFA55',
+				'#00BFFF55',
+				'#AFEEEE55',
+				'#40E0D055',
+				'#00FA9A55',
+				'#00FF0055',
+				'#FFFF0055',
+				'#D2691E55',
+				'#80808055'
+			  ]
+			}
+		  },
+		xAxis3D: {
+		  name: 'x',
+		  type: 'value',
+		  nameTextStyle: {
+			color: fColor,
+		  },
+		  axisLine: {
+			lineStyle: {
+			  color: fColor
+			}
+		  }
+		},
+		yAxis3D: {
+		  name: 'y',
+		  type: 'value',
+		  nameTextStyle: {
+			color: fColor,
+		  },
+		  axisLine: {
+			lineStyle: {
+			  color: fColor
+			}
+		  }
+		},
+		zAxis3D: {
+		  name: 'z',
+		  type: 'value',
+		  nameTextStyle: {
+			color: fColor,
+		  },
+		  axisLine: {
+			lineStyle: {
+			  color: fColor
+			}
+		  }
+		},
+		grid3D: {
+		  axisLine: {
+			lineStyle: {
+			  color: fColor
+			}
+		  },
+		  axisPointer: {
+			lineStyle: {
+			  color: '#ffbd67'
+			}
+		  },
+		  viewControl: {
+			// autoRotate: true
+			// projection: 'orthographic'
+		  }
+		},
+		series: [
+			{
+			  type: 'surface',
+			  parametric: true,
+			  shading: 'realistic',
+			  silent: true,
+			  radius:'100%',
+			  center:['100%','100%'],
+			  itemStyle: {
+			  color: 'rgba(128, 128, 128,0.5)'
+			  },
+			  
+
+			  
+			  //shading: 'albedo',
+			  parametricEquation: {
+				u: {
+				  min: -Math.PI ,
+				  max: Math.PI ,
+				  step: Math.PI  / 20
+				},
+				v: {
+				  min: 0,
+				  max:  Math.PI ,
+				  step: Math.PI  / 20
+				},
+				x: function (u, v) {
+				  return Math.sin(v) * Math.sin(u) * plX + offsetX;
+				},
+				y: function (u, v) {
+				  return Math.sin(v) * Math.cos(u) * plY + offsetY;
+				},
+				z: function (u, v) {
+				  return Math.cos(v) * plZ + offsetZ;
+				}
+			  }
+			},
+		  {
+			type: 'scatter3D',
+			dimensions: [
+			  'x',
+			  'y',
+			  'z',
+			  'group',
+			  'size',
+			],
+			data: data,
+			symbolSize: 2.1,
+			symbol: 'circle',
+			// symbol: 'triangle',
+			
+			itemStyle: {
+			  borderWidth: 2.1,
+			  borderColor: '#4169E1'
+			},
+			emphasis: {
+			  itemStyle: {
+				color: '#4169E1'
+			  }
+			}
+		  }
+		  
+		]
+	  };
+
+    // 页面加载时
+    window.onload = function () {
+        var result = getUrlVars();
+		
+        if (result != undefined) {
+            theme = result;
+            if(result === 'darkBlue1'){
+                // 暗蓝主题
+                option.backgroundColor = '#213347';
+                //option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+				fColor='white';
+				TextStyleColor='#EEEEEE';
+				tooltipColor='rgba(33,51,71,0.8)';
+				option.title.textStyle.color = fColor;
+            } else if(result === 'dark1'){
+                // 深色主题
+                option.backgroundColor = '#000000';
+                //option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+				fColor='white';
+				TextStyleColor='#EEEEEE';
+				tooltipColor='rgba(47,46,25,0.8)';
+				option.title.textStyle.color = fColor;
+            }
+			option.backgroundColor = '#DCDCDC';
+        }
+		
+        option && myChart.setOption(option);
+		
+		setTimeout(function () {
+			window.addEventListener('resize', myChart.resize);
+		}, 200)
+		
+		var doc = document.documentElement;
+		if (doc.addEventListener) { 
+		// 此处是 mousewheel 事件，其他浏览器可能需要换成 DOMMouseScroll 
+			//doc.addEventListener('mousedown', onmouseEvent, false); 
+			//doc.addEventListener('mouseup', onmouseEvent, false); 
+		} 
+		else { 
+		// 兼容IE8及更早版本 
+			//doc.attachEvent('mousedown', onmouseEvent); 
+			//doc.addEventListener('mouseup', onmouseEvent); 
+		}
+    }
+	var isMousedown = false;
+	function onmouseEvent(event) {
+
+		if (event.type=='mousedown'){
+			isMousedown=true;
+		}else{
+			isMousedown=false;
+		}
+
+	}
+
+
+    // 接口方法 ----------------------------------------------------------------------
+    // 主题默认为亮色
+    var theme = 'light';
+	var colorVAL = 0;
+    function getUrlVars() {
+        var vars = [], hash;
+        var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
+        for (var i = 0; i < hashes.length; i++) {
+            hash = hashes[i].split('=');
+            vars.push(hash[0]);
+            vars[hash[0]] = hash[1];
+        }
+        return vars["theme"];
+    }
+	
+	function setTitle(title){
+		sTitle = title;
+		option.title.text=sTitle;
+		myChart.setOption(option);
+	}
+
+    // 批量增加数据
+    function batchAddData(dataList){
+	  var pointArr = JSON.parse(dataList);
+      for (var i = 0; i < pointArr.length; i++) {
+	    pointArr[i].color = colorVAL;
+        this.addData(pointArr[i],(i == pointArr.length-1))
+		colorVAL++;
+		if (colorVAL >= 100) colorVAL=0;
+		
+      }
+    }
+	var minV=0;
+	var maxV=0;
+	var offsetX=0;
+	var offsetY=0;
+	var offsetZ=0;
+	var MaxX=0;
+	var MaxY=0;
+	var MaxZ=0;
+	var MinX=0;
+	var MinY=0;
+	var MinZ=0;
+	var plX=10;
+	var plY=10;
+	var plZ=10;
+	
+    // 增加数据
+    function addData(data,isreload){
+      this.data.push([
+        data.x,
+        data.y,
+        data.z,
+        data.color,
+        data.size
+        ]);
+		if (minV>data.x) minV=data.x;
+		if (minV>data.y) minV=data.y;
+		if (minV>data.z) minV=data.z;
+		if (Math.abs(maxV)<Math.abs(data.x)) maxV=data.x;
+		if (Math.abs(maxV)<Math.abs(data.y)) maxV=data.y;
+		if (Math.abs(maxV)<Math.abs(data.z)) maxV=data.z;
+		if (this.data.length==1){
+			MaxX=data.x;
+			MaxY=data.y;
+			MaxZ=data.z;
+			MinX=data.x;
+			MinY=data.y;
+			MinZ=data.z;
+		}
+		if (MaxX<data.x) MaxX=data.x;
+		if (MaxY<data.y) MaxY=data.y;
+		if (MaxZ<data.z) MaxZ=data.z;
+		if (MinX>data.x) MinX=data.x;
+		if (MinY>data.y) MinY=data.y;
+		if (MinZ>data.z) MinZ=data.z;
+		
+		if (isMousedown)return;
+        if (isreload) {
+			offsetX=(MaxX+MinX)/2;
+			offsetY=(MaxY+MinY)/2;
+			offsetZ=(MaxZ+MinZ)/2;
+			plX = Math.abs(maxV);
+			plY = Math.abs(maxV);
+			plZ = Math.abs(maxV);
+			this.reloadChart();
+		}
+    }
+
+    // 设置z高度最大值
+    function setColorMax(data) {
+        option.visualMap.max = data;
+        this.reloadChart();
+    }
+    
+    // 设置颜色组
+    function setColorGroup(data) {
+        option.visualMap.inRange.color = data;
+        this.reloadChart();
+    }
+
+    // 重新加载图表
+    function reloadChart() {
+        myChart = echarts.init(chartDom);
+        option && myChart.setOption(option, true);
+    }
+	
+	function clearChartReload(dataList){
+		clearChart();
+		batchAddData(dataList);
+	}
+
+    // 清空图表
+    function clearChart() {
+		minV=0;
+		maxV=0;
+		offsetX=0;
+		offsetY=0;
+		offsetZ=0;
+		MaxX=0;
+		MaxY=0;
+		MaxZ=0;
+		MinX=0;
+		MinY=0;
+		MinZ=0;
+		plX=10;
+		plY=10;
+		plZ=10;
+        this.data = [];
+		option.series[1].data = this.data;
+		myChart.setOption(option);
+        //this.reloadChart();
+		//window.location.reload();
+    }
+    </script>
+</html>
+

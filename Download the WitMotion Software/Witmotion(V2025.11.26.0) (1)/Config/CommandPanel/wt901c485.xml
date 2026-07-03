@@ -1,0 +1,384 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+
+    <!-- 全局变量 -->
+    <Variables>
+        <Var id="comm_rate" type="short" default="1" desc="波特率(bps)" />
+        <Var id="addr" type="short" default="0x00" desc="设备地址" />
+        <Var id="algorithm" type="short" default="0" desc="算法" />
+        <Var id="direction" type="short" default="0" desc="安装方向" />
+        <Var id="gps_timezone" type="short" default="0" desc="GPS时间区" />
+        <Var id="bandwidth" type="short" default="0" desc="带宽" />
+        <Var id="d0_mode" type="short" default="0" desc="D0模式" />
+        <Var id="d1_mode" type="short" default="0" desc="D1模式" />
+        <Var id="d2_mode" type="short" default="0" desc="D2模式" />
+        <Var id="d3_mode" type="short" default="0" desc="D3模式" />
+    </Variables>
+
+    <!-- 全局指令 -->
+    <Commands>
+        <Cmd id="unlock_reg" desc="解锁寄存器" data="@addr 06 00 69 B5 88" verify="crc16" type="hex" delay="100"/>
+        <Cmd id="save_reg" desc="保存配置" data="@addr 06 00 00 00 00" verify="crc16" type="hex" delay="100"/>
+    </Commands>
+    
+    <!-- 全局函数 -->
+    <Functions>
+        <Function id="read_param_func" desc="读取Modbus协议参数">
+            <![CDATA[
+                Plugins.WitModbus.ReadReg(new List<WitNormalRegMapping>
+                {
+                    new WitNormalRegMapping(){ Reg = 0x04, Var = "comm_rate" },
+                    new WitNormalRegMapping(){ Reg = 0x23, Var = "direction" },
+                    new WitNormalRegMapping(){ Reg = 0x24, Var = "algorithm" },
+                    new WitNormalRegMapping(){ Reg = 0x1F, Var = "bandwidth" },
+                    new WitNormalRegMapping(){ Reg = 0x6B, Var = "gps_timezone" },
+                    new WitNormalRegMapping(){ Reg = 0x14, Var = "d0_mode" },
+                    new WitNormalRegMapping(){ Reg = 0x15, Var = "d1_mode" },
+                    new WitNormalRegMapping(){ Reg = 0x16, Var = "d2_mode" },
+                    new WitNormalRegMapping(){ Reg = 0x17, Var = "d3_mode" },
+                    new WitNormalRegMapping(){ Reg = 0x1A, Var = "addr" }
+                });
+            ]]>
+        </Function>
+
+        <Function id="set_comm_rate_func" desc="设置波特率">
+            <![CDATA[
+                var comm_rate = Variables.Get("comm_rate");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 04{comm_rate.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+
+                Thread.Sleep(50);
+                int baudrate = ((short)comm_rate.Value) switch
+                {
+                    1 => 4800,
+                    2 => 9600,
+                    3 => 19200,
+                    4 => 38400,
+                    5 => 57600,
+                    6 => 115200,
+                    7 => 230400,
+                    8 => 460800,
+                    9 => 921600,
+                    _ => 9600,
+                };
+				
+				Device.ChangeBaudrate(baudrate);
+            ]]>
+        </Function>
+
+        <Function id="set_algorithm_func" desc="设置算法">
+            <![CDATA[
+                var algorithm = Variables.Get("algorithm");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 24{algorithm.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+
+        <Function id="set_direction_func" desc="设置安装方向">
+            <![CDATA[
+                var direction = Variables.Get("direction");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 23{direction.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+
+        <Function id="set_d0_mode_func" desc="设置D0模式">
+            <![CDATA[
+                var d0_mode = Variables.Get("d0_mode");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 14{d0_mode.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+
+        <Function id="set_d1_mode_func" desc="设置D1模式">
+            <![CDATA[
+                var d1_mode = Variables.Get("d1_mode");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 15{d1_mode.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+
+        <Function id="set_d2_mode_func" desc="设置D2模式">
+            <![CDATA[
+                var d2_mode = Variables.Get("d2_mode");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 16{d2_mode.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+
+        <Function id="set_d3_mode_func" desc="设置D3模式">
+            <![CDATA[
+                var d3_mode = Variables.Get("d3_mode");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 17{d3_mode.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+        
+        <Function id="reset_func" desc="恢复设置">
+            <![CDATA[
+                Device.SendHex($"@addr 06 00 00 00 01", 100 , "crc16");
+            ]]>
+        </Function>
+
+        <Function id="sleep_func" desc="睡眠">
+            <![CDATA[
+                Device.SendHex($"@addr 06 00 22 00 01", 100 , "crc16");
+            ]]>
+        </Function>
+
+        <Function id="set_height_func" desc="设置高度校准">
+            <![CDATA[
+                Device.SendHex($"@addr 06 00 01 00 03", 100 , "crc16");
+            ]]>
+        </Function>
+
+        <Function id="set_z_axis_reset_func" desc="设置Z轴归零">
+            <![CDATA[
+                Device.SendHex($"@addr 06 00 01 00 04", 100 , "crc16");
+            ]]>
+        </Function>
+
+        <Function id="set_angle_reference_func" desc="设置角度参考">
+            <![CDATA[
+                Device.SendHex($"@addr 06 00 01 00 08", 100 , "crc16");
+            ]]>
+        </Function>
+
+        <Function id="set_gps_timezone_func" desc="设置GPS时间区">
+            <![CDATA[
+                var gps_timezone = Variables.Get("gps_timezone");
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 6B {gps_timezone.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+            ]]>
+        </Function>
+
+        <Function id="set_addr_func" desc="设置设备地址">
+            <![CDATA[
+                var addr = Variables.Get("addr");
+                var add_value = (short)addr.Value;
+                if (add_value < 0 || add_value > 0x7F)
+                {
+                    Message.Show("设备地址范围为0x00-0x7F");
+                    return;
+                }
+
+                Device.SendRef("unlock_reg");
+                Device.SendHex($"@addr 06 00 1A {addr.ToHex(true)}", 100 , "crc16");
+                Device.SendRef("save_reg");
+                
+                Device.ChangeModbusId((byte)add_value);
+            ]]>
+        </Function>
+        
+        <Function id="open_mag_calibration_func" desc="打开磁场校准">
+            <![CDATA[
+                Plugins.MagCali.OpenMagCali(3);
+            ]]>
+        </Function>
+
+        <Function id="open_acc_calibration_func" desc="打开加速度校准">
+            <![CDATA[
+                Plugins.AccCali.OpenAccCali(3);
+            ]]>
+        </Function>
+
+    </Functions>
+
+    <!--全局数据解析器-->
+    <GlabalParsers>
+        <StreamParser id="stream_parser">
+            <IsHex desc="是否为16进制">true</IsHex>
+            <Content>
+                <PackHeader desc="包头匹配" length="2">55 5F</PackHeader>
+                <VariableMatch desc="变量匹配" length="2" var="trans_rate" convertTo="short" />
+                <VariableMatch desc="变量匹配" length="2" var="comm_rate" convertTo="short" />
+                <EmptyMatch desc="空值匹配" length="5" />
+            </Content>
+            <PackCheck>
+                <Sum inputIndex="11" startIndex="0" endIndex="10"></Sum>
+            </PackCheck>
+        </StreamParser>
+    </GlabalParsers>
+
+    <!-- 控件配置 -->
+    <UITemplate on-read-param="read_param_func">
+
+        <!-- 子控件 -->
+        <Controls desc="控件配置">
+            <CAccordionGroup id="system_configuration" desc="系统配置分组" text-zh="系统配置"
+                text-en="System Configuration" orientation="vertical">
+                <Controls>
+                    <CButton id="reset_button" text-zh="恢复设置" text-en="Reset" onclick="reset_func" />
+
+                    <CButton id="sleep_button" text-zh="睡眠" text-en="Sleep" onclick="sleep_func"/>
+
+                    <CLable text-zh="算法：" text-en="Algorithm："></CLable>
+                    <CDropdown variable="algorithm" onchange="set_algorithm_func">
+                        <Items>
+                            <Item value="0" text-zh="九轴" text-en="9 Axis"></Item>
+                            <Item value="1" text-zh="六轴" text-en="6 Axis"></Item>
+                        </Items>
+                    </CDropdown>
+
+                    <CLable text-zh="安装方向：" text-en="Direction："></CLable>
+                    <CDropdown variable="direction" onchange="set_direction_func">
+                        <Items>
+                            <Item value="0" text-zh="水平" text-en="Horizontal"></Item>
+                            <Item value="1" text-zh="垂直" text-en="Vertical"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="calibration_configuration" text-zh="校准配置"
+                text-en="Calibration Configuration">
+                <Controls>
+                    <CButton text-zh="加速度" text-en="Acceleration" onclick="open_acc_calibration_func"/>
+                    <CButton text-zh="磁场" text-en="Magnetometer" onclick="open_mag_calibration_func"/>
+                    <CButton text-zh="高度" text-en="Height" onclick="set_height_func"/>
+                    <CButton text-zh="Z轴归零" text-en="Z-axis Reset" onclick="set_z_axis_reset_func"/>
+                    <CButton text-zh="角度参考" text-en="Angle Reference" onclick="set_angle_reference_func"/>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="range_configuration" text-zh="范围" text-en="Range">
+                <Controls>
+                    <CLable text-zh="带宽" text-en="Bandwidth"></CLable>
+                    <CDropdown variable="bandwidth" onchange="set_bandwidth_func">
+                        <Items>
+                            <Item value="0" text-zh="256Hz" text-en="256Hz"></Item>
+                            <Item value="1" text-zh="188Hz" text-en="188Hz"></Item>
+                            <Item value="2" text-zh="98Hz" text-en="98Hz"></Item>
+                            <Item value="3" text-zh="42Hz" text-en="42Hz"></Item>
+                            <Item value="4" text-zh="20Hz" text-en="20Hz"></Item>
+                            <Item value="5" text-zh="10Hz" text-en="10Hz"></Item>
+                            <Item value="6" text-zh="5Hz" text-en="5Hz"></Item>
+                        </Items>
+                    </CDropdown>
+                    <CLable text-zh="GPS时区" text-en="GPS Timezone"></CLable>
+                    <CDropdown variable="gps_timezone" onchange="set_gps_timezone_func">
+                        <Items>
+                            <Item value="0" text-zh="UTC-12" text-en="UTC-12"></Item>
+                            <Item value="1" text-zh="UTC-11" text-en="UTC-11"></Item>
+                            <Item value="2" text-zh="UTC-10" text-en="UTC-10"></Item>
+                            <Item value="3" text-zh="UTC-9" text-en="UTC-9"></Item>
+                            <Item value="4" text-zh="UTC-8" text-en="UTC-8"></Item>
+                            <Item value="5" text-zh="UTC-7" text-en="UTC-7"></Item>
+                            <Item value="6" text-zh="UTC-6" text-en="UTC-6"></Item>
+                            <Item value="7" text-zh="UTC-5" text-en="UTC-5"></Item>
+                            <Item value="8" text-zh="UTC-4" text-en="UTC-4"></Item>
+                            <Item value="9" text-zh="UTC-3" text-en="UTC-3"></Item>
+                            <Item value="10" text-zh="UTC-2" text-en="UTC-2"></Item>
+                            <Item value="11" text-zh="UTC-1" text-en="UTC-1"></Item>
+                            <Item value="12" text-zh="UTC" text-en="UTC"></Item>
+                            <Item value="13" text-zh="UTC+1" text-en="UTC+1"></Item>
+                            <Item value="14" text-zh="UTC+2" text-en="UTC+2"></Item>
+                            <Item value="15" text-zh="UTC+3" text-en="UTC+3"></Item>
+                            <Item value="16" text-zh="UTC+4" text-en="UTC+4"></Item>
+                            <Item value="17" text-zh="UTC+5" text-en="UTC+5"></Item>
+                            <Item value="18" text-zh="UTC+6" text-en="UTC+6"></Item>
+                            <Item value="19" text-zh="UTC+7" text-en="UTC+7"></Item>
+                            <Item value="20" text-zh="UTC+8" text-en="UTC+8"></Item>
+                            <Item value="21" text-zh="UTC+9" text-en="UTC+9"></Item>
+                            <Item value="22" text-zh="UTC+10" text-en="UTC+10"></Item>
+                            <Item value="23" text-zh="UTC+11" text-en="UTC+11"></Item>
+                            <Item value="24" text-zh="UTC+12" text-en="UTC+12"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="comm_configuration" text-zh="通讯" text-en="Communication">
+                <Controls>
+                    <!-- 通讯速率 -->
+                    <CLable text-zh="通讯速率" text-en="Communication Rate"></CLable>
+                    <CDropdown variable="comm_rate" onchange="set_comm_rate_func">
+                        <Items>
+                            <Item value="1" text-zh="4800" text-en="4800"></Item>
+                            <Item value="2" text-zh="9600" text-en="9600"></Item>
+                            <Item value="3" text-zh="19200" text-en="19200"></Item>
+                            <Item value="4" text-zh="38400" text-en="38400"></Item>
+                            <Item value="5" text-zh="57600" text-en="57600"></Item>
+                            <Item value="6" text-zh="115200" text-en="115200"></Item>
+                            <Item value="7" text-zh="230400" text-en="230400"></Item>
+                            <Item value="8" text-zh="460800" text-en="460800"></Item>
+                            <Item value="9" text-zh="921600" text-en="921600"></Item>
+                        </Items>
+                    </CDropdown>
+                    
+                    <!-- 设备地址 -->
+                    <CLable text-zh="设备地址" text-en="Device Address"></CLable>
+                    <!-- <CNumberInput variable="addr" /> -->
+                    <CHexInput variable="addr"/>
+                    <CButton text-zh="设置" text-en="Set" onclick="set_addr_func"/>
+                </Controls>
+            </CAccordionGroup>
+
+            <CAccordionGroup id="interface_configuration" text-zh="接口配置"
+                text-en="Interface Configuration">
+
+                <Controls>
+                    <!-- D0模式 -->
+                    <CLable text-zh="D0模式" text-en="D0 Mode"/>
+                    <CDropdown variable="d0_mode" onchange="set_d0_mode_func">
+                        <Items>
+                            <Item value="0" text-zh="模拟输入" text-en="AIN"></Item>
+                            <Item value="1" text-zh="数字输入" text-en="DIN"></Item>
+                            <Item value="2" text-zh="输出数字高电频" text-en="DOH"></Item>
+                            <Item value="3" text-zh="输出数字低电频" text-en="DOL"></Item>
+                        </Items>
+                    </CDropdown>
+
+                    <!-- D1模式 -->
+                    <CLable text-zh="D1模式" text-en="D1 Mode"/>
+                    <CDropdown variable="d1_mode" onchange="set_d1_mode_func">
+                        <Items>
+                            <Item value="0" text-zh="模拟输入" text-en="AIN"></Item>
+                            <Item value="1" text-zh="数字输入" text-en="DIN"></Item>
+                            <Item value="2" text-zh="输出数字高电频" text-en="DOH"></Item>
+                            <Item value="3" text-zh="输出数字低电频" text-en="DOL"></Item>
+                        </Items>
+                    </CDropdown>
+
+                    <!-- D2模式 -->
+                    <CLable text-zh="D2模式" text-en="D2 Mode"/>
+                    <CDropdown variable="d2_mode" onchange="set_d2_mode_func">
+                        <Items>
+                            <Item value="0" text-zh="模拟输入" text-en="AIN"></Item>
+                            <Item value="1" text-zh="数字输入" text-en="DIN"></Item>
+                            <Item value="2" text-zh="输出数字高电频" text-en="DOH"></Item>
+                            <Item value="3" text-zh="输出数字低电频" text-en="DOL"></Item>
+                        </Items>
+                    </CDropdown>
+
+                    <!-- D3模式 -->
+                    <CLable text-zh="D3模式" text-en="D3 Mode"/>
+                    <CDropdown variable="d3_mode" onchange="set_d3_mode_func">
+                        <Items>
+                            <Item value="0" text-zh="模拟输入" text-en="AIN"></Item>
+                            <Item value="1" text-zh="数字输入" text-en="DIN"></Item>
+                            <Item value="2" text-zh="输出数字高电频" text-en="DOH"></Item>
+                            <Item value="3" text-zh="输出数字低电频" text-en="DOL"></Item>
+                        </Items>
+                    </CDropdown>
+                </Controls>
+            </CAccordionGroup>
+        </Controls>
+    </UITemplate>
+</root>

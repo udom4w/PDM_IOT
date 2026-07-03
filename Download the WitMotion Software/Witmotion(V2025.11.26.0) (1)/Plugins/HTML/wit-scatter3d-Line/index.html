@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en" style="height: 100%">
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="height: 100%; margin: 0">
+  <div id="main" style="height: 100%"></div>
+  <script type="text/javascript" src="./js/echarts.min.js"></script>
+  <script type="text/javascript" src="./js/echarts-gl.min.js"></script>
+  <script type="text/javascript">
+	var data = [];
+	var fColor='black';
+	var MaxVal=0;
+	// Parametric curve
+	//data.push([2,5,3]);
+	//data.push([2,6,9]);
+	//data.push([2,5,3,30,6]);
+	//data.push([2,6,9,30,6]);
+	//console.log(data.length);
+	var chartDom = document.getElementById('main');
+    var myChart = echarts.init(chartDom);
+	option = {
+	  title: {textStyle:{color:fColor}},
+	  tooltip: {},
+	  backgroundColor: '#fff',
+	  visualMap: {
+		show: false,
+		dimension: 2,
+		min: -3000,
+		max: 3000,
+		inRange: {
+		  color: [
+				'#313695',
+				'#4575b4',
+				'#74add1',
+				'#abd9e9',
+				'#e0f3f8',
+				'#ffffbf',
+				'#fee090',
+				'#fdae61',
+				'#f46d43',
+				'#d73027',
+				'#a50026'
+		  ]
+		}
+	  },
+	  xAxis3D: {
+		type: 'value',
+		axisLabel:{color:fColor},
+		nameTextStyle:{color:fColor},
+		name:'Y',
+		axisLine:{lineStyle:{color:fColor}},
+		max:3
+	  },
+	  yAxis3D: {
+		type: 'value',
+		axisLabel:{color:fColor},
+		nameTextStyle:{color:fColor},
+		name:'X',
+		axisLine:{lineStyle:{color:fColor}},
+		max:3
+	  },
+	  zAxis3D: {
+		type: 'value',
+		axisLabel:{color:fColor},
+		nameTextStyle:{color:fColor},
+		axisLine:{lineStyle:{color:fColor}},
+		max:3
+	  },
+	  grid3D: {
+		viewControl: {
+		  projection: 'orthographic'
+		},
+		textStyle: {
+			color: fColor //设置文字颜色
+		}
+	  },
+	  series: [
+		{
+		  name: 'DisplacementPlot',
+		  type: 'line3D',
+		  data: data,
+		  lineStyle: {
+			width: 2
+		  }
+		}
+	  ]
+	};
+    
+    // 接口方法 ----------------------------------------------------------------------
+    // 主题默认为亮色
+    var theme = 'light';
+    function getUrlVars() {
+        var vars = [], hash;
+        var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
+        for (var i = 0; i < hashes.length; i++) {
+            hash = hashes[i].split('=');
+            vars.push(hash[0]);
+            vars[hash[0]] = hash[1];
+        }
+        return vars["SkinType"];
+    }
+	
+	// 页面加载时
+    window.onload = function () {
+        var result = getUrlVars();
+        if (result != undefined) {
+            theme = result;
+			if (result=='2'){
+				theme = 'dark'
+			}
+			else if (result=='3'){
+				theme = 'darkBlue'
+			}
+            if(theme == 'darkBlue'){
+                // 暗蓝主题
+                option.backgroundColor = '#213347';
+                //option.visualMap.textStyle.color = '#EEEEEE';
+
+                option.xAxis3D.nameTextStyle.color = 'yellow';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+				
+                option.yAxis3D.nameTextStyle.color = 'yellow';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+				
+                option.zAxis3D.nameTextStyle.color = 'yellow';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+				option.title.textStyle.color = 'white';
+				
+				option.xAxis3D.axisLabel.color = 'white';
+				option.yAxis3D.axisLabel.color = 'white';
+				option.zAxis3D.axisLabel.color = 'white';
+				fColor = 'white';
+				
+            } else if(theme == 'dark'){
+                // 深色主题
+                option.backgroundColor = '#000000';
+                //option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = 'yellow';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = 'yellow';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = 'yellow';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+				option.title.textStyle.color = 'white';
+				
+				option.xAxis3D.axisLabel.color = 'white';
+				option.yAxis3D.axisLabel.color = 'white';
+				option.zAxis3D.axisLabel.color = 'white';
+				fColor = 'white';
+            }
+        }
+		
+        option && myChart.setOption(option);
+		
+		setTimeout(function () {
+			window.addEventListener('resize', myChart.resize);
+		}, 200)
+		
+	}
+	
+    // 设置颜色组
+    function setColorGroup(data) {
+        option.visualMap.inRange.color = data;
+        this.reloadChart();
+    }
+	
+	// 设置颜色组
+    function setColorGroup(data) {
+        option.visualMap.inRange.color = data;
+        this.reloadChart();
+    }
+	
+    // 增加数据
+    function addData(data,isreload){
+	    if (MaxVal<data[0])MaxVal=data[0];
+		if (MaxVal<data[1])MaxVal=data[1];
+		if (MaxVal<data[2])MaxVal=data[2];
+		this.data.push([data[1],data[0],data[2]]);
+        if (isreload) {
+			option.xAxis3D.max=MaxVal;
+			option.yAxis3D.max=MaxVal;
+			option.zAxis3D.max=MaxVal;
+			this.reloadChart();
+		}
+	}
+	// 批量增加数据
+    function batchAddData(dataList){
+		var pointArr = JSON.parse(dataList);
+		for(var i=0;i<pointArr.length;i++){
+			addData(pointArr[i],(i==pointArr.length-1));
+		}
+	}
+    // 重新加载图表
+    function reloadChart() {
+        myChart = echarts.init(chartDom);
+        option && myChart.setOption(option);
+    }
+	
+
+    // 清空图表
+    function clearChart() {
+        this.data = [];
+        MaxVal=1;
+	option.xAxis3D.max=MaxVal;
+	option.yAxis3D.max=MaxVal;
+	option.zAxis3D.max=MaxVal;
+		option.series[0].data = this.data;
+		myChart.setOption(option);
+	}
+  </script>
+</body>
+</html>

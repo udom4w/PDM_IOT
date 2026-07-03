@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MQTT Payload Reference — WTVB02 V14.9</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg:         #0a0c10;
+    --surface:    #111318;
+    --surface2:   #181c24;
+    --border:     #232836;
+    --border2:    #2e3547;
+    --text:       #c9d1e0;
+    --muted:      #5a6480;
+    --accent:     #00d4ff;
+    --accent2:    #7b5cff;
+    --green:      #00e5a0;
+    --yellow:     #ffd166;
+    --orange:     #ff8c42;
+    --red:        #ff4d6d;
+    --tag-sensor: #1a3a4a;
+    --tag-sensor-b:#00d4ff;
+    --tag-dec:    #2a1a3a;
+    --tag-dec-b:  #7b5cff;
+    --tag-vib:    #1a3a25;
+    --tag-vib-b:  #00e5a0;
+    --tag-trend:  #3a2a10;
+    --tag-trend-b:#ffd166;
+    --tag-fuse:   #3a1a20;
+    --tag-fuse-b: #ff4d6d;
+    --tag-out:    #1a2a3a;
+    --tag-out-b:  #64b5f6;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Syne', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 0;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #0d1117 0%, #111827 60%, #0d1117 100%);
+    border-bottom: 1px solid var(--border2);
+    padding: 40px 48px 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 320px; height: 320px;
+    background: radial-gradient(circle, rgba(0,212,255,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .header::after {
+    content: '';
+    position: absolute;
+    bottom: -60px; left: 20%;
+    width: 240px; height: 240px;
+    background: radial-gradient(circle, rgba(123,92,255,0.05) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .header-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 3px;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    opacity: 0.8;
+  }
+  h1 {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #fff;
+    line-height: 1.1;
+    margin-bottom: 8px;
+  }
+  h1 span { color: var(--accent); }
+  .header-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 12px;
+  }
+  .pill-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+  }
+  .pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid;
+    text-transform: uppercase;
+  }
+
+  /* ── Layout ── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 48px 80px;
+  }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-bottom: 48px;
+  }
+  .toc-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .toc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+  }
+  .toc-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 7px;
+    text-decoration: none;
+    transition: background .15s;
+    border: 1px solid transparent;
+  }
+  .toc-item:hover { background: var(--surface2); border-color: var(--border2); }
+  .toc-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .toc-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); }
+  .toc-cadence { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); margin-left: auto; }
+
+  /* ── Topic sections ── */
+  .topic-section {
+    margin-bottom: 56px;
+    scroll-margin-top: 24px;
+  }
+  .topic-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .topic-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    margin-top: 3px;
+    min-width: 28px;
+  }
+  .topic-meta { flex: 1; }
+  .topic-path {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+    word-break: break-all;
+  }
+  .topic-path .base { color: var(--muted); }
+  .topic-desc { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .topic-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+
+  /* ── Field table ── */
+  .field-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: var(--surface);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .field-table thead th {
+    background: var(--surface2);
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border2);
+    font-weight: 700;
+  }
+  .field-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+  }
+  .field-table tbody tr:last-child { border-bottom: none; }
+  .field-table tbody tr:hover { background: var(--surface2); }
+  .field-table td { padding: 9px 14px; vertical-align: top; }
+
+  .field-name { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .field-type {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .t-str  { background: #1a2d1a; color: var(--green); border: 1px solid #1e3d1e; }
+  .t-num  { background: #1a2a3a; color: #64b5f6; border: 1px solid #1e3550; }
+  .t-bool { background: #2a1a2a; color: #ce93d8; border: 1px solid #3d1e3d; }
+  .t-int  { background: #2a2a1a; color: var(--yellow); border: 1px solid #3d3d1e; }
+  .t-obj  { background: #2a1a1a; color: var(--orange); border: 1px solid #3d1e1e; }
+
+  .field-unit { color: var(--muted); font-size: 10px; }
+  .field-desc { color: #8896b0; font-size: 11px; line-height: 1.5; font-family: 'Syne', sans-serif; }
+  .field-values { color: var(--yellow); font-size: 10px; }
+
+  /* nested object rows */
+  .nested { background: #0d1015; }
+  .nested .field-name { padding-left: 0; }
+  .nested td:first-child { padding-left: 28px; }
+  .group-row td {
+    padding: 6px 14px 2px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface2);
+    border-top: 1px solid var(--border);
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── Example JSON block ── */
+  .example-block {
+    margin-top: 16px;
+    background: #080a0e;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .example-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+  .example-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .example-size {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+  }
+  .example-json {
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    line-height: 1.7;
+    color: #8896b0;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .jk { color: #64b5f6; }
+  .jv-s { color: var(--green); }
+  .jv-n { color: var(--yellow); }
+  .jv-b { color: #ce93d8; }
+  .jp { color: var(--muted); }
+
+  /* ── Enum tables ── */
+  .enum-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+  .enum-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .enum-card-header {
+    background: var(--surface2);
+    padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .enum-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .enum-row:last-child { border-bottom: none; }
+  .enum-val { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; min-width: 80px; }
+  .enum-desc { font-size: 12px; color: var(--muted); }
+
+  /* ── Section titles ── */
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 20px;
+    margin-top: 48px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-title:first-child { margin-top: 0; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+  a { color: inherit; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══ -->
+<div class="header">
+  <div class="header-tag">WTVB02 · ESP32-S3 · Firmware V14.9</div>
+  <h1>MQTT Payload <span>Reference</span></h1>
+  <div style="font-size:13px; color:#6a7a9a; margin-top:8px;">คู่มืออธิบาย topics และ fields ทั้งหมด สำหรับระบบ Vibration Monitoring</div>
+  <div class="header-sub">Broker: iot.promlogix.com:8883 (mTLS) &nbsp;·&nbsp; QoS 0 &nbsp;·&nbsp; Machine: pump01 &nbsp;·&nbsp; Sensor: vb01</div>
+  <div class="pill-row">
+    <span class="pill" style="color:#00d4ff;border-color:#1a3a4a;background:#0d1e26">/sensor · 5–30s</span>
+    <span class="pill" style="color:#7b5cff;border-color:#2a1a3a;background:#160e22">/decision · 5–30s</span>
+    <span class="pill" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">/vibration · 5–30s</span>
+    <span class="pill" style="color:#ffd166;border-color:#3a2a10;background:#1e160a">/trend · 60s</span>
+    <span class="pill" style="color:#ff8c42;border-color:#3a2010;background:#1e100a">/fusion/* · 60s</span>
+    <span class="pill" style="color:#64b5f6;border-color:#1a2a3a;background:#0d1522">/output · 5min</span>
+    <span class="pill" style="color:#ff4d6d;border-color:#3a1a20;background:#1e0d12">/event · on-event</span>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ══ TOC ══ -->
+<div class="toc">
+  <div class="toc-title">สารบัญ Topics</div>
+  <div class="toc-grid">
+    <a href="#sensor" class="toc-item">
+      <span class="toc-dot" style="background:#00d4ff"></span>
+      <span class="toc-label">/sensor</span>
+      <span class="toc-cadence">5–30s</span>
+    </a>
+    <a href="#decision" class="toc-item">
+      <span class="toc-dot" style="background:#7b5cff"></span>
+      <span class="toc-label">/decision</span>
+      <span class="toc-cadence">5–30s</span>
+    </a>
+    <a href="#vibration" class="toc-item">
+      <span class="toc-dot" style="background:#00e5a0"></span>
+      <span class="toc-label">/vibration</span>
+      <span class="toc-cadence">5–30s</span>
+    </a>
+    <a href="#trend" class="toc-item">
+      <span class="toc-dot" style="background:#ffd166"></span>
+      <span class="toc-label">/trend</span>
+      <span class="toc-cadence">60s</span>
+    </a>
+    <a href="#fusion-raw" class="toc-item">
+      <span class="toc-dot" style="background:#ff8c42"></span>
+      <span class="toc-label">/fusion/raw</span>
+      <span class="toc-cadence">60s</span>
+    </a>
+    <a href="#fusion-aedf" class="toc-item">
+      <span class="toc-dot" style="background:#ff8c42"></span>
+      <span class="toc-label">/fusion/aedf</span>
+      <span class="toc-cadence">60s</span>
+    </a>
+    <a href="#fusion-osg" class="toc-item">
+      <span class="toc-dot" style="background:#ff8c42"></span>
+      <span class="toc-label">/fusion/osg</span>
+      <span class="toc-cadence">60s</span>
+    </a>
+    <a href="#fusion-fvri" class="toc-item">
+      <span class="toc-dot" style="background:#ff8c42"></span>
+      <span class="toc-label">/fusion/fvri</span>
+      <span class="toc-cadence">60s</span>
+    </a>
+    <a href="#ttw-model" class="toc-item">
+      <span class="toc-dot" style="background:#ff4d6d"></span>
+      <span class="toc-label">/ttw/model</span>
+      <span class="toc-cadence">60s</span>
+    </a>
+    <a href="#output" class="toc-item">
+      <span class="toc-dot" style="background:#64b5f6"></span>
+      <span class="toc-label">/output</span>
+      <span class="toc-cadence">5 min</span>
+    </a>
+    <a href="#event" class="toc-item">
+      <span class="toc-dot" style="background:#ff4d6d"></span>
+      <span class="toc-label">/vibration/event</span>
+      <span class="toc-cadence">on alarm</span>
+    </a>
+    <a href="#enums" class="toc-item">
+      <span class="toc-dot" style="background:#5a6480"></span>
+      <span class="toc-label">Enum Reference</span>
+      <span class="toc-cadence">—</span>
+    </a>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 1: /sensor
+══════════════════════════════════════════════════ -->
+<div id="sensor" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">01</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>sensor
+      </div>
+      <div class="topic-desc">ข้อมูล Raw จาก sensor — ความสั่นสะเทือน อุณหภูมิ RPM และการวิเคราะห์ harmonic ที่คำนวณบน edge</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#00d4ff;border-color:#1a3a4a;background:#0d1e26">PUB-1 of 3</span>
+        <span class="badge" style="color:#ffd166;border-color:#3a2a10;background:#1e160a">5–30s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~420 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "sensor"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead>
+      <tr>
+        <th style="width:160px">Field</th>
+        <th style="width:70px">Type</th>
+        <th style="width:80px">Unit</th>
+        <th>คำอธิบาย</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">Identity</td></tr>
+      <tr><td class="field-name">plant</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">Plant ID เช่น "plant01"</td></tr>
+      <tr><td class="field-name">machine_id</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">Machine ID เช่น "pump01"</td></tr>
+      <tr><td class="field-name">sensor_id</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">Sensor ID เช่น "vb01"</td></tr>
+      <tr><td class="field-name">stage</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">Pipeline stage — ค่าคงที่ <span style="color:var(--yellow)">"sensor"</span></td></tr>
+      <tr><td class="field-name">execution_location</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">ค่าคงที่ <span style="color:var(--yellow)">"edge"</span> — ประมวลผลบน ESP32</td></tr>
+      <tr><td class="field-name">sensor_status</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">สถานะ sensor — <span style="color:var(--yellow)">"ONLINE"</span> หรือ <span style="color:var(--red)">"OFFLINE"</span></td></tr>
+
+      <tr class="group-row"><td colspan="4">Vibration (RMS mm/s — velocity)</td></tr>
+      <tr><td class="field-name">rms</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">RMS ความเร็วการสั่น รวมทุกแกน (overall) — ปัดเศษ 2 ตำแหน่ง</td></tr>
+      <tr><td class="field-name">vx</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">RMS แกน X</td></tr>
+      <tr><td class="field-name">vy</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">RMS แกน Y</td></tr>
+      <tr><td class="field-name">vz</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">RMS แกน Z</td></tr>
+      <tr><td class="field-name">peak</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">Peak velocity สูงสุดในหน้าต่างปัจจุบัน</td></tr>
+      <tr><td class="field-name">crest_factor</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">peak / RMS — &gt;3.0 บ่งชี้ impulsive events (bearing)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Environment &amp; Rotation</td></tr>
+      <tr><td class="field-name">temp</td><td><span class="field-type t-num">float</span></td><td class="field-unit">°C</td><td class="field-desc">อุณหภูมิ — ปัดเศษ 1 ตำแหน่ง</td></tr>
+      <tr><td class="field-name">rpm</td><td><span class="field-type t-num">float</span></td><td class="field-unit">RPM</td><td class="field-desc">ความเร็วรอบ ปัจจุบัน — วัดจาก proximity sensor (NAMEPLATE=650)</td></tr>
+      <tr><td class="field-name">motor_state</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">สถานะมอเตอร์ 0=STOPPED 1=STARTING 2=RUNNING 3=STOPPING</td></tr>
+      <tr><td class="field-name">rotation_signal_ok</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = proximity sensor ตรวจจับการหมุน; false = ไม่มีสัญญาณ</td></tr>
+      <tr><td class="field-name">operating_hours_total</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">ชั่วโมงรวมที่เครื่องทำงาน (cumulative runtime)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Harmonic Feature Extraction (Edge-computed)</td></tr>
+      <tr><td class="field-name">freq_x</td><td><span class="field-type t-num">float</span></td><td class="field-unit">Hz</td><td class="field-desc">ความถี่หลักที่ dominant ใน spectrum แกน X</td></tr>
+      <tr><td class="field-name">freq_y</td><td><span class="field-type t-num">float</span></td><td class="field-unit">Hz</td><td class="field-desc">ความถี่หลักที่ dominant ใน spectrum แกน Y</td></tr>
+      <tr><td class="field-name">freq_z</td><td><span class="field-type t-num">float</span></td><td class="field-unit">Hz</td><td class="field-desc">ความถี่หลักที่ dominant ใน spectrum แกน Z</td></tr>
+      <tr><td class="field-name">freq_ratio_x</td><td><span class="field-type t-num">float</span></td><td class="field-unit">×1x</td><td class="field-desc">freq_x ÷ (rpm/60) — 1.0=1x, 2.0=2x harmonic; ใช้วินิจฉัย fault type</td></tr>
+      <tr><td class="field-name">freq_ratio_y</td><td><span class="field-type t-num">float</span></td><td class="field-unit">×1x</td><td class="field-desc">freq_y ÷ (rpm/60)</td></tr>
+      <tr><td class="field-name">freq_ratio_z</td><td><span class="field-type t-num">float</span></td><td class="field-unit">×1x</td><td class="field-desc">freq_z ÷ (rpm/60)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Timestamp</td></tr>
+      <tr><td class="field-name">timestamp</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">ISO 8601 UTC เช่น "2026-05-08T02:47:21Z"</td></tr>
+      <tr><td class="field-name">time_synced</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = NTP sync สำเร็จ; false = ใช้เวลา RTC ไม่ verified</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 2: /decision
+══════════════════════════════════════════════════ -->
+<div id="decision" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">02</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>decision
+      </div>
+      <div class="topic-desc">ผลการวินิจฉัยสุดท้าย — alarm class, health score, fault classification และการตัดสินใจ action</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#7b5cff;border-color:#2a1a3a;background:#160e22">PUB-2 of 3</span>
+        <span class="badge" style="color:#ffd166;border-color:#3a2a10;background:#1e160a">5–30s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~330 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "decision"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:160px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">Alarm &amp; Health</td></tr>
+      <tr><td class="field-name">alarm_code</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">รหัส alarm numeric</td></tr>
+      <tr><td class="field-name">alarm_level</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">"NORMAL" / "WARNING" / "ALARM" — ข้อความสำหรับแสดงผล</td></tr>
+      <tr><td class="field-name">alarm_class</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">"SILENT" / "INFO" / "WARNING" / "CRITICAL" — ดู Enum Reference</td></tr>
+      <tr><td class="field-name">health_score</td><td><span class="field-type t-int">int</span></td><td class="field-unit">%</td><td class="field-desc">0–100 คะแนนสุขภาพเครื่อง (100=ปกติ ลดลงตาม severity)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Fault Classification</td></tr>
+      <tr><td class="field-name">fault_type</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">"NORMAL" / "IMBALANCE" / "MISALIGNMENT" / "LOOSENESS" / "BEARING" / "RESONANCE" / "UNKNOWN"</td></tr>
+      <tr><td class="field-name">fault_score</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">ความมั่นใจ fault classification หลัง AEDF (1.0 = ชัดเจนมาก)</td></tr>
+      <tr><td class="field-name">fault_uncertainty</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">1 − fault_score — ความไม่แน่นอน (สูง = ambiguous)</td></tr>
+      <tr><td class="field-name">severity_score</td><td><span class="field-type t-int">int</span></td><td class="field-unit">0–100</td><td class="field-desc">ความรุนแรงรวม — ใช้กำหนด alarm class และ health score</td></tr>
+      <tr><td class="field-name">confidence</td><td><span class="field-type t-int">int</span></td><td class="field-unit">%</td><td class="field-desc">0–100% ความเชื่อมั่นของ engine — ต่ำในช่วงเริ่มต้น (buffer ยังไม่เต็ม)</td></tr>
+
+      <tr class="group-row"><td colspan="4">State Machine</td></tr>
+      <tr><td class="field-name">predicted_state</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">สถานะที่ engine คาดการณ์ก่อน rate-limiting (0=NORMAL 1=WARNING 2=ALARM)</td></tr>
+      <tr><td class="field-name">final_state</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">สถานะจริงที่ใช้งาน หลังผ่าน damping / boost logic</td></tr>
+      <tr><td class="field-name">state_rate_limited</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = final_state ≠ predicted_state (state damping ทำงาน)</td></tr>
+      <tr><td class="field-name">state_change_boost_cyc</td><td><span class="field-type t-int">int</span></td><td class="field-unit">cycles</td><td class="field-desc">รอบที่เหลือของ boost window (state change accelerator)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Action &amp; TTW</td></tr>
+      <tr><td class="field-name">ttw_best_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">Time-to-Warning ดีที่สุด — ปรากฏเฉพาะเมื่อ &gt; 0 (ไม่แสดงเมื่อ slope ยังไม่พร้อม)</td></tr>
+      <tr><td class="field-name">action_needed</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = แนะนำให้ดำเนินการ; false = ยังไม่จำเป็น</td></tr>
+      <tr><td class="field-name">reason</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">เหตุผลหลักของ decision เช่น "freq_drift", "ttw_0.1h_WARN_c=54", "normal"</td></tr>
+      <tr><td class="field-name">pub_interval_s</td><td><span class="field-type t-int">int</span></td><td class="field-unit">s</td><td class="field-desc">ช่วงเวลา publish ปัจจุบัน (5s=alarm, 10s=warning, 30s=normal)</td></tr>
+      <tr><td class="field-name">timestamp</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">ISO 8601 UTC</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 3: /vibration
+══════════════════════════════════════════════════ -->
+<div id="vibration" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">03</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>vibration
+      </div>
+      <div class="topic-desc">Payload รวมทั้งหมดสำหรับ Grafana — รวม sensor + decision + trend fields ในข้อความเดียว (backward-compatible)</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">PUB-3 of 3 · MAIN</span>
+        <span class="badge" style="color:#ffd166;border-color:#3a2a10;background:#1e160a">5–30s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~1100 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">Grafana Primary Source</span>
+      </div>
+    </div>
+  </div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:16px;font-family:'JetBrains Mono',monospace;padding:10px 14px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--green)">
+    ℹ️ &nbsp;Topic นี้รวม field จาก /sensor และ /decision และ trend data ทั้งหมด — field names เหมือนกันทุกตัว ดูรายละเอียด field ซ้ำได้จาก topic ด้านบน
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">Identity + Sensor (ดู /sensor)</td></tr>
+      <tr><td class="field-name">plant, machine_id, sensor_id</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">Identity fields — เหมือนกับ /sensor</td></tr>
+      <tr><td class="field-name">rms, vx, vy, vz, peak, temp, rpm</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s, °C</td><td class="field-desc">ค่า sensor — เหมือนกับ /sensor</td></tr>
+      <tr><td class="field-name">freq_x/y/z, freq_ratio_x/y/z</td><td><span class="field-type t-num">float</span></td><td class="field-unit">Hz / ×</td><td class="field-desc">Harmonic features — เหมือนกับ /sensor</td></tr>
+      <tr><td class="field-name">state</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">motor_state (ชื่อสั้นกว่า) 0=STOPPED 1=STARTING 2=RUNNING 3=STOPPING</td></tr>
+      <tr><td class="field-name">crest_factor, sensor_status</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">เหมือนกับ /sensor</td></tr>
+
+      <tr class="group-row"><td colspan="4">Trend Analysis (คำนวณจาก rolling window 120 samples)</td></tr>
+      <tr><td class="field-name">rms_slope</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชันการเปลี่ยน RMS ในหน้าต่าง 30 วินาที — บวก=เพิ่ม ลบ=ลด</td></tr>
+      <tr><td class="field-name">temp_slope</td><td><span class="field-type t-num">float</span></td><td class="field-unit">°C·s⁻¹</td><td class="field-desc">ความชันอุณหภูมิ</td></tr>
+      <tr><td class="field-name">trend_dir</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">"RISING" / "FALLING" / "STABLE"</td></tr>
+      <tr><td class="field-name">spike_count</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">จำนวน spike ในหน้าต่าง — ≥5 บ่งชี้ bearing onset</td></tr>
+      <tr><td class="field-name">freq_drift_x/y/z</td><td><span class="field-type t-num">float</span></td><td class="field-unit">Hz</td><td class="field-desc">การเปลี่ยนแปลงความถี่จาก baseline — ใช้ตรวจ resonance / misalignment</td></tr>
+      <tr><td class="field-name">freq_alert</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = freq drift เกิน threshold อย่างน้อย 1 แกน</td></tr>
+      <tr><td class="field-name">trend_window_s</td><td><span class="field-type t-int">int</span></td><td class="field-unit">s</td><td class="field-desc">ขนาดหน้าต่าง trend ที่ใช้ (samples × 250ms)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Multi-Resolution Slopes (จาก Aggregation Buffers)</td></tr>
+      <tr><td class="field-name">slope_1s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชัน RMS จาก buf1s (60-slot, ทุก 1 วินาที) — ปัดเศษ 5 ตำแหน่ง</td></tr>
+      <tr><td class="field-name">slope_10s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชัน RMS จาก buf10s (60-slot, ทุก 10 วินาที)</td></tr>
+      <tr><td class="field-name">slope_60s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชัน RMS จาก buf60s (60-slot, ทุก 60 วินาที)</td></tr>
+      <tr><td class="field-name">slope_ready_1s/10s/60s</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = buffer มีข้อมูลเพียงพอสำหรับคำนวณ slope (ต้องรอ warmup)</td></tr>
+      <tr><td class="field-name">ema_rms</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">Exponential Moving Average ของ RMS</td></tr>
+      <tr><td class="field-name">ema_dir</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">ทิศทาง EMA: +1=กำลังเพิ่ม 0=stable -1=กำลังลด</td></tr>
+      <tr><td class="field-name">stddev_1min</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">Standard deviation ของ RMS ใน 1 นาทีที่ผ่านมา</td></tr>
+      <tr><td class="field-name">max_rms_10min</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">ค่า RMS สูงสุดใน 10 นาทีที่ผ่านมา</td></tr>
+      <tr><td class="field-name">agg_buf_1s/10s/60s</td><td><span class="field-type t-int">int</span></td><td class="field-unit">slots</td><td class="field-desc">จำนวน slot ที่มีข้อมูลใน buffer (max 60)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Decision Fields (ดู /decision)</td></tr>
+      <tr><td class="field-name">fault_type, fault_score, fault_uncertainty</td><td><span class="field-type t-str">string/float</span></td><td class="field-unit">—</td><td class="field-desc">เหมือนกับ /decision</td></tr>
+      <tr><td class="field-name">severity_score, confidence, alarm_class</td><td><span class="field-type t-int">int/string</span></td><td class="field-unit">—</td><td class="field-desc">เหมือนกับ /decision</td></tr>
+      <tr><td class="field-name">predicted_state, final_state</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">เหมือนกับ /decision</td></tr>
+      <tr><td class="field-name">ttw_best_h, ttw_short_h, ttw_medium_h, ttw_long_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">Time-to-Warning แต่ละ tier (short/medium/long) — ปรากฏเฉพาะเมื่อ &gt; 0</td></tr>
+      <tr><td class="field-name">ttw_w_s, ttw_w_m, ttw_w_l</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">น้ำหนัก FVRI+OSG สำหรับ short/medium/long tier</td></tr>
+      <tr><td class="field-name">action_needed, reason, pub_interval_s</td><td><span class="field-type t-bool">bool/str/int</span></td><td class="field-unit">—</td><td class="field-desc">เหมือนกับ /decision</td></tr>
+
+      <tr class="group-row"><td colspan="4">Timestamp</td></tr>
+      <tr><td class="field-name">timestamp</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">ISO 8601 UTC</td></tr>
+      <tr><td class="field-name">time_synced</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">NTP sync status</td></tr>
+      <tr><td class="field-name">sync_age_s</td><td><span class="field-type t-int">int</span></td><td class="field-unit">s</td><td class="field-desc">วินาทีนับตั้งแต่ sync ครั้งล่าสุด (ปรากฏเฉพาะเมื่อ time_synced=true)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 4: /trend (PUB-A)
+══════════════════════════════════════════════════ -->
+<div id="trend" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">04</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>trend
+      </div>
+      <div class="topic-desc">Multi-resolution slope analysis, EMA, variance — input สำหรับ OSG และ FVRI engine</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ffd166;border-color:#3a2a10;background:#1e160a">PUB-A · 60s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~480 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "trend"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">Buffer Status</td></tr>
+      <tr><td class="field-name">buf_1s/10s/60s</td><td><span class="field-type t-int">int</span></td><td class="field-unit">slots</td><td class="field-desc">จำนวน slot ที่มีข้อมูลใน buffer แต่ละ resolution (max 60)</td></tr>
+      <tr><td class="field-name">ready_1s/10s/60s</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = slope คำนวณได้แล้ว (ผ่าน warmup threshold)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Slope (Linear Regression บน 30 จุดล่าสุด)</td></tr>
+      <tr><td class="field-name">slope_1s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชัน RMS จาก 30-slot ล่าสุดของ buf1s — ปัดเศษ 5 ตำแหน่ง</td></tr>
+      <tr><td class="field-name">slope_10s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชัน RMS จาก buf10s (เทียบเท่า 5 นาที)</td></tr>
+      <tr><td class="field-name">slope_60s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">ความชัน RMS จาก buf60s (เทียบเท่า 60 นาที)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Statistics</td></tr>
+      <tr><td class="field-name">max_rms_10min</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">Peak RMS สูงสุดใน 10 นาทีจาก max_rms field ของแต่ละ slot</td></tr>
+      <tr><td class="field-name">max_rms_60min</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">Peak RMS สูงสุดใน 60 นาที (ปรากฏเมื่อ buf60s &gt; 0)</td></tr>
+      <tr><td class="field-name">stddev_1min</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">เฉลี่ย stddev_rms ของ 60 slot ล่าสุดใน buf1s</td></tr>
+      <tr><td class="field-name">ema_rms</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">Exponential Moving Average RMS</td></tr>
+      <tr><td class="field-name">ema_dir</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">+1 / 0 / -1</td></tr>
+      <tr><td class="field-name">ema_delta</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">การเปลี่ยนแปลง EMA ต่อ slot</td></tr>
+      <tr><td class="field-name">spike_count</td><td><span class="field-type t-int">int</span></td><td class="field-unit">—</td><td class="field-desc">จำนวน spike ในหน้าต่างปัจจุบัน</td></tr>
+
+      <tr class="group-row"><td colspan="4">Frequency &amp; OSG/FVRI Inputs</td></tr>
+      <tr><td class="field-name">freq_alert</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = freq drift เกิน threshold</td></tr>
+      <tr><td class="field-name">freq_drift_x/y/z</td><td><span class="field-type t-num">float</span></td><td class="field-unit">Hz</td><td class="field-desc">Drift ความถี่จาก baseline</td></tr>
+      <tr><td class="field-name">slope_var_1s/10s/60s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">(mm/s)²</td><td class="field-desc">Variance ของ slope — input สำคัญสำหรับ OSG และ FVRI</td></tr>
+      <tr><td class="field-name">slot_dur_ms</td><td><span class="field-type t-int">int</span></td><td class="field-unit">ms</td><td class="field-desc">ความยาว 1 slot ปัจจุบัน (adaptive ตาม RPM — target=24 revs/slot)</td></tr>
+      <tr><td class="field-name">slot_revs_target</td><td><span class="field-type t-int">int</span></td><td class="field-unit">revs</td><td class="field-desc">ค่าคงที่ = 24 รอบต่อ slot</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 5: /fusion/raw (PUB-B)
+══════════════════════════════════════════════════ -->
+<div id="fusion-raw" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">05</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>fusion/raw
+      </div>
+      <div class="topic-desc">Raw Gaussian scores ก่อน AEDF + AEDF evidence หลัง accumulation — ใช้ debug การวินิจฉัย fault</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ff8c42;border-color:#3a2010;background:#1e100a">PUB-B · 60s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~480 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "fusion_raw"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">Summary</td></tr>
+      <tr><td class="field-name">top_fault</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">fault_type ที่ได้คะแนนสูงสุด</td></tr>
+      <tr><td class="field-name">top_score</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">คะแนนของ top_fault หลัง AEDF</td></tr>
+      <tr><td class="field-name">fault_uncertainty</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">1 − top_score</td></tr>
+
+      <tr class="group-row"><td colspan="4">raw_scores{} — Gaussian scores ก่อน AEDF (per fault hypothesis)</td></tr>
+      <tr class="nested"><td class="field-name">NORMAL</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">คะแนน Gaussian ที่ตรงกับ pattern ปกติ</td></tr>
+      <tr class="nested"><td class="field-name">IMBALANCE</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">1x dominant — mass imbalance / shaft bow</td></tr>
+      <tr class="nested"><td class="field-name">MISALIGNMENT</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">2x dominant — angular/parallel misalignment</td></tr>
+      <tr class="nested"><td class="field-name">LOOSENESS</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">3x หรือ sub-harmonic — structural looseness</td></tr>
+      <tr class="nested"><td class="field-name">BEARING</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">Non-integer ratio + spikes — developing bearing fault</td></tr>
+      <tr class="nested"><td class="field-name">RESONANCE</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">High harmonic (&gt;3x, non-BPF) — structural resonance</td></tr>
+      <tr class="nested"><td class="field-name">UNKNOWN</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">Pattern ambiguous / ข้อมูลไม่เพียงพอ</td></tr>
+
+      <tr class="group-row"><td colspan="4">aedf_evidence{} — accumulated evidence หลัง AEDF decay</td></tr>
+      <tr class="nested"><td class="field-name">NORMAL … UNKNOWN</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">Evidence สะสม (IIR blend: 60% history + 40% new score) — ผลรวมไม่จำเป็นต้อง = 1.0</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 6: /fusion/aedf (PUB-C)
+══════════════════════════════════════════════════ -->
+<div id="fusion-aedf" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">06</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>fusion/aedf
+      </div>
+      <div class="topic-desc">AEDF configuration และ decay tau ของแต่ละ fault class — ใช้ audit พฤติกรรม memory ของ engine</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ff8c42;border-color:#3a2010;background:#1e100a">PUB-C · 60s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~486 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "fusion_aedf"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">config{} — AEDF Parameters</td></tr>
+      <tr class="nested"><td class="field-name">blend_alpha</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">น้ำหนัก new score ใน IIR blend (= 0.40 → 40% new, 60% history)</td></tr>
+      <tr class="nested"><td class="field-name">contradict_margin</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">ถ้า rival score margin &gt; 0.35 → trigger accelerated evidence reset</td></tr>
+      <tr class="nested"><td class="field-name">reset_multiplier</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">คูณ evidence ด้วย 0.30 เมื่อ contradiction detected</td></tr>
+      <tr class="nested"><td class="field-name">persist_threshold</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">evidence &gt; 0.50 → boost effective fault score</td></tr>
+
+      <tr class="group-row"><td colspan="4">decay_tau_s{} — Time constant ของแต่ละ fault (หน่วย: วินาที)</td></tr>
+      <tr class="nested"><td class="field-name">NORMAL</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">300s — evidence NORMAL decay ช้า (persistent)</td></tr>
+      <tr class="nested"><td class="field-name">IMBALANCE</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">240s</td></tr>
+      <tr class="nested"><td class="field-name">MISALIGNMENT</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">180s</td></tr>
+      <tr class="nested"><td class="field-name">LOOSENESS</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">120s</td></tr>
+      <tr class="nested"><td class="field-name">BEARING</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">60s — decay เร็ว (bearing onset มักเป็น acute)</td></tr>
+      <tr class="nested"><td class="field-name">RESONANCE</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">150s</td></tr>
+      <tr class="nested"><td class="field-name">UNKNOWN</td><td><span class="field-type t-num">float</span></td><td class="field-unit">s</td><td class="field-desc">30s — decay เร็วที่สุด (transient)</td></tr>
+
+      <tr class="group-row"><td colspan="4">evidence_now{} — Snapshot ณ เวลา publish (เหมือน aedf_evidence ใน /fusion/raw)</td></tr>
+      <tr class="nested"><td class="field-name">NORMAL … UNKNOWN</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">Evidence สะสมปัจจุบัน — ใช้ cross-check กับ /fusion/raw</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 7: /fusion/osg (PUB-D)
+══════════════════════════════════════════════════ -->
+<div id="fusion-osg" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">07</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>fusion/osg
+      </div>
+      <div class="topic-desc">Oscillatory Suppression Gate — ลด noise ของ TTW เมื่อ slope variance สูง (เครื่องยังไม่ stable)</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ff8c42;border-color:#3a2010;background:#1e100a">PUB-D · 60s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~339 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "fusion_osg"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr><td class="field-name">floor_value</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">ค่าต่ำสุดของ suppression multiplier = 0.05 (ไม่ block TTW ทั้งหมด)</td></tr>
+
+      <tr class="group-row"><td colspan="4">slope_var_inputs{}</td></tr>
+      <tr class="nested"><td class="field-name">var_1s/10s/60s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">(mm/s)²</td><td class="field-desc">Variance ของ slope ใน resolution ต่าง ๆ — สูง=oscillating ต่ำ=stable trend</td></tr>
+
+      <tr class="group-row"><td colspan="4">Output</td></tr>
+      <tr><td class="field-name">slope_ready_1s/10s/60s</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">Warmup status — OSG ทำงานเฉพาะ tier ที่ ready=true</td></tr>
+      <tr><td class="field-name">r_s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0.05–1</td><td class="field-desc">Reliability multiplier สำหรับ TTW short-term หลัง OSG×FVRI</td></tr>
+      <tr><td class="field-name">r_m</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0.05–1</td><td class="field-desc">Reliability multiplier สำหรับ TTW medium-term</td></tr>
+      <tr><td class="field-name">post_osg_weights_in</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">ค่าคงที่ "ttw/model" — บอก consumer ว่า r_s/r_m ถูกใช้ใน topic ไหน</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 8: /fusion/fvri (PUB-E)
+══════════════════════════════════════════════════ -->
+<div id="fusion-fvri" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">08</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>fusion/fvri
+      </div>
+      <div class="topic-desc">Fault-Volatility Resonance Index — ปรับ TTW weight ตาม fault type และ slope variance (bearing inversion logic)</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ff8c42;border-color:#3a2010;background:#1e100a">PUB-E · 60s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~388 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "fusion_fvri"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">thresholds{} — FVRI Variance Thresholds</td></tr>
+      <tr class="nested"><td class="field-name">var_bearing</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">= 1e-8 — ถ้า slope_var_1s &gt; ค่านี้ เมื่อ BEARING active → invert penalty (variance = signal)</td></tr>
+      <tr class="nested"><td class="field-name">var_looseness</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">= 5e-9 — suppress short TTW เมื่อ LOOSENESS + variance สูง</td></tr>
+      <tr class="nested"><td class="field-name">var_imbalance</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">= 2e-9 — penalize IMBALANCE เมื่อ variance เกิน (unexpected oscillation)</td></tr>
+
+      <tr class="group-row"><td colspan="4">Current State</td></tr>
+      <tr><td class="field-name">active_fault</td><td><span class="field-type t-str">string</span></td><td class="field-unit">—</td><td class="field-desc">fault_type ที่ใช้ในการคำนวณ FVRI round นี้</td></tr>
+      <tr><td class="field-name">fault_score</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">คะแนน fault ปัจจุบัน</td></tr>
+      <tr><td class="field-name">slope_var_1s/10s/60s</td><td><span class="field-type t-num">float</span></td><td class="field-unit">—</td><td class="field-desc">Variance inputs ที่นำมาเปรียบเทียบกับ thresholds</td></tr>
+      <tr><td class="field-name">bearing_inversion_active</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = BEARING fault + score≥0.50 + var_1s &gt; var_bearing → invert logic ทำงาน</td></tr>
+
+      <tr class="group-row"><td colspan="4">Output Weights (ส่งต่อไปยัง /ttw/model)</td></tr>
+      <tr><td class="field-name">w_short</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">น้ำหนัก TTW short tier หลัง FVRI normalization</td></tr>
+      <tr><td class="field-name">w_medium</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">น้ำหนัก TTW medium tier</td></tr>
+      <tr><td class="field-name">w_long</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">น้ำหนัก TTW long tier</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 9: /ttw/model (PUB-F)
+══════════════════════════════════════════════════ -->
+<div id="ttw-model" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">09</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>ttw/model
+      </div>
+      <div class="topic-desc">Time-to-Warning derivation transparency — per-tier TTW, ensemble weights, hysteresis state</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ff4d6d;border-color:#3a1a20;background:#1e0d12">PUB-F · 60s cadence</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~265 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "ttw_model"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">TTW Per Tier (ปรากฏเฉพาะเมื่อ &gt; 0)</td></tr>
+      <tr><td class="field-name">ttw_short_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">TTW จาก slope_1s (short-term) — max 168h</td></tr>
+      <tr><td class="field-name">ttw_medium_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">TTW จาก slope_10s (medium-term)</td></tr>
+      <tr><td class="field-name">ttw_long_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">TTW จาก slope_60s (long-term)</td></tr>
+      <tr><td class="field-name">w_short/medium/long</td><td><span class="field-type t-num">float</span></td><td class="field-unit">0–1</td><td class="field-desc">น้ำหนักหลัง OSG×FVRI normalization (ผลรวม ≈ 1.0)</td></tr>
+      <tr><td class="field-name">ttw_best_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">Weighted ensemble: Σ(ttw_tier × w_tier) หลัง hysteresis</td></tr>
+
+      <tr class="group-row"><td colspan="4">Hysteresis State</td></tr>
+      <tr><td class="field-name">ttw_prev_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">ค่า ttw_best_h จาก publish รอบก่อน — ใช้ตรวจ jump</td></tr>
+      <tr><td class="field-name">hysteresis_applied</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">true = ค่าใหม่เปลี่ยนมากกว่า 20% จากรอบก่อน → hysteresis damping ทำงาน</td></tr>
+
+      <tr class="group-row"><td colspan="4">slope_ready{}</td></tr>
+      <tr class="nested"><td class="field-name">s1/s10/s60</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">Warmup status สำหรับ slope ทั้ง 3 resolution</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 10: /output (PUB-G)
+══════════════════════════════════════════════════ -->
+<div id="output" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">10</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>output
+      </div>
+      <div class="topic-desc">Integrated final output สำหรับ external consumers — รวม fault + TTW + slopes ในครั้งเดียว cadence 5 นาที</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#64b5f6;border-color:#1a2a3a;background:#0d1522">PUB-G · every 5 min</span>
+        <span class="badge" style="color:#00e5a0;border-color:#1a3a25;background:#0d1e16">~541 B JSON</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">stage = "output"</span>
+      </div>
+    </div>
+  </div>
+
+  <table class="field-table">
+    <thead><tr><th style="width:180px">Field</th><th style="width:70px">Type</th><th style="width:80px">Unit</th><th>คำอธิบาย</th></tr></thead>
+    <tbody>
+      <tr class="group-row"><td colspan="4">Vibration Summary</td></tr>
+      <tr><td class="field-name">rms_ema</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s</td><td class="field-desc">EMA RMS ณ เวลา publish — ปัดเศษ 2 ตำแหน่ง</td></tr>
+
+      <tr class="group-row"><td colspan="4">Fault + State (เหมือน /decision)</td></tr>
+      <tr><td class="field-name">fault_type … confidence</td><td><span class="field-type t-str">str/float/int</span></td><td class="field-unit">—</td><td class="field-desc">ดู /decision — ค่าเดียวกัน ณ เวลา output publish</td></tr>
+      <tr><td class="field-name">predicted_state, final_state, state_rate_limited</td><td><span class="field-type t-int">int/bool</span></td><td class="field-unit">—</td><td class="field-desc">เหมือน /decision</td></tr>
+      <tr><td class="field-name">alarm_class, action_needed, reason</td><td><span class="field-type t-str">str/bool/str</span></td><td class="field-unit">—</td><td class="field-desc">เหมือน /decision</td></tr>
+
+      <tr class="group-row"><td colspan="4">ttw{} — TTW Ensemble</td></tr>
+      <tr class="nested"><td class="field-name">best_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">Ensemble TTW สุดท้าย</td></tr>
+      <tr class="nested"><td class="field-name">short_h / medium_h / long_h</td><td><span class="field-type t-num">float</span></td><td class="field-unit">h</td><td class="field-desc">Per-tier TTW (ปรากฏเฉพาะเมื่อ &gt; 0)</td></tr>
+
+      <tr class="group-row"><td colspan="4">slopes{} — Multi-Resolution Slopes</td></tr>
+      <tr class="nested"><td class="field-name">ready_1s/10s/60s</td><td><span class="field-type t-bool">bool</span></td><td class="field-unit">—</td><td class="field-desc">Warmup status</td></tr>
+      <tr class="nested"><td class="field-name">s1 / s10 / s60</td><td><span class="field-type t-num">float</span></td><td class="field-unit">mm/s·s⁻¹</td><td class="field-desc">Slope แต่ละ resolution (ปรากฏเฉพาะเมื่อ ready=true)</td></tr>
+
+      <tr class="group-row"><td colspan="4">bufs{} — Buffer Fill</td></tr>
+      <tr class="nested"><td class="field-name">s1 / s10 / s60</td><td><span class="field-type t-int">int</span></td><td class="field-unit">slots</td><td class="field-desc">จำนวน slot ที่มีข้อมูลใน buffer (max 60)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="example-block">
+    <div class="example-header">
+      <span class="example-label">ตัวอย่าง Payload จริง</span>
+      <span class="example-size">~460 B</span>
+    </div>
+    <div class="example-json"><span class="jp">{</span>
+  <span class="jk">"plant"</span><span class="jp">:</span><span class="jv-s">"plant01"</span><span class="jp">,</span> <span class="jk">"machine_id"</span><span class="jp">:</span><span class="jv-s">"pump01"</span><span class="jp">,</span> <span class="jk">"sensor_id"</span><span class="jp">:</span><span class="jv-s">"vb01"</span><span class="jp">,</span>
+  <span class="jk">"stage"</span><span class="jp">:</span><span class="jv-s">"output"</span><span class="jp">,</span> <span class="jk">"execution_location"</span><span class="jp">:</span><span class="jv-s">"edge"</span><span class="jp">,</span>
+  <span class="jk">"rms_ema"</span><span class="jp">:</span><span class="jv-n">0.61</span><span class="jp">,</span>
+  <span class="jk">"fault_type"</span><span class="jp">:</span><span class="jv-s">"RESONANCE"</span><span class="jp">,</span> <span class="jk">"fault_score"</span><span class="jp">:</span><span class="jv-n">1</span><span class="jp">,</span> <span class="jk">"fault_uncertainty"</span><span class="jp">:</span><span class="jv-n">0.21</span><span class="jp">,</span>
+  <span class="jk">"severity_score"</span><span class="jp">:</span><span class="jv-n">11</span><span class="jp">,</span> <span class="jk">"confidence"</span><span class="jp">:</span><span class="jv-n">70</span><span class="jp">,</span>
+  <span class="jk">"predicted_state"</span><span class="jp">:</span><span class="jv-n">0</span><span class="jp">,</span> <span class="jk">"final_state"</span><span class="jp">:</span><span class="jv-n">1</span><span class="jp">,</span>
+  <span class="jk">"state_rate_limited"</span><span class="jp">:</span><span class="jv-b">true</span><span class="jp">,</span>   <span style="color:#3a4a5a">// predicted=0 แต่ final=1 → damping ยกระดับ</span>
+  <span class="jk">"alarm_class"</span><span class="jp">:</span><span class="jv-s">"INFO"</span><span class="jp">,</span> <span class="jk">"action_needed"</span><span class="jp">:</span><span class="jv-b">false</span><span class="jp">,</span> <span class="jk">"reason"</span><span class="jp">:</span><span class="jv-s">"freq_drift"</span><span class="jp">,</span>
+  <span class="jk">"ttw"</span><span class="jp">:</span><span class="jp">{</span> <span class="jk">"best_h"</span><span class="jp">:</span><span class="jv-n">0</span> <span class="jp">},</span>
+  <span class="jk">"slopes"</span><span class="jp">:</span><span class="jp">{</span>
+    <span class="jk">"ready_1s"</span><span class="jp">:</span><span class="jv-b">true</span><span class="jp">,</span> <span class="jk">"ready_10s"</span><span class="jp">:</span><span class="jv-b">true</span><span class="jp">,</span> <span class="jk">"ready_60s"</span><span class="jp">:</span><span class="jv-b">false</span><span class="jp">,</span>
+    <span class="jk">"s1"</span><span class="jp">:</span><span class="jv-n">-0.00156</span><span class="jp">,</span> <span class="jk">"s10"</span><span class="jp">:</span><span class="jv-n">-0.00955</span>
+  <span class="jp">},</span>
+  <span class="jk">"bufs"</span><span class="jp">:</span><span class="jp">{</span> <span class="jk">"s1"</span><span class="jp">:</span><span class="jv-n">60</span><span class="jp">,</span> <span class="jk">"s10"</span><span class="jp">:</span><span class="jv-n">17</span><span class="jp">,</span> <span class="jk">"s60"</span><span class="jp">:</span><span class="jv-n">2</span> <span class="jp">},</span>
+  <span class="jk">"timestamp"</span><span class="jp">:</span><span class="jv-s">"2026-05-08T02:47:21Z"</span>
+<span class="jp">}</span></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TOPIC 11: /vibration/event
+══════════════════════════════════════════════════ -->
+<div id="event" class="topic-section">
+  <div class="topic-header">
+    <div class="topic-num">11</div>
+    <div class="topic-meta">
+      <div class="topic-path">
+        <span class="base">factory/plant01/machine/pump01/</span>vibration/event
+      </div>
+      <div class="topic-desc">Alert event — publish เมื่อ state transition หรือ alarm ใหม่เกิดขึ้น ไม่ใช่ periodic</div>
+      <div class="topic-badges">
+        <span class="badge" style="color:#ff4d6d;border-color:#3a1a20;background:#1e0d12">on-event only</span>
+        <span class="badge" style="color:#8896b0;border-color:#232836;background:#111318">trigger: state change / alarm</span>
+      </div>
+    </div>
+  </div>
+  <div style="font-size:12px;color:var(--muted);padding:10px 14px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--red);font-family:'JetBrains Mono',monospace">
+    ⚡ &nbsp;Topic นี้ไม่ publish ตาม schedule — trigger เฉพาะเมื่อมี state transition หรือ alarm เกิดขึ้น ใช้ subscribe เพื่อรับ real-time alerts
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     ENUM REFERENCE
+══════════════════════════════════════════════════ -->
+<div id="enums">
+  <div class="section-title">Enum Reference</div>
+  <div class="enum-grid">
+
+    <div class="enum-card">
+      <div class="enum-card-header">fault_type</div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--green)">NORMAL</span><span class="enum-desc">ไม่พบ fault signature</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--yellow)">IMBALANCE</span><span class="enum-desc">1× dominant — mass imbalance / shaft bow</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--yellow)">MISALIGNMENT</span><span class="enum-desc">2× dominant — angular/parallel</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--orange)">LOOSENESS</span><span class="enum-desc">3× หรือ sub-harmonic / high stddev</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--orange)">BEARING</span><span class="enum-desc">Non-integer ratio + spikes</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--red)">RESONANCE</span><span class="enum-desc">High harmonic (&gt;3×, non-BPF)</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--muted)">UNKNOWN</span><span class="enum-desc">ข้อมูลไม่เพียงพอ / ambiguous</span></div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-card-header">alarm_class</div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--muted)">SILENT</span><span class="enum-desc">pred=0, severity ต่ำ — ไม่แจ้งเตือน</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:#64b5f6">INFO</span><span class="enum-desc">pred=1, severity &lt; 50 — แจ้งทราบ</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--yellow)">WARNING</span><span class="enum-desc">pred=1, severity ≥ 50 หรือ fault เฉพาะ</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--red)">CRITICAL</span><span class="enum-desc">pred=2 ยืนยันโดย fusion engine</span></div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-card-header">motor_state / state</div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--muted)">0</span><span class="enum-desc">STOPPED — rpm ต่ำกว่า band</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--yellow)">1</span><span class="enum-desc">STARTING — rpm กำลังเพิ่มขึ้น</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--green)">2</span><span class="enum-desc">RUNNING — rpm อยู่ใน band (650±100)</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--orange)">3</span><span class="enum-desc">STOPPING — rpm กำลังลดลง</span></div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-card-header">predicted_state / final_state</div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--green)">0</span><span class="enum-desc">NORMAL — ปกติ</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--yellow)">1</span><span class="enum-desc">WARNING — เฝ้าระวัง</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--red)">2</span><span class="enum-desc">ALARM — ต้องดำเนินการ</span></div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-card-header">pub_interval_s (publish cadence)</div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--red)">5s</span><span class="enum-desc">state = ALARM (high frequency)</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--yellow)">10s</span><span class="enum-desc">state = WARNING</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--green)">30s</span><span class="enum-desc">state = NORMAL (battery saving)</span></div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-card-header">trend_dir</div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--red)">RISING</span><span class="enum-desc">RMS เพิ่มขึ้นต่อเนื่อง</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--green)">FALLING</span><span class="enum-desc">RMS ลดลงต่อเนื่อง</span></div>
+      <div class="enum-row"><span class="enum-val" style="color:var(--muted)">STABLE</span><span class="enum-desc">slope อยู่ในช่วง noise floor</span></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ Footer ══ -->
+<div style="border-top:1px solid var(--border);padding-top:24px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+  <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted)">WTVB02 · ESP32-S3 · V14.9 · Reference generated 2026-05-08</span>
+  <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted)">Broker: iot.promlogix.com:8883 · mTLS · QoS 0</span>
+</div>
+
+</div>
+</body>
+</html>

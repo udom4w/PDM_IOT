@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>矩阵曲面图</title>
+	<meta charset="utf-8">
+    <script src="./js/echarts.min.js"></script>
+    <script src="./js/echarts-gl.min.js"></script>
+</head>
+<body style="margin: 0;">
+<div id="main" style="position: absolute;width: 100%;height:100%;"></div>
+</body>
+
+<script type="text/javascript">
+    var chartDom = document.getElementById('main');
+    var myChart = echarts.init(chartDom);
+    var option;
+
+    var data = [
+          [9,0,9,0,0.1],
+          [-9,9,9,0,0.1],
+          [9,-9,9,89,0.1],
+          [9,9,-9,0,0.1],
+        ];
+	data=[];
+    option = {
+    tooltip: {},
+    visualMap: 
+      {
+        top: 10,
+        calculable: true,
+        dimension: 3,
+        max: 100,
+        inRange: {
+          color: [
+            '#1710c0',
+            '#0b9df0',
+            '#00fea8',
+            '#00ff0d',
+            '#f5f811',
+            '#f09a09',
+            '#fe0300'
+          ]
+        },
+        textStyle: {
+          color: '#000'
+        }
+      }
+    ,
+    xAxis3D: {
+      name: 'x',
+      type: 'value',
+      nameTextStyle: {
+        color: '#000',
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#000'
+        }
+      }
+    },
+    yAxis3D: {
+      name: 'y',
+      type: 'value',
+      nameTextStyle: {
+        color: '#000',
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#000'
+        }
+      }
+    },
+    zAxis3D: {
+      name: 'z',
+      type: 'value',
+      nameTextStyle: {
+        color: '#000',
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#000'
+        }
+      }
+    },
+    grid3D: {
+      axisLine: {
+        lineStyle: {
+          color: '#000'
+        }
+      },
+      axisPointer: {
+        lineStyle: {
+          color: '#ffbd67'
+        }
+      },
+      viewControl: {
+        // autoRotate: true
+        // projection: 'orthographic'
+      }
+    },
+    series: [
+      {
+        type: 'scatter3D',
+        dimensions: [
+          'x',
+          'y',
+          'z',
+          'group',
+          'size',
+        ],
+        data: data,
+        symbolSize: 12,
+        // symbol: 'triangle',
+        itemStyle: {
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.8)'
+        },
+        emphasis: {
+          itemStyle: {
+            color: '#000'
+          }
+        }
+      }
+    ]
+  };
+    
+    // 页面加载时
+    window.onload = function () {
+        var result = getUrlVars();
+        if (result != undefined) {
+            theme = result;
+
+            if(result === 'darkBlue'){
+                // 暗蓝主题
+                option.backgroundColor = '#213347';
+                option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+            } else if(result === 'dark'){
+                // 深色主题
+                option.backgroundColor = '#000000';
+                option.visualMap.textStyle.color = '#EEEEEE';
+                option.xAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.xAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.yAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.yAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+                option.zAxis3D.nameTextStyle.color = '#EEEEEE';
+                option.zAxis3D.axisLine.lineStyle.color = '#EEEEEE';
+            }
+        }
+
+        option && myChart.setOption(option);
+		
+		setTimeout(function () {
+			window.addEventListener('resize', myChart.resize);
+		}, 200)
+    }
+
+    // 接口方法 ----------------------------------------------------------------------
+    // 主题默认为亮色
+    var theme = 'light';
+	 var colorVAL = 0;
+    function getUrlVars() {
+        var vars = [], hash;
+        var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
+        for (var i = 0; i < hashes.length; i++) {
+            hash = hashes[i].split('=');
+            vars.push(hash[0]);
+            vars[hash[0]] = hash[1];
+        }
+        return vars["theme"];
+    }
+
+    // 批量增加数据
+    function batchAddData(dataList){
+	   var pointArr = JSON.parse(dataList);
+      for (var i = 0; i < pointArr.length; i++) {
+	    pointArr[i].color = colorVAL;
+        this.addData(pointArr[i],(i == pointArr.length-1))
+		colorVAL++;
+		if (colorVAL >= 100) colorVAL=0;
+		
+      }
+    }
+
+    // 增加数据
+    function addData(data,isreload){
+      this.data.push([
+        data.x,
+        data.y,
+        data.z,
+        data.color,
+        data.size
+        ])
+        if (isreload) this.reloadChart();
+    }
+
+    // 设置z高度最大值
+    function setColorMax(data) {
+        option.visualMap.max = data;
+        this.reloadChart();
+    }
+    
+    // 设置颜色组
+    function setColorGroup(data) {
+        option.visualMap.inRange.color = data;
+        this.reloadChart();
+    }
+
+    // 重新加载图表
+    function reloadChart() {
+        myChart = echarts.init(chartDom);
+        option && myChart.setOption(option, true);
+    }
+
+    // 清空图表
+    function clearChart() {
+        this.data = [];
+        this.reloadChart();
+		window.location.reload();
+    }
+    </script>
+</html>
+

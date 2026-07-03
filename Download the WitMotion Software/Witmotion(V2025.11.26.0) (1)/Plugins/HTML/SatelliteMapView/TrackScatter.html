@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN" style="height: 100%">
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="height: 100%; margin: 0">
+  <div id="container" style="height: 100%"></div>
+
+  
+  <script type="text/javascript" src="./js/echarts.min.js"></script>
+
+  <script type="text/javascript">
+    var lonPL = 360/31544206.0;
+	var latPL = 360/40030173.0;
+	var fistrXY = [22.12300,113.4879546];
+	var IsFirst = true;
+	var sTitle='';
+	var pl = 1.0;
+	var fColor='white';
+	var tooltipColor='rgba(33,51,71,0.8)';
+	function getParms(search){
+		if (search != '') {
+			var obj = {};
+			// window.location.search '' or start with '?'
+			search = search.substring(1);
+			var keypairArray = search.split('&');
+			for (i in keypairArray) {
+				keypair = keypairArray[i];
+				partArray = keypair.split('=');
+				if(partArray.length == 2){
+					obj[partArray[0]] = partArray[1];
+					if (partArray[0]=='SkinType'){
+						switch(partArray[1]){
+							case '0'://亮色
+								fColor='black';
+								tooltipColor='rgba(188,194,200,0.8)';
+							break;
+							case '1'://暗色
+								tooltipColor='rgba(47,46,25,0.8)';
+							break;
+							
+						}
+					}
+				}
+			}
+		}
+	}
+    var dom = document.getElementById('container');
+    var myChart = echarts.init(dom, null, {
+      renderer: 'canvas',
+      useDirtyRect: false
+    });
+    var app = {};
+    getParms(window.location.search);
+    var option;
+	option = {
+		  title: {
+			text: sTitle,
+			textStyle:{
+				color: fColor
+			}
+		  },
+		  tooltip: {
+			trigger: 'item',
+			axisPointer: {
+			  type: ''
+			},
+		  backgroundColor: tooltipColor, //设置背景图片 rgba格式  'rgba(255,255,255,0.8)',//通过设置rgba调节背景颜色与透明度
+		  //color: 'black',
+		  borderWidth: "1", //边框宽度设置1
+		  //borderColor: 'gray', //设置边框颜色
+		  textStyle: {
+			color: fColor //设置文字颜色
+		  },
+		  formatter:'{b}'//'{b}</br>{c}'
+		  },
+		xAxis: {
+			max: 12,
+			interval:1,
+			splitLine:{show: false},
+			axisLabel:{show:false}
+		},
+		yAxis: {
+			max: 12,
+			interval:1,
+			splitLine:{show: false},
+			axisLabel:{show:false}
+		},
+		//backgroundColor:'black',
+		series: [
+			{
+				type: 'scatter',
+				symbolSize: 20,
+				data:[{value:[-10,-10]}]
+			},
+			{
+				type: 'scatter',
+				name: '1line123',
+				symbolSize: 10,
+				data:[{value:[8,9]}]
+			}
+		]
+	};
+
+    if (option && typeof option === 'object') {
+      myChart.setOption(option);
+    }
+
+    window.addEventListener('resize', myChart.resize);
+	myChart.on("click", function (param){
+		//alert(option.series.length);
+	//alert(param.dataIndex+':'+option.series[0].data[param.dataIndex].name);
+
+	
+	//myChart.setOption(option);
+	});
+	
+	var doc = document.documentElement;
+	if (doc.addEventListener) { 
+	// 此处是 mousewheel 事件，其他浏览器可能需要换成 DOMMouseScroll 
+	doc.addEventListener('mousewheel', handleMouseWheel, false); } 
+	else { 
+	// 兼容IE8及更早版本 
+	doc.attachEvent('onmousewheel', handleMouseWheel); 
+	}
+	
+    //取消鼠标移入高亮
+      myChart.on("mouseover", function (params) {
+        myChart.dispatchAction({
+          type: "downplay",
+        });
+      });
+	 //坐标转换 
+	function getLonLatDistance(lonlat){
+		return [lonlat[0]/lonPL,lonlat[1]/latPL];
+	}
+	  //滚轮事件
+	function handleMouseWheel(event) { 
+		if (IsFirst) return;
+		var delta = event.deltaY; 
+		if (delta < 0) { 
+			// 鼠标往上滚动 
+			pl *= 2.0 ;
+		} 
+		else if (delta > 0) { 
+		// 鼠标往下滚动 }
+			if (pl/2.0 < 1)return;
+			pl /= 2.0 ;
+		}
+		//console.log(pl +'='+ option.series[1].data[0]);
+		for(var i=1;i<option.series[0].data.length;i++){
+			var tVal= (i * pl);
+			var str = tVal +'cm';
+			if (tVal>=100){
+				str = (tVal / 100.0) +'m';
+			} 
+			if (tVal>=100000){
+				str = (tVal / 100000.0) +'km';
+			}
+			option.series[0].data[i].label.formatter =  str;
+		}
+
+		loadData();
+	}
+    var tData=[];
+	//初始化
+	function init(){
+		var nData=[];
+		
+		nData.push({value:[-10,-10],symbolSize: 0});
+		for(var i=1;i<8;i++){
+			
+			nData.push(
+            {
+                value: [0, 0],
+                symbolSize: (60.5) * i,
+                itemStyle: {
+                    color: 'rgba(1,1,1,0)',
+                    borderColor: fColor,
+                    borderWidth: 1
+                },
+				lineStyle: {
+					type:'solid'
+				},
+				label:{
+					show:true,
+					formatter: i + 'cm',
+					textStyle:{
+						color: fColor
+					},
+					position:'right'
+				}
+            }
+			);
+		}
+		
+		option.series[0].data = nData;
+		var tSize = 0;//  Math.round(Math.random()*50) + 5;
+		
+		nData=[];
+		tData=[];
+		for(var i=0;i<tSize;i++){
+		
+			if (i==0){
+				nData.push(
+				{value:[0,0],
+				name:i
+				});
+			}else{
+			
+				var x=(Math.random()*10) ;
+				var y=(Math.random()*10) ;
+				if (i==tSize-1 ){
+					nData.push(
+					{value:[x,y],
+					name:i,
+					itemStyle:{
+					  color:'red'
+					}
+					});
+				}else{
+					nData.push(
+					{value:[x,y],
+					name:i,
+					});
+				}
+
+			}
+		}
+		option.series[1].data = nData;
+		myChart.setOption(option);
+	}
+	init();
+	//添加坐标
+	function AddPoint(strJs){
+		var echartInfo = JSON.parse(strJs);
+		if (IsFirst){
+	        fistrXY=[echartInfo.datas[0].lon,echartInfo.datas[0].lat];
+			IsFirst=false;
+			tData=[];
+			sTitle = echartInfo.title + '  ' +echartInfo.datas[0].lat+'°N,'+ echartInfo.datas[0].lon+'°E';
+			option.title.text = sTitle;
+		}
+		for(var i=0;i<echartInfo.datas.length;i++){
+			var xy = getLonLatDistance([echartInfo.datas[i].lon-fistrXY[0],echartInfo.datas[i].lat-fistrXY[1]]);
+			tData.push({value:[xy[0] * 100.0,xy[1] * 100.0], dTime:echartInfo.datas[i].dTime});
+		}
+		loadData();
+	}
+	//加载数据
+	function loadData(){
+		var nData=[];
+		for(var i=0;i<tData.length;i++){
+			if (i==0){
+					nData.push(
+					{value:[0,0],
+					name:tData[i].dTime
+					});
+			}else{
+				var x= tData[i].value[0] / pl ;
+				var y= tData[i].value[1] / pl ;
+				var str= tData[i].dTime +'  ' + tData[i].value[0].toFixed(0) +'cm,'+ tData[i].value[1].toFixed(0)+'cm';
+				if (tData[i].value[0]>100){
+					str= tData[i].dTime +'  ' + (tData[i].value[0]/100.0).toFixed(2) +'m,'+ (tData[i].value[1]/100.0).toFixed(2)+'m';
+					if (tData[i].value[0]>=100000){
+						str= tData[i].dTime +'  ' + (tData[i].value[0]/100000.0).toFixed(3) +'km,'+ (tData[i].value[1]/100000.0).toFixed(3)+'km';
+					}
+				}
+				if (i == tData.length-1 ){
+					nData.push(
+					{value:[x,y],
+					name: str,
+					itemStyle:{
+					  color:'red'
+					}
+					});
+				}else{
+					nData.push(
+					{value:[x,y],
+					name: str
+					});
+				}
+			}
+		}
+		option.series[1].data = nData;
+		myChart.setOption(option);
+	}
+  </script>
+</body>
+</html>

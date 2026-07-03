@@ -1,0 +1,1013 @@
+[
+    {
+        "id": "630032e29663f58a",
+        "type": "tab",
+        "label": "🏭 Alarm Engine v3 — Edge-Only + InfluxDB",
+        "disabled": false,
+        "info": "v3: Full Interactive Control Layer\n- LINE Webhook with signature validation\n- Commands: ack, snooze, status, reset, help\n- Unified machine state store\n- Anti-429 backoff\n- Escalation timer\n- Auto-resume notification\n- Scales to 50+ machines"
+    },
+    {
+        "id": "33c1d35803824810",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "═══════════════════════════════════════════════════════════════════",
+        "info": "",
+        "x": 400,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "fa6d95b4edfd9ed3",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "🏭 ALARM ENGINE v3 — Interactive Control Layer via LINE Webhook",
+        "info": "",
+        "x": 400,
+        "y": 70,
+        "wires": []
+    },
+    {
+        "id": "2e56dd1e4d502275",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "═══════════════════════════════════════════════════════════════════",
+        "info": "",
+        "x": 400,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "f1df63f26e4bb73f",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "⚙️  SECTION 0 — INIT  (runs once on deploy)",
+        "info": "",
+        "x": 260,
+        "y": 150,
+        "wires": []
+    },
+    {
+        "id": "9dd7345593be4c35",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🔧 Init on Deploy",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 190,
+        "wires": [
+            [
+                "f96b3d962be3abba"
+            ]
+        ]
+    },
+    {
+        "id": "f96b3d962be3abba",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "⚙️ Identity Extractor / Credentials",
+        "func": "// =============================================\n// ⚙️  INIT — Credentials & Global State Setup\n// Edit LINE_TOKEN and LINE_GROUP_ID here\n// LINE_CHANNEL_SECRET is used for signature validation\n// =============================================\n\nflow.set('LINE_TOKEN', env.get('LINE_TOKEN'));\nflow.set('LINE_GROUP_ID', env.get('LINE_GROUP_ID'));\nflow.set('LINE_CHANNEL_SECRET', env.get('LINE_CHANNEL_SECRET'));\n\n\n// Initialise state store only if empty (survives redeploy)\nif (!flow.get('machines')) flow.set('machines', {});\n\n// machineState schema per entry:\n// {\n//   state:           'NORMAL' | 'WARNING' | 'CRITICAL',\n//   latched:         false,\n//   acknowledged:    false,\n//   snoozeUntil:     0,\n//   lastEscalation:  0,\n//   backoffUntil:    0,\n//   stateChangedAt:  timestamp,\n//   lastAlertSentAt: 0\n// }\n\nnode.status({fill:'green', shape:'dot', text:'LINE config loaded ✓'});\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 190,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "abb8fdaabd428e06",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "📡  SECTION 1 — MQTT INGESTION → STATE MACHINE",
+        "info": "",
+        "x": 290,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "a375c54a616839e2",
+        "type": "mqtt in",
+        "z": "630032e29663f58a",
+        "name": "📡 MQTT Vibration",
+        "topic": "factory/+/machine/+/vibration",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "271d86a3897f9309",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 160,
+        "y": 300,
+        "wires": [
+            [
+                "885a21b2d935bf2d"
+            ]
+        ]
+    },
+    {
+        "id": "885a21b2d935bf2d",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🏭 Identity Extractor",
+        "func": "// Extract plant + machine_id from MQTT topic\n// Topic: factory/{plant}/machine/{machine_id}/vibration\nvar parts = msg.topic.split('/');\nvar p = msg.payload;\n\nmsg.plant      = parts[1] || p.plant      || 'UNKNOWN';\nmsg.machine_id = parts[3] || p.machine_id || 'UNKNOWN';\nmsg.sensor_id  = p.sensor_id || 'UNKNOWN';\n\nif (!p.timestamp) p.timestamp = new Date().toISOString();\nmsg.timestamp = p.timestamp;\n\np.plant      = msg.plant;\np.machine_id = msg.machine_id;\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 520,
+        "y": 300,
+        "wires": [
+            [
+                "lat001calc2026fix1"
+            ]
+        ]
+    },
+    {
+        "id": "lat001calc2026fix1",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "⏱️ Latency Calculator",
+        "func": "// ════════════════════════════════════════════════════════════════════\n//  ⏱️  Latency Calculator\n//  Computes data pipeline latency: device timestamp → Node-RED receive\n//\n//  p.timestamp  = ISO8601 set by ESP32 at measurement time\n//  receive_time = Date.now() at this Node-RED function\n//\n//  Fields written to InfluxDB:\n//    data_latency_ms  — current latency (ms)\n//\n//  Flow context (for anomaly detection):\n//    latency_history_{machine_id} — last 10 readings\n// ════════════════════════════════════════════════════════════════════\n\nconst p        = msg.payload;\nconst machineId = p.machine_id || msg.machine_id || 'UNKNOWN';\n\n// ── 1. RECEIVE TIMESTAMP ───────────────────────────────────────────\nconst receiveMs = Date.now();           // ms since epoch, Node-RED server time\n\n// ── 2. PARSE DEVICE TIMESTAMP ─────────────────────────────────────\nlet deviceMs = null;\nif (p.timestamp) {\n    const d = new Date(p.timestamp);\n    if (!isNaN(d.getTime())) {\n        deviceMs = d.getTime();\n    }\n}\n\n// ── 3. CALCULATE LATENCY ──────────────────────────────────────────\nlet latencyMs = null;\nif (deviceMs !== null) {\n    latencyMs = receiveMs - deviceMs;\n    // Sanity check: reject negative or extreme values (> 5 minutes)\n    if (latencyMs < 0 || latencyMs > 300000) {\n        node.warn(`[Latency] Suspicious value ${latencyMs}ms for ${machineId} — skipping`);\n        latencyMs = null;\n    }\n}\n\n// ── 4. WRITE TO PAYLOAD ───────────────────────────────────────────\nif (latencyMs !== null) {\n    p.data_latency_ms = Math.round(latencyMs);\n} else {\n    // Use 0 as fallback so InfluxDB always has a value\n    // Grafana filters out 0 differently from null/undefined\n    p.data_latency_ms = 0;\n}\n\n// ── 5. ROLLING LATENCY HISTORY (flow context) ────────────────────\n// Store last 10 readings for anomaly detection\nconst histKey = 'latency_history_' + machineId;\nlet hist = flow.get(histKey) || [];\nif (latencyMs !== null) {\n    hist.push(latencyMs);\n    if (hist.length > 10) hist.shift();\n    flow.set(histKey, hist);\n}\n\n// ── 6. NODE STATUS ────────────────────────────────────────────────\nconst color = latencyMs === null    ? 'grey'\n            : latencyMs > 3000      ? 'red'\n            : latencyMs > 1000      ? 'yellow' : 'green';\n\nnode.status({\n    fill:  color,\n    shape: 'dot',\n    text:  latencyMs === null\n           ? `${machineId}: no timestamp`\n           : `${machineId}: ${p.data_latency_ms}ms`\n});\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 300,
+        "wires": [
+            [
+                "adf3dc5f003a516c"
+            ]
+        ]
+    },
+    {
+        "id": "adf3dc5f003a516c",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🧠 Health Logic (Edge-Only, Drop-on-Missing)",
+        "func": "// =============================================\n// 🧠 Health Logic — Edge-Only Mode\n// =============================================\n// ESP32 v5.5+ คำนวณและส่งมาครบทุก field:\n//   alarm_level, health_score, crest_factor, alarm_code\n//\n// Node-RED ทำหน้าที่:\n//   1. Validate required fields → DROP ถ้าขาด\n//   2. ใช้ค่าจาก edge โดยตรง — ไม่คำนวณซ้ำ\n// =============================================\nconst WARNING_RMS  = 4.5;\nconst CRITICAL_RMS = 7.1;\n\nvar p = msg.payload;\n\n// ════════════════════════════════════════════\n// GUARD: DROP ถ้า field หลักขาดหรือผิดปกติ\n// ทุก field ด้านล่างนี้ต้องมีครบ — ขาด field ใด\n// ค่าที่เหลือทั้งหมดไม่มีความหมาย → DROP ทิ้ง\n// ════════════════════════════════════════════\n\nfunction drop(reason, value) {\n    node.warn('[Health] ❌ DROP — ' + reason + ' (got: \"' + value + '\") | machine=' + (p.machine_id || 'unknown'));\n    node.status({ fill: 'red', shape: 'ring', text: '❌ DROP: ' + reason });\n    return true;\n}\n\n// 1. machine_id\nif (!p.machine_id)\n    return drop('machine_id missing', p.machine_id), null;\n\n// 2. rms — ค่าหลัก ถ้าขาดแล้วทุกอย่างไม่มีความหมาย\nvar rms = parseFloat(p.rms);\nif (isNaN(rms) || rms < 0)\n    return drop('rms missing/invalid', p.rms), null;\n\n// 3. alarm_level — ต้องเป็นค่าที่กำหนดเท่านั้น\nif (!['NORMAL','WARNING','CRITICAL'].includes(p.alarm_level))\n    return drop('alarm_level missing/invalid', p.alarm_level), null;\n\n// 4. health_score — ต้องเป็นตัวเลข 0–100\nvar hs = parseFloat(p.health_score);\nif (isNaN(hs) || hs < 0 || hs > 100)\n    return drop('health_score missing/invalid', p.health_score), null;\n\n// 5. crest_factor — ต้องเป็นตัวเลข >= 0\nvar cf = parseFloat(p.crest_factor);\nif (isNaN(cf) || cf < 0)\n    return drop('crest_factor missing/invalid', p.crest_factor), null;\n\n// ════════════════════════════════════════════\n// ✅ ทุก field ผ่าน — ใช้ค่าจาก edge โดยตรง\n// ════════════════════════════════════════════\n\n// alarm_code: ใช้จาก edge ถ้ามี ไม่งั้น derive จาก alarm_level\nif (p.alarm_code === undefined) {\n    p.alarm_code = p.alarm_level === 'CRITICAL' ? 2 :\n                   p.alarm_level === 'WARNING'  ? 1 : 0;\n}\n\np.thresholds = { warning: WARNING_RMS, critical: CRITICAL_RMS };\n\n// ── Status badge ──────────────────────────────────────────────\nvar color = p.alarm_level === 'CRITICAL' ? 'red'\n          : p.alarm_level === 'WARNING'  ? 'yellow' : 'green';\n\nnode.status({ fill: color, shape: 'dot',\n    text: '⚡ ' + p.machine_id +\n          ' RMS:'  + rms.toFixed(2) +\n          ' H:'    + hs  + '%' +\n          ' CF:'   + cf  +\n          ' ['     + p.alarm_level + ']'\n});\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 840,
+        "y": 240,
+        "wires": [
+            [
+                "b1a2c3d4e5f60001"
+            ]
+        ]
+    },
+    {
+        "id": "ef04bfbbd91995e0",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🧠 Unified State Engine (Rule 1 & 4)",
+        "func": "// =============================================\n// UNIFIED STATE ENGINE\n// - Manages per-machine state in flow context\n// - Rule 1: No duplicate alerts for same state\n// - Rule 4: Recovery (CRITICAL→NORMAL) → send once\n// - Respects snooze, ack, backoff\n// =============================================\nvar machineId  = msg.payload.machine_id || 'UNKNOWN';\nvar newLevel   = msg.payload.alarm_level || 'NORMAL';\nvar now        = Date.now();\n\nvar machines = flow.get('machines') || {};\n\n// Bootstrap machine entry\nif (!machines[machineId]) {\n    machines[machineId] = {\n        state: 'NORMAL', latched: false, acknowledged: false,\n        snoozeUntil: 0, lastEscalation: 0, backoffUntil: 0,\n        stateChangedAt: now, lastAlertSentAt: 0\n    };\n}\nvar m = machines[machineId];\n\n// --- Guard: backoff from 429 ---\nif (now < m.backoffUntil) {\n    var wait = Math.ceil((m.backoffUntil - now) / 1000);\n    node.status({fill:'orange', shape:'ring',\n        text: machineId + ': backoff ' + wait + 's'});\n    flow.set('machines', machines);\n    return null;\n}\n\n// --- Guard: snoozed ---\nif (now < m.snoozeUntil) {\n    var remain = Math.ceil((m.snoozeUntil - now) / 60000);\n    node.status({fill:'grey', shape:'ring',\n        text: machineId + ': snoozed ' + remain + 'm'});\n    flow.set('machines', machines);\n    return null;\n}\n\n// --- Rule 1: Same state → drop (unless latch reset) ---\nif (m.state === newLevel && !m.latched) {\n    node.status({fill:'grey', shape:'dot',\n        text: machineId + ': same (' + newLevel + '), skip'});\n    flow.set('machines', machines);\n    return null;\n}\n\n// --- State transition ---\nvar prevState = m.state;\nm.state          = newLevel;\nm.latched        = false;\nm.acknowledged   = false;\nm.stateChangedAt = now;\nif (newLevel !== 'NORMAL') {\n    m.lastEscalation = 0; // reset escalation timer on new alarm\n}\n\nflow.set('machines', machines);\n\n// --- Set alert type for downstream ---\nmsg._machineId = machineId;\nmsg._prevState = prevState;\nmsg._alertType = (newLevel === 'NORMAL') ? 'recovery' : 'alert';\n\nnode.status({fill: newLevel === 'CRITICAL' ? 'red' : newLevel === 'WARNING' ? 'yellow' : 'green',\n    shape:'dot', text: machineId + ': ' + prevState + ' → ' + newLevel});\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1250,
+        "y": 260,
+        "wires": [
+            [
+                "e982d76b3ebe0b06"
+            ]
+        ]
+    },
+    {
+        "id": "8e5f5314f70c4e6b",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "📱  SECTION 2 — LINE PUSH (Alert / Escalation / Recovery)",
+        "info": "",
+        "x": 310,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "e982d76b3ebe0b06",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "📱 LINE Message Builder",
+        "func": "// =============================================\n// LINE MESSAGE BUILDER\n// Handles: alert | escalation | recovery\n// Checks backoff & snooze before sending\n// =============================================\nvar accessToken = flow.get('LINE_TOKEN');\nvar groupId     = flow.get('LINE_GROUP_ID');\nvar p           = msg.payload;\nvar mId         = msg._machineId || (p.machine_id || 'N/A').toUpperCase();\nvar alertType   = msg._alertType || 'alert';\n\nif (!accessToken || accessToken === 'YOUR_CHANNEL_ACCESS_TOKEN_HERE') {\n    node.warn('LINE_TOKEN not set!');\n    node.status({fill:'red', shape:'dot', text:'No token!'});\n    return null;\n}\n\n// Re-check machine state (may have been snoozed since state engine ran)\nvar machines = flow.get('machines') || {};\nvar m = machines[mId];\nif (m) {\n    var now = Date.now();\n    if (now < m.snoozeUntil || now < m.backoffUntil) return null;\n    m.lastAlertSentAt = now;\n    flow.set('machines', machines);\n}\n\nvar timeThai = new Date().toLocaleString('th-TH', {\n    timeZone:'Asia/Bangkok', hour12:false,\n    year:'numeric', month:'short', day:'numeric',\n    hour:'2-digit', minute:'2-digit', second:'2-digit'\n}) + ' น.';\n\nvar rms  = typeof p.rms === 'number' ? p.rms.toFixed(2) : '?';\nvar text = '';\n\nif (alertType === 'alert') {\n    var emoji = p.alarm_level === 'CRITICAL' ? '🚨' : '⚠️';\n    text = emoji + ' แจ้งเตือน ' + p.alarm_level + '!\\n'\n         + '🏭 Plant: '   + (p.plant || 'N/A') + '\\n'\n         + '⚙️ Machine: ' + mId + '\\n'\n         + '📊 RMS: '     + rms + ' mm/s\\n'\n         + '❤️ Health: '  + (p.health_score || '?') + '%\\n'\n         + '⏰ '          + timeThai + '\\n\\n'\n         + '📖 Commands:\\n'\n         + '  ack '    + mId + '\\n'\n         + '  snooze ' + mId + ' 30';\n\n} else if (alertType === 'escalation') {\n    text = '🔴 ESCALATION!\\n'\n         + '🏭 Plant: '          + (p.plant || 'N/A') + '\\n'\n         + '⚙️ Machine: '        + mId + '\\n'\n         + '⏱️ CRITICAL มานาน: ' + (msg._durationMin || '?') + ' นาที\\n'\n         + '📊 RMS: '            + rms + ' mm/s\\n'\n         + '⏰ '                 + timeThai + '\\n\\n'\n         + '⚠️ กรุณาตรวจสอบด่วน!';\n\n} else if (alertType === 'recovery') {\n    text = '✅ กลับสู่ NORMAL\\n'\n         + '⚙️ Machine: ' + mId + '\\n'\n         + '📊 RMS: '     + rms + ' mm/s\\n'\n         + '⏰ '          + timeThai;\n}\n\nflow.set('_lastMachine', mId);\nmsg._machineId = mId;\nmsg.headers = {\n    'Content-Type':  'application/json',\n    'Authorization': 'Bearer ' + accessToken\n};\nmsg.payload = {\n    to: groupId,\n    messages: [{type:'text', text:text}]\n};\n\nnode.status({fill:'blue', shape:'dot',\n    text:'[' + alertType + '] → ' + mId});\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 160,
+        "y": 440,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "830a5573f64cf991",
+        "type": "http request",
+        "z": "630032e29663f58a",
+        "name": "LINE Push API",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://api.line.me/v2/bot/message/push",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 440,
+        "y": 440,
+        "wires": [
+            [
+                "f63614552d4d191e"
+            ]
+        ]
+    },
+    {
+        "id": "f63614552d4d191e",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🛡️ 429 Handler (Rule 3 — 5 min backoff)",
+        "func": "// =============================================\n// 429 RESPONSE HANDLER\n// 200 → success, clear backoff\n// 429 → set backoffUntil = now + 5min, reset latch\n// 4xx/5xx → log with detail\n// =============================================\nconst BACKOFF_MS = 5 * 60 * 1000; // 5 minutes\nvar code      = msg.statusCode;\nvar machineId = msg._machineId || flow.get('_lastMachine') || 'UNKNOWN';\n\nvar machines = flow.get('machines') || {};\nvar m = machines[machineId];\n\nif (code === 200) {\n    if (m) { m.backoffUntil = 0; }\n    flow.set('machines', machines);\n    node.status({fill:'green', shape:'dot', text:'✓ ' + machineId});\n    return [msg, null];\n\n} else if (code === 429) {\n    if (m) {\n        m.backoffUntil = Date.now() + BACKOFF_MS;\n        m.latched      = true; // force resend after backoff\n    }\n    flow.set('machines', machines);\n    node.warn('🚫 LINE 429: ' + machineId + ' → backoff 5min');\n    node.status({fill:'red', shape:'ring', text:'429 backoff 5min: ' + machineId});\n    return [null, null];\n\n} else {\n    var body = '';\n    try { body = JSON.stringify(msg.payload); } catch(e) {}\n    node.warn('LINE API Error ' + code + ': ' + body);\n    node.status({fill:'red', shape:'dot', text:'Error ' + code + ': ' + machineId});\n    return [msg, null];\n}",
+        "outputs": 2,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 740,
+        "y": 440,
+        "wires": [
+            [],
+            [
+                "65e780abcdd5588b"
+            ]
+        ]
+    },
+    {
+        "id": "65e780abcdd5588b",
+        "type": "debug",
+        "z": "630032e29663f58a",
+        "name": "LINE Push Response",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "statusCode",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1180,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "a8a05fd919393ed8",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "⏱️  SECTION 3 — ESCALATION TIMER + AUTO RESUME (every 1 min)",
+        "info": "",
+        "x": 320,
+        "y": 530,
+        "wires": []
+    },
+    {
+        "id": "cb07cceea16e874d",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "⏱️ Every 1 min",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "60",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 10,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 570,
+        "wires": [
+            [
+                "f9378e1435e2c70e",
+                "c7fcf5f3a2ec18c2"
+            ]
+        ]
+    },
+    {
+        "id": "f9378e1435e2c70e",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "⏱️ Escalation Timer (Rule 2 — 10 min)",
+        "func": "// =============================================\n// ESCALATION TIMER (Rule 2)\n// Runs every 1 minute\n// Sends escalation if:\n//   - Machine is CRITICAL\n//   - Not snoozed / backoff\n//   - Not acknowledged\n//   - In CRITICAL > 10 min\n//   - Escalation not yet sent for this alarm\n// =============================================\nconst ESCALATION_MS = 10 * 60 * 1000; // 10 min\nvar now      = Date.now();\nvar machines = flow.get('machines') || {};\nvar results  = [];\n\nObject.keys(machines).forEach(function(mId) {\n    var m = machines[mId];\n    if (m.state !== 'CRITICAL')           return;\n    if (m.acknowledged)                   return;\n    if (now < m.snoozeUntil)              return;\n    if (now < m.backoffUntil)             return;\n    if (m.lastEscalation > m.stateChangedAt) return; // already escalated this alarm\n    if ((now - m.stateChangedAt) < ESCALATION_MS) return;\n\n    m.lastEscalation = now;\n    results.push({\n        _alertType:    'escalation',\n        _machineId:    mId,\n        _durationMin:  Math.floor((now - m.stateChangedAt) / 60000),\n        payload: { machine_id: mId, plant: 'PLANT01', alarm_level: 'CRITICAL', rms: 0 }\n    });\n});\n\nflow.set('machines', machines);\n\nif (results.length === 0) {\n    node.status({fill:'grey', shape:'ring', text:'no escalation needed'});\n    return null;\n}\nnode.status({fill:'yellow', shape:'dot',\n    text:'Escalating: ' + results.map(function(r){return r._machineId;}).join(', ')});\n\nreturn results;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 560,
+        "wires": [
+            [
+                "e982d76b3ebe0b06"
+            ]
+        ]
+    },
+    {
+        "id": "c7fcf5f3a2ec18c2",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🔔 Auto Resume Check",
+        "func": "// Check snooze expiry every minute\n// If expired → push LINE notification + unblock\nvar ACCESS_TOKEN = flow.get('LINE_TOKEN');\nvar GROUP_ID     = flow.get('LINE_GROUP_ID');\nvar now          = Date.now();\nvar machines     = flow.get('machines') || {};\nvar expired      = [];\n\nObject.keys(machines).forEach(function(mId) {\n    var m = machines[mId];\n    if (m.snoozeUntil > 0 && now >= m.snoozeUntil) {\n        expired.push(mId);\n        m.snoozeUntil = 0;\n    }\n});\n\nflow.set('machines', machines);\n\nvar activeSnoozed = Object.keys(machines).filter(function(mId){\n    return machines[mId].snoozeUntil > now;\n});\nnode.status(activeSnoozed.length > 0\n    ? {fill:'grey', shape:'ring', text:'Snoozed: ' + activeSnoozed.join(', ')}\n    : {fill:'green', shape:'dot', text:'All clear'});\n\nif (expired.length === 0) return null;\n\nvar resumeText = '🔔 Snooze หมดเวลา — กลับมาแจ้งเตือน:\\n';\nexpired.forEach(function(m) { resumeText += '\\n✅ ' + m; });\nresumeText += '\\n\\n⏰ ' + new Date().toLocaleString('th-TH', {timeZone:'Asia/Bangkok'});\n\nmsg.headers = {\n    'Content-Type':  'application/json',\n    'Authorization': 'Bearer ' + ACCESS_TOKEN\n};\nmsg.payload = { to: GROUP_ID, messages: [{type:'text', text:resumeText}] };\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 610,
+        "wires": [
+            [
+                "77ae1c467feddef7"
+            ]
+        ]
+    },
+    {
+        "id": "77ae1c467feddef7",
+        "type": "http request",
+        "z": "630032e29663f58a",
+        "name": "LINE Push (Resume)",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://api.line.me/v2/bot/message/push",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 690,
+        "y": 610,
+        "wires": [
+            [
+                "b8477855700f6ed4"
+            ]
+        ]
+    },
+    {
+        "id": "b8477855700f6ed4",
+        "type": "debug",
+        "z": "630032e29663f58a",
+        "name": "Resume Response",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "statusCode",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 900,
+        "y": 610,
+        "wires": []
+    },
+    {
+        "id": "faa7ae7fba9ef0c9",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "🔗  SECTION 4 — LINE WEBHOOK + COMMAND PARSER",
+        "info": "",
+        "x": 290,
+        "y": 690,
+        "wires": []
+    },
+    {
+        "id": "d6b7d7d8e4736527",
+        "type": "http in",
+        "z": "630032e29663f58a",
+        "name": "📲 LINE Webhook POST /line/callback",
+        "url": "/line/callback",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 730,
+        "wires": [
+            [
+                "8ee1165d481fc157"
+            ]
+        ]
+    },
+    {
+        "id": "8ee1165d481fc157",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🔐 Signature Validator",
+        "func": "// =============================================\n// LINE SIGNATURE VALIDATION\n// X-Line-Signature: Base64(HMAC-SHA256(body, channelSecret))\n// Node-RED does not have built-in crypto in sandbox,\n// so we use the global 'crypto' module via node context.\n// If validation fails → respond 401 and drop.\n// =============================================\nvar secret    = flow.get('LINE_CHANNEL_SECRET') || '';\nvar signature = msg.req.headers['x-line-signature'] || '';\nvar rawBody   = msg.req.rawBody || JSON.stringify(msg.payload);\n\n// Store rawBody for downstream if needed\nmsg._rawBody   = rawBody;\nmsg._signature = signature;\n\nif (!secret || secret === 'YOUR_CHANNEL_SECRET_HERE') {\n    // Skip validation in dev mode — warn loudly\n    node.warn('⚠️  Signature validation SKIPPED — set LINE_CHANNEL_SECRET in Init node');\n    node.status({fill:'yellow', shape:'ring', text:'sig: skipped (no secret)'});\n    return [msg, null];\n}\n\ntry {\n    var crypto = global.get('crypto') || require('crypto');\n    var hash   = crypto.createHmac('SHA256', secret).update(rawBody).digest('base64');\n    if (hash === signature) {\n        node.status({fill:'green', shape:'dot', text:'sig: OK'});\n        return [msg, null]; // valid → output 1\n    } else {\n        node.warn('❌ Signature mismatch! Dropping request.');\n        node.status({fill:'red', shape:'dot', text:'sig: INVALID'});\n        msg.statusCode = 401;\n        msg.payload    = {error: 'Invalid signature'};\n        return [null, msg]; // invalid → output 2 (401 response)\n    }\n} catch(e) {\n    node.warn('Crypto error: ' + e.message);\n    return [msg, null]; // fallback: pass through\n}",
+        "outputs": 2,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 450,
+        "y": 730,
+        "wires": [
+            [
+                "8a3b1e5b9125b0f5",
+                "a23b228424fe6503"
+            ],
+            [
+                "97e31b14949b9377"
+            ]
+        ]
+    },
+    {
+        "id": "8a3b1e5b9125b0f5",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "✅ 200 OK Immediately",
+        "func": "// CRITICAL: respond 200 within 1 second\n// Do NOT await any processing here\n// LINE will retry if no 200 within 1s\nmsg.statusCode = 200;\nmsg.payload    = {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 710,
+        "y": 700,
+        "wires": [
+            [
+                "c3b7e9c8f9572f77"
+            ]
+        ]
+    },
+    {
+        "id": "c3b7e9c8f9572f77",
+        "type": "http response",
+        "z": "630032e29663f58a",
+        "name": "HTTP 200 OK",
+        "statusCode": "200",
+        "headers": {},
+        "x": 920,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "97e31b14949b9377",
+        "type": "http response",
+        "z": "630032e29663f58a",
+        "name": "HTTP 401 Unauthorized",
+        "statusCode": "401",
+        "headers": {},
+        "x": 710,
+        "y": 820,
+        "wires": []
+    },
+    {
+        "id": "a23b228424fe6503",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🎛️ Command Parser (ack | snooze | status | reset | help)",
+        "func": "// =============================================\n// INTERACTIVE COMMAND PARSER v3\n// Supported commands:\n//   ack <machineId>            → stop escalation, mark acknowledged\n//   snooze <machineId> <min>   → mute X minutes\n//   status                     → summary of all machines\n//   reset <machineId>          → clear latched state\n//   help                       → list commands\n// =============================================\n\nvar ACCESS_TOKEN = flow.get('LINE_TOKEN');\nvar MAX_SNOOZE_MIN = 480; // 8 hours\n\nvar events = (msg.payload && msg.payload.events) || [];\nif (events.length === 0) return null;\n\nvar event = events[0];\nif (event.type !== 'message' || event.message.type !== 'text') return null;\n\nvar rawText    = (event.message.text || '').trim();\nvar replyToken = event.replyToken;\nvar userId     = (event.source && event.source.userId) || 'unknown';\nvar machines   = flow.get('machines') || {};\nvar now        = Date.now();\nvar replyText  = '';\n\nfunction thaiTime(d) {\n    return (d || new Date()).toLocaleString('th-TH', {\n        timeZone:'Asia/Bangkok', hour12:false,\n        year:'numeric', month:'short', day:'numeric',\n        hour:'2-digit', minute:'2-digit'\n    }) + ' น.';\n}\n\nfunction ensureMachine(mId) {\n    if (!machines[mId]) {\n        machines[mId] = {\n            state:'NORMAL', latched:false, acknowledged:false,\n            snoozeUntil:0, lastEscalation:0, backoffUntil:0,\n            stateChangedAt:now, lastAlertSentAt:0\n        };\n    }\n    return machines[mId];\n}\n\nvar cmd = rawText.toLowerCase();\n\n// ── ACK <machineId> ─────────────────────────────\nvar ackMatch = rawText.match(/^ack\\s+(\\S+)$/i);\nif (ackMatch) {\n    var mId = ackMatch[1].toUpperCase();\n    var m   = ensureMachine(mId);\n    m.acknowledged  = true;\n    m.lastEscalation = now; // suppress further escalation\n    flow.set('machines', machines);\n    replyText = '✅ ACK: ' + mId + '\\n'\n              + '📋 Escalation หยุดแล้ว\\n'\n              + '⚠️ Alert ยังทำงานอยู่ถ้า state เปลี่ยน\\n'\n              + '⏰ ' + thaiTime();\n    node.status({fill:'green', shape:'dot', text:'ACK: ' + mId});\n}\n\n// ── SNOOZE <machineId> <minutes> ────────────────\nvar snoozeMatch = rawText.match(/^snooze\\s+(\\S+)\\s+(\\d+)$/i);\nif (snoozeMatch) {\n    var mId  = snoozeMatch[1].toUpperCase();\n    var mins = parseInt(snoozeMatch[2]);\n    if (mins > MAX_SNOOZE_MIN) mins = MAX_SNOOZE_MIN;\n    var m = ensureMachine(mId);\n    m.snoozeUntil = now + (mins * 60000);\n    flow.set('machines', machines);\n    replyText = '🔇 Snooze: ' + mId + '\\n'\n              + '⏱️ ' + mins + ' นาที\\n'\n              + '📅 เปิดอีกครั้ง: ' + thaiTime(new Date(m.snoozeUntil)) + '\\n'\n              + '💡 พิมพ์ reset ' + mId + ' เพื่อยกเลิก snooze ก่อนเวลา';\n    node.status({fill:'grey', shape:'ring', text:'SNOOZE ' + mins + 'm: ' + mId});\n}\n\n// ── STATUS ──────────────────────────────────────\nif (cmd === 'status' || cmd === 'สถานะ') {\n    var critical = [], warning = [], snoozed = [], acked = [];\n    Object.keys(machines).forEach(function(mId) {\n        var m = machines[mId];\n        if (m.state === 'CRITICAL') critical.push(mId);\n        if (m.state === 'WARNING')  warning.push(mId);\n        if (now < m.snoozeUntil)   snoozed.push(mId + '(' + Math.ceil((m.snoozeUntil-now)/60000) + 'm)');\n        if (m.acknowledged)         acked.push(mId);\n    });\n    replyText = '📊 สถานะระบบ\\n'\n              + '────────────────\\n'\n              + '🔴 CRITICAL: ' + (critical.length || '0') + (critical.length ? ' — ' + critical.join(', ') : '') + '\\n'\n              + '🟡 WARNING:  ' + (warning.length  || '0') + (warning.length  ? ' — ' + warning.join(', ')  : '') + '\\n'\n              + '🔇 Snoozed: '  + (snoozed.length  || '0') + (snoozed.length  ? '\\n   ' + snoozed.join('\\n   ') : '') + '\\n'\n              + '✅ Acked:   '  + (acked.length     || '0') + (acked.length    ? ' — ' + acked.join(', ')    : '') + '\\n'\n              + '────────────────\\n'\n              + '⏰ ' + thaiTime();\n    node.status({fill:'blue', shape:'dot', text:'STATUS replied'});\n}\n\n// ── RESET <machineId> ───────────────────────────\nvar resetMatch = rawText.match(/^reset\\s+(\\S+)$/i);\nif (resetMatch) {\n    var mId = resetMatch[1].toUpperCase();\n    machines[mId] = {\n        state:'NORMAL', latched:false, acknowledged:false,\n        snoozeUntil:0, lastEscalation:0, backoffUntil:0,\n        stateChangedAt:now, lastAlertSentAt:0\n    };\n    flow.set('machines', machines);\n    replyText = '🔄 RESET: ' + mId + '\\n'\n              + '✅ State ถูกล้างแล้ว\\n'\n              + '🔔 ระบบพร้อมแจ้งเตือนใหม่\\n'\n              + '⏰ ' + thaiTime();\n    node.status({fill:'yellow', shape:'dot', text:'RESET: ' + mId});\n}\n\n// ── HELP ────────────────────────────────────────\nif (cmd === 'help' || cmd === 'ช่วยเหลือ') {\n    replyText = '📖 คำสั่งที่รองรับ\\n'\n              + '────────────────\\n'\n              + '✅ ack PUMP01\\n'\n              + '   → หยุด escalation\\n\\n'\n              + '🔇 snooze PUMP01 30\\n'\n              + '   → ปิดแจ้งเตือน 30 นาที\\n\\n'\n              + '📊 status\\n'\n              + '   → ดูสถานะทุกเครื่อง\\n\\n'\n              + '🔄 reset PUMP01\\n'\n              + '   → ล้าง state ให้ส่งใหม่\\n\\n'\n              + '⏰ ' + thaiTime();\n    node.status({fill:'blue', shape:'dot', text:'HELP replied'});\n}\n\nif (!replyText || !replyToken) return null;\n\nmsg.headers = {\n    'Content-Type':  'application/json',\n    'Authorization': 'Bearer ' + ACCESS_TOKEN\n};\nmsg.payload = {\n    replyToken: replyToken,\n    messages: [{type:'text', text:replyText}]\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 910,
+        "y": 740,
+        "wires": [
+            [
+                "68f05d08ca6e2bd8"
+            ]
+        ]
+    },
+    {
+        "id": "68f05d08ca6e2bd8",
+        "type": "http request",
+        "z": "630032e29663f58a",
+        "name": "LINE Reply API",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://api.line.me/v2/bot/message/reply",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 1040,
+        "y": 800,
+        "wires": [
+            [
+                "dd6779820ff5923e"
+            ]
+        ]
+    },
+    {
+        "id": "dd6779820ff5923e",
+        "type": "debug",
+        "z": "630032e29663f58a",
+        "name": "Reply Response",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "statusCode",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1300,
+        "y": 720,
+        "wires": []
+    },
+    {
+        "id": "4e56875b7c33a3a8",
+        "type": "debug",
+        "z": "630032e29663f58a",
+        "name": "Webhook Raw (dev)",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 450,
+        "y": 790,
+        "wires": []
+    },
+    {
+        "id": "9bde351df4d281f5",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "🧪  SECTION 5 — TEST INJECTORS",
+        "info": "",
+        "x": 240,
+        "y": 860,
+        "wires": []
+    },
+    {
+        "id": "7ec3e726495f761b",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🔴 Test CRITICAL (PUMP01)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"plant\":\"PLANT01\",\"machine_id\":\"PUMP01\",\"sensor_id\":\"VB01\",\"rms\":13.07,\"vx\":13.07,\"vy\":8.20,\"vz\":5.50,\"peak\":18.47,\"temp\":28.5,\"rpm\":1450,\"alarm_code\":2,\"alarm_level\":\"CRITICAL\",\"health_score\":0,\"crest_factor\":1.41,\"timestamp\":\"2026-02-28T17:14:51Z\",\"time_synced\":true,\"sync_age_s\":10}",
+                "vt": "json"
+            },
+            {
+                "p": "topic",
+                "v": "factory/PLANT01/machine/PUMP01/vibration",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 180,
+        "y": 900,
+        "wires": [
+            [
+                "885a21b2d935bf2d"
+            ]
+        ]
+    },
+    {
+        "id": "05f64b8eeea910fa",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "✅ Test NORMAL / Recovery (PUMP01)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"plant\":\"PLANT01\",\"machine_id\":\"PUMP01\",\"sensor_id\":\"VB01\",\"rms\":0.50,\"vx\":0.50,\"vy\":0.43,\"vz\":0.21,\"peak\":0.71,\"temp\":26.6,\"rpm\":1450,\"alarm_code\":0,\"alarm_level\":\"NORMAL\",\"health_score\":100,\"crest_factor\":1.41,\"timestamp\":\"2026-02-28T17:14:51Z\",\"time_synced\":true,\"sync_age_s\":1956}",
+                "vt": "json"
+            },
+            {
+                "p": "topic",
+                "v": "factory/PLANT01/machine/PUMP01/vibration",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 200,
+        "y": 940,
+        "wires": [
+            [
+                "885a21b2d935bf2d"
+            ]
+        ]
+    },
+    {
+        "id": "1182c1873dae7864",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🔴 Test CRITICAL (MOTOR02)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"plant\":\"PLANT01\",\"machine_id\":\"MOTOR02\",\"sensor_id\":\"VB01\",\"rms\":15.30,\"vx\":15.30,\"vy\":9.10,\"vz\":6.20,\"peak\":21.63,\"temp\":31.2,\"rpm\":1450,\"alarm_code\":2,\"alarm_level\":\"CRITICAL\",\"health_score\":0,\"crest_factor\":1.41,\"timestamp\":\"2026-02-28T17:14:51Z\",\"time_synced\":true,\"sync_age_s\":10}",
+                "vt": "json"
+            },
+            {
+                "p": "topic",
+                "v": "factory/PLANT01/machine/MOTOR02/vibration",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 180,
+        "y": 980,
+        "wires": [
+            [
+                "885a21b2d935bf2d"
+            ]
+        ]
+    },
+    {
+        "id": "e732f5348cbee3a7",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🧪 CMD: ack PUMP01",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"events\":[{\"type\":\"message\",\"replyToken\":\"test_token_ack\",\"source\":{\"userId\":\"Utest\"},\"message\":{\"type\":\"text\",\"text\":\"ack PUMP01\"}}]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 180,
+        "y": 1020,
+        "wires": [
+            [
+                "a23b228424fe6503"
+            ]
+        ]
+    },
+    {
+        "id": "4aeccced84357c55",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🧪 CMD: snooze PUMP01 30",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"events\":[{\"type\":\"message\",\"replyToken\":\"test_token_snooze\",\"source\":{\"userId\":\"Utest\"},\"message\":{\"type\":\"text\",\"text\":\"snooze PUMP01 30\"}}]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 190,
+        "y": 1060,
+        "wires": [
+            [
+                "a23b228424fe6503"
+            ]
+        ]
+    },
+    {
+        "id": "41de6be9039f5d4a",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🧪 CMD: status",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"events\":[{\"type\":\"message\",\"replyToken\":\"test_token_status\",\"source\":{\"userId\":\"Utest\"},\"message\":{\"type\":\"text\",\"text\":\"status\"}}]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 160,
+        "y": 1100,
+        "wires": [
+            [
+                "a23b228424fe6503"
+            ]
+        ]
+    },
+    {
+        "id": "f7dd89f890bc50e1",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🧪 CMD: reset PUMP01",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"events\":[{\"type\":\"message\",\"replyToken\":\"test_token_reset\",\"source\":{\"userId\":\"Utest\"},\"message\":{\"type\":\"text\",\"text\":\"reset PUMP01\"}}]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 170,
+        "y": 1140,
+        "wires": [
+            [
+                "a23b228424fe6503"
+            ]
+        ]
+    },
+    {
+        "id": "d10dfcd936846b4a",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🧪 CMD: help",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"events\":[{\"type\":\"message\",\"replyToken\":\"test_token_help\",\"source\":{\"userId\":\"Utest\"},\"message\":{\"type\":\"text\",\"text\":\"help\"}}]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "x": 160,
+        "y": 1180,
+        "wires": [
+            [
+                "a23b228424fe6503"
+            ]
+        ]
+    },
+    {
+        "id": "dd98aceafcba815d",
+        "type": "inject",
+        "z": "630032e29663f58a",
+        "name": "🔄 Reset ALL State (Debug)",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 180,
+        "y": 1220,
+        "wires": [
+            [
+                "08a0e344c4cf6827"
+            ]
+        ]
+    },
+    {
+        "id": "08a0e344c4cf6827",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🔄 Reset All Flow State",
+        "func": "flow.set('machines', {});\nnode.status({fill:'yellow', shape:'dot', text:'All state cleared'});\nnode.warn('⚠️ All machine state cleared');\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 1220,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "be32496dab102343",
+        "type": "comment",
+        "z": "630032e29663f58a",
+        "name": "💾  SECTION 6 — INFLUXDB STORAGE (v2 — Token via config node)",
+        "info": "",
+        "x": 1570,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "cc6ae17d3288db72",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "📊 Prepare InfluxDB (Edge-Only)",
+        "func": "// ════════════════════════════════════════════════════════════════════\n//  📊 Prepare InfluxDB (Edge-Only) v7\n//  Updated for ESP32 firmware v15.2\n//  Changes from v6:\n//    - Fix: peak_x → vel_peak_x (v15.0 field name)\n//    - Fix: dominant_axis ← p.kurtosis_axis (v15.1 field name)\n//    - Add: vel_peak_y, vel_peak_z\n//    - Add: cf_x, cf_y, cf_z (per-axis Crest Factor)\n//    - Add: kurtosis_x, kurtosis_y, kurtosis_z (per-axis)\n//    - Add: bearing_alert string field + bearing_alert_code enum\n//    - Add: freq_drift_x/y/z, freq_alert, freq_gate_open\n//  node-red-contrib-influxdb → msg.payload = [fields, tags]\n// ════════════════════════════════════════════════════════════════════\n \nconst p = msg.payload;\n \n// ── 1. VALIDATE ────────────────────────────────────────────────────\nif (!p || typeof p !== 'object') {\n    node.status({ fill: 'red', shape: 'ring', text: 'Invalid payload' });\n    return null;\n}\n \n// ── 2. TAGS — ONLY stable identity fields ─────────────────────────\n// Do NOT put dynamic state values here.\n// Dynamic tags cause InfluxDB series explosion/cardinality issues.\nconst tags = {\n    plant:      String(p.plant      ?? 'UNKNOWN'),\n    machine_id: String(p.machine_id ?? 'UNKNOWN'),\n    sensor_id:  String(p.sensor_id  ?? 'UNKNOWN'),\n};\n \n// ── 3. FIELDS — all measurements & dynamic states ─────────────────\nconst fields = {};\n \nconst numericFields = [\n \n    // ── Core vibration (RMS estimated) ───────────────────────────\n    ['rms',  p.rms],\n    ['vx',   p.vx],\n    ['vy',   p.vy],\n    ['vz',   p.vz],\n \n    // ── True peak velocity (v15.0) ────────────────────────────────\n    // Raw register value / 100 before ÷√2 conversion\n    ['peak',        p.peak],          // peak hold (window max)\n    ['vel_peak_x',  p.vel_peak_x],    // per-axis true peak X\n    ['vel_peak_y',  p.vel_peak_y],    // per-axis true peak Y\n    ['vel_peak_z',  p.vel_peak_z],    // per-axis true peak Z\n \n    // ── Crest Factor — per axis + max (v15.1) ────────────────────\n    ['crest_factor', p.crest_factor], // = cf_max (dominant)\n    ['cf_x',         p.cf_x],\n    ['cf_y',         p.cf_y],\n    ['cf_z',         p.cf_z],\n \n    // ── Kurtosis — per axis + max (v15.1) ────────────────────────\n    // Gaussian baseline = 3.0 | early warning > 4.0 | confirmed > 6.0\n    ['kurtosis_max', p.kurtosis_max], // max(KX, KY, KZ)\n    ['kurtosis_x',   p.kurtosis_x],\n    ['kurtosis_y',   p.kurtosis_y],\n    ['kurtosis_z',   p.kurtosis_z],\n \n    // ── Health & alarms ───────────────────────────────────────────\n    ['health_score', p.health_score],\n    ['alarm_code',   p.alarm_code],\n \n    // ── Environment ───────────────────────────────────────────────\n    ['temp', p.temp],\n \n    // ── Frequency analysis ────────────────────────────────────────\n    ['freq_x',       p.freq_x],\n    ['freq_y',       p.freq_y],\n    ['freq_z',       p.freq_z],\n    ['freq_ratio_x', p.freq_ratio_x],\n    ['freq_ratio_y', p.freq_ratio_y],\n    ['freq_ratio_z', p.freq_ratio_z],\n \n    // ── Frequency drift (v15.2) ───────────────────────────────────\n    // Suppressed to 0 when rpm < RPM_FREQ_GATE (400 rpm)\n    ['freq_drift_x', p.freq_drift_x],\n    ['freq_drift_y', p.freq_drift_y],\n    ['freq_drift_z', p.freq_drift_z],\n \n    // ── Machine utilization ───────────────────────────────────────\n    ['rpm',                    p.rpm],\n    ['state',                  p.state],\n    ['operating_hours_total',  p.operating_hours_total],\n    ['rotation_signal_ok',     p.rotation_signal_ok],\n \n    // ── Sensor / pipeline health ──────────────────────────────────\n    ['sync_age_s',       p.sync_age_s],\n    ['data_latency_ms',  p.data_latency_ms],\n \n    // ── Maintenance analytics ─────────────────────────────────────\n    ['maintenance_risk_score', p.maintenance_risk_score],\n    ['fault_confidence',       p.fault_confidence],\n];\n \n// ── Numeric field validation ──────────────────────────────────────\nnumericFields.forEach(([key, val]) => {\n    const n = Number(val);\n    if (val !== undefined && val !== null && !isNaN(n)) {\n        fields[key] = n;\n    }\n});\n \n// ── 4. STRING STATE FIELDS (dynamic values) ───────────────────────\n// IMPORTANT: Must be fields, NOT tags.\nfields.alarm_level    = String(p.alarm_level    ?? 'NORMAL');\nfields.sensor_status  = String(p.sensor_status  ?? 'UNKNOWN');\nfields.fault_type     = String(p.fault_type     ?? 'UNKNOWN');\n \n// v15.1: dominant axis comes from kurtosis_axis field\n// (v6 read p.dominant_axis which doesn't exist in v15.x payloads)\nfields.dominant_axis  = String(p.dominant_vibration_axis  ?? p.dominant_axis ?? 'UNKNOWN');\n \n// v15.2: bearing alert classification\n// Values: \"NORMAL\" | \"EARLY_WARNING\" | \"CONFIRMED\" | \"INVALID_STATE\"\nfields.bearing_alert  = String(p.bearing_alert  ?? 'UNKNOWN');\n \n// ── 5. BOOLEAN → INTEGER ──────────────────────────────────────────\nif (p.time_synced !== undefined) {\n    fields.time_synced = p.time_synced ? 1 : 0;\n}\n \n// v15.2: freq gate and alert (boolean → integer)\nif (p.freq_gate_open !== undefined) {\n    fields.freq_gate_open = p.freq_gate_open ? 1 : 0;\n}\nif (p.freq_alert !== undefined) {\n    fields.freq_alert = p.freq_alert ? 1 : 0;\n}\n \n// ── 6. ENUM → INTEGER CODES ───────────────────────────────────────\n// Faster Grafana/Influx queries than string filtering.\n \n// fault_type\nconst faultTypeMap = {\n    UNKNOWN:      0,\n    UNBALANCE:    1,\n    MISALIGNMENT: 2,\n    RESONANCE:    3,\n    BEARING:      4,\n    LOOSENESS:    5,\n    CAVITATION:   6,\n    IMBALANCE:    1,   // alias\n};\nfields.fault_type_code = faultTypeMap[p.fault_type] ?? 0;\n \n// sensor_status\nconst sensorStatusMap = { ONLINE: 1, OFFLINE: 0, ERROR: 2 };\nfields.sensor_status_code = sensorStatusMap[p.sensor_status] ?? -1;\n \n// dominant_axis (kurtosis_axis in v15.1+)\nconst axisMap = { X: 1, Y: 2, Z: 3 };\nconst axisSource = p.dominant_vibration_axis ?? p.dominant_axis ?? 'UNKNOWN';\nfields.dominant_axis_code = axisMap[axisSource] ?? 0;\nconst kurtosisAxisSource =\n    p.kurtosis_axis ??\n    'UNKNOWN';\n\nfields.kurtosis_axis_code =\n    axisMap[kurtosisAxisSource] ?? 0;\n \n// bearing_alert (v15.2)\nconst bearingAlertMap = {\n    NORMAL:        0,\n    EARLY_WARNING: 1,\n    CONFIRMED:     2,\n    INVALID_STATE: -1,\n};\nfields.bearing_alert_code = bearingAlertMap[p.bearing_alert] ?? 0;\n \n// predictive_status (legacy field, keep for backward compat)\nconst predictiveStatusMap = { GOOD: 0, WARNING: 1, HIGH_RISK: 2 };\nif (p.predictive_status !== undefined) {\n    fields.predictive_status_code = predictiveStatusMap[p.predictive_status] ?? 0;\n}\n \n// ── 7. VALIDATE REQUIRED FIELDS ───────────────────────────────────\nif (Object.keys(fields).length === 0 || fields.rms === undefined) {\n    node.status({ fill: 'red', shape: 'ring', text: 'NO VALID FIELDS' });\n    return null;\n}\n \n// ── 8. MEASUREMENT ────────────────────────────────────────────────\nmsg.measurement = 'vibration';\n \n// ── 9. TIMESTAMP ──────────────────────────────────────────────────\n// Use ESP32 RTC timestamp if synchronized. Fallback to Node-RED time.\nif (p.timestamp && p.time_synced === true) {\n    const ts = new Date(p.timestamp);\n    msg.timestamp = (ts.getFullYear() > 2020) ? ts : new Date();\n} else {\n    msg.timestamp = new Date();\n}\n \n// ── 10. PAYLOAD ───────────────────────────────────────────────────\nmsg.payload = [fields, tags];\n \n// ── 11. STATUS BADGE ──────────────────────────────────────────────\nconst alarmCode   = fields.alarm_code   ?? 0;\nconst riskScore   = fields.maintenance_risk_score ?? 0;\nconst bearingCode = fields.bearing_alert_code ?? 0;\n \nconst color =\n    alarmCode === 2   ? 'red'    :\n    alarmCode === 1   ? 'yellow' :\n    bearingCode === 2 ? 'red'    :   // CONFIRMED bearing fault\n    bearingCode === 1 ? 'orange' :   // EARLY_WARNING\n    riskScore >= 75   ? 'orange' : 'green';\n \nnode.status({\n    fill: color,\n    shape: 'dot',\n    text:\n        `⚡${tags.machine_id}` +\n        ` RMS:${(fields.rms ?? 0).toFixed(2)}` +\n        ` K:${(fields.kurtosis_max ?? 0).toFixed(2)}(${fields.kurtosis_axis})` +\n        ` BRG:${fields.bearing_alert}` +\n        ` [${fields.fault_type}]`\n});\n \nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1280,
+        "y": 360,
+        "wires": [
+            [
+                "a8784a0620bcf522",
+                "ea9d16adf0d904d3"
+            ]
+        ]
+    },
+    {
+        "id": "b1a2c3d4e5f60001",
+        "type": "function",
+        "z": "630032e29663f58a",
+        "name": "🔬 Maintenance Analytics v2 (Multi-Feature)",
+        "func": "// ════════════════════════════════════════════════════════════════════\n//  🔬 Maintenance Analytics v2 — Multi-Feature Fault Classification\n//  Replaces single freq_ratio_x rule with evidence-scoring engine\n//\n//  Inputs expected from ESP32 (all numeric):\n//    rms, vx, vy, vz, peak, crest_factor, kurtosis,\n//    freq_ratio_x, dominant_freq, health_score\n//\n//  Outputs added to payload:\n//    fault_type, fault_confidence, fault_scores,\n//    dominant_axis, maintenance_risk_score, predictive_status\n// ════════════════════════════════════════════════════════════════════\n\nconst p = msg.payload;\nconst num = (v) => { const n = Number(v); return isNaN(n) ? null : n; };\n\n// ── 1. PARSE INPUTS ─────────────────────────────────────────────────\nconst rms      = num(p.rms)           ?? 0;\nconst vx       = num(p.vx)            ?? 0;\nconst vy       = num(p.vy)            ?? 0;\nconst vz       = num(p.vz)            ?? 0;\nconst peak     = num(p.peak)          ?? 0;\nconst cf       = num(p.crest_factor)  ?? 0;\nconst kurt     = num(p.kurtosis)      ?? 3.0;   // 3.0 = Gaussian healthy baseline\nconst ratioX   = num(p.freq_ratio_x)  ?? 0;\nconst domFreq  = num(p.dominant_freq) ?? 0;\nconst hs       = num(p.health_score)  ?? 100;\n\n// ── 2. DOMINANT AXIS ─────────────────────────────────────────────────\n// Which radial axis carries the highest vibration energy?\nlet dominant_axis;\nif      (vx >= vy && vx >= vz) dominant_axis = \"X\";\nelse if (vy >= vx && vy >= vz) dominant_axis = \"Y\";\nelse                           dominant_axis = \"Z\";\n\n// ── 3. DERIVED HELPER RATIOS ─────────────────────────────────────────\n// Peak / RMS ratio (independent of the sensor's own crest_factor field;\n// used as corroborating impulsiveness evidence)\nconst peakRmsRatio = (rms > 0) ? (peak / rms) : 0;\n\n// Axial-to-radial ratio (misalignment excites axial mode strongly)\nconst maxRadial  = Math.max(vx, vy);\nconst axialRatio = (maxRadial > 0) ? (vz / maxRadial) : 0;\n\n// Non-integer frequency ratio fraction\n// e.g. ratioX=1.0 → frac=0.0 (clean 1× RPM = imbalance)\n// e.g. ratioX=2.35 → frac=0.35 (non-harmonic = bearing defect freq)\nconst freqFrac = ratioX % 1;\n\n// ════════════════════════════════════════════════════════════════════\n// 4. EVIDENCE SCORING ENGINE\n//\n// Each fault type accumulates evidence points (0–12 typical range).\n// Multiple indicators vote independently.  Highest scorer wins,\n// subject to a minimum threshold and explicit safety overrides.\n//\n// Why scoring instead of rigid IF/ELSE?\n//   Real machinery rarely shows a textbook-perfect single signature.\n//   Combining weak evidence from several sensors reduces false alarms\n//   far better than any single threshold can.\n// ════════════════════════════════════════════════════════════════════\n\nconst scores = { BEARING: 0, RESONANCE: 0, MISALIGNMENT: 0, IMBALANCE: 0 };\n\n// ─── BEARING FAULT evidence ─────────────────────────────────────────\n// ISO 10816 / ISO 13373: Early bearing defects produce high-energy\n// impulses at defect frequencies (BPFO, BPFI, BSF, FTF).\n// These impulses raise kurtosis and crest_factor well before RMS rises.\n//\n//  kurtosis:    healthy ≈ 3.0  |  incipient fault > 4  |  severe > 6\n//  crest_factor: healthy 1.4–3 |  fault > 4            |  severe > 6\n//  peak/rms:    impulsive if ratio >> nominal crest_factor\n\nif      (kurt > 8)   scores.BEARING += 4;   // Severe bearing damage\nelse if (kurt > 6)   scores.BEARING += 3;   // Significant defect\nelse if (kurt > 4)   scores.BEARING += 2;   // Incipient bearing fault\nelse if (kurt > 3.5) scores.BEARING += 1;\n\nif      (cf > 7)     scores.BEARING += 3;\nelse if (cf > 5)     scores.BEARING += 2;\nelse if (cf > 3.5)   scores.BEARING += 1;\n\nif      (peakRmsRatio > 7) scores.BEARING += 2;\nelse if (peakRmsRatio > 5) scores.BEARING += 1;\n\n// Non-integer dominant frequency ≠ clean harmonic → bearing defect freq\nif (ratioX > 0 && freqFrac > 0.25 && freqFrac < 0.75) scores.BEARING += 1;\n\n// Bearing early stage: impulsive but RMS still low\n// (kurtosis high, rms moderate → weight bearing even more)\nif (kurt > 4 && rms < 4.5) scores.BEARING += 1;\n\n// ─── RESONANCE evidence ─────────────────────────────────────────────\n// Resonance occurs when excitation frequency locks onto a structural\n// natural frequency. Signature: very high freq_ratio, elevated RMS at\n// ONE dominant frequency, low kurtosis (smooth, not impulsive).\n\nif      (ratioX > 10) scores.RESONANCE += 4;\nelse if (ratioX > 7)  scores.RESONANCE += 3;\nelse if (ratioX > 5)  scores.RESONANCE += 2;\nelse if (ratioX > 4)  scores.RESONANCE += 1;\n\nif      (rms > 11.0)  scores.RESONANCE += 2;\nelse if (rms > 7.1)   scores.RESONANCE += 1;\n\n// Resonance is NOT impulsive — penalise if kurtosis/CF is high\n// (high impulsiveness → bearing, not resonance)\nif (kurt > 5)  scores.RESONANCE -= 2;\nif (cf > 5)    scores.RESONANCE -= 1;\n\n// ─── MISALIGNMENT evidence ──────────────────────────────────────────\n// Angular / parallel misalignment creates strong 2× and 3× RPM harmonics\n// and raises axial vibration because the coupling deflects in all planes.\n// freq_ratio 1.3–3.5, axial component clearly elevated.\n\nif      (ratioX >= 1.8 && ratioX <= 2.5) scores.MISALIGNMENT += 3; // Classic 2× zone\nelse if (ratioX >= 1.3 && ratioX <= 3.5) scores.MISALIGNMENT += 2;\n\nif      (axialRatio > 0.7) scores.MISALIGNMENT += 3; // Very high axial → severe misalign\nelse if (axialRatio > 0.5) scores.MISALIGNMENT += 2;\nelse if (axialRatio > 0.3) scores.MISALIGNMENT += 1;\n\n// Moderate kurtosis (not clean sine, not highly impulsive)\nif (kurt >= 3.0 && kurt <= 5.0) scores.MISALIGNMENT += 1;\n\n// Penalty if bearing indicators dominate\nif (kurt > 6) scores.MISALIGNMENT -= 2;\nif (cf > 6)   scores.MISALIGNMENT -= 1;\n\n// ─── IMBALANCE evidence ─────────────────────────────────────────────\n// Mass imbalance produces a pure sinusoidal force at exactly 1× RPM.\n// Signature: freq_ratio ≈ 1.0, very low kurtosis (≈3), low CF,\n// radial dominant (imbalance is a centrifugal radial force).\n\nif      (ratioX >= 0.85 && ratioX < 1.15) scores.IMBALANCE += 4; // Tight 1× zone\nelse if (ratioX >= 0.7  && ratioX < 1.4)  scores.IMBALANCE += 2;\n\n// Gaussian vibration (low kurtosis)\nif      (kurt >= 2.5 && kurt <= 3.5) scores.IMBALANCE += 3; // Near-perfect sine\nelse if (kurt > 3.5  && kurt <= 4.5) scores.IMBALANCE += 1;\n\n// Low crest factor = non-impulsive sine wave\nif      (cf >= 1.4 && cf <= 2.5) scores.IMBALANCE += 2;\nelse if (cf > 2.5 && cf <= 3.5)  scores.IMBALANCE += 1;\n\n// Purely radial (X or Y dominant, Z relatively low)\nif ((dominant_axis === 'X' || dominant_axis === 'Y') && axialRatio < 0.3)\n    scores.IMBALANCE += 1;\n\n// Penalty: if freq ratio is away from 1× or impulsive, it is not imbalance\nif (ratioX > 2.5 || ratioX < 0.5) scores.IMBALANCE -= 2;\nif (kurt > 5)                      scores.IMBALANCE -= 2;\n\n// ── 5. CLASSIFY FROM SCORES ─────────────────────────────────────────\n// Minimum evidence threshold: at least 3 points to classify\n// (avoids classifying noise as a fault)\nconst MIN_SCORE  = 3;\nconst FAULT_PRIORITY = ['BEARING', 'RESONANCE', 'MISALIGNMENT', 'IMBALANCE'];\n\nlet fault_type = \"UNKNOWN\";\nlet fault_confidence = 0;\n\n// Clamp negative scores to zero\nObject.keys(scores).forEach(k => { if (scores[k] < 0) scores[k] = 0; });\n\nconst maxScore = Math.max(...Object.values(scores));\n\nif (ratioX <= 0 || maxScore < MIN_SCORE) {\n    fault_type = \"UNKNOWN\";\n} else {\n    // Rank all faults by score\n    const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);\n    const topScore = ranked[0][1];\n    const runnerUp = ranked[1] ? ranked[1][1] : 0;\n\n    if (topScore - runnerUp <= 1) {\n        // Tie (within 1 point) → apply safety priority\n        const tiedFaults = ranked.filter(([, s]) => topScore - s <= 1).map(([k]) => k);\n        fault_type = FAULT_PRIORITY.find(f => tiedFaults.includes(f));\n    } else {\n        fault_type = ranked[0][0];\n    }\n\n    // Confidence: proportion of max possible score\n    fault_confidence = Math.min(100, Math.round((topScore / 12) * 100));\n}\n\n// ── 6. HARD SAFETY OVERRIDES ─────────────────────────────────────────\n// When indicators are extreme, trust the physics over the scoring.\n// These cannot be voted away by other features.\n\nif (kurt > 10 && cf > 7) {\n    fault_type = \"BEARING\";             // Unmistakable impulse pattern\n    fault_confidence = 99;\n}\nif (ratioX > 12 && kurt < 4.5) {\n    fault_type = \"RESONANCE\";           // Extreme high-order excitation\n    fault_confidence = 95;\n}\n\n// ── 7. MAINTENANCE RISK SCORE ────────────────────────────────────────\n// Combines RMS severity AND fault type urgency.\n// Bearing early-stage: low RMS but high kurtosis → still medium risk\nlet maintenance_risk_score;\nconst rmsRisk = rms > 11.0 ? 95 : rms > 7.1 ? 75 : rms > 4.5 ? 50 : 20;\nconst faultBoost = (fault_type === 'BEARING' && kurt > 4 && rms < 4.5) ? 25 : 0;\nmaintenance_risk_score = Math.min(100, rmsRisk + faultBoost);\n\n// ── 8. PREDICTIVE STATUS ─────────────────────────────────────────────\nlet predictive_status;\nif      (hs > 70) predictive_status = \"GOOD\";\nelse if (hs >= 50) predictive_status = \"WARNING\";\nelse              predictive_status = \"HIGH_RISK\";\n\n// ── 9. WRITE RESULTS TO PAYLOAD ──────────────────────────────────────\np.dominant_axis           = dominant_axis;\np.fault_type              = fault_type;\np.fault_confidence        = fault_confidence;\np.fault_scores            = scores;                  // debug: all category scores\np.maintenance_risk_score  = maintenance_risk_score;\np.predictive_status       = predictive_status;\n\n// ── 10. NODE STATUS BADGE ─────────────────────────────────────────────\nconst riskColor = maintenance_risk_score >= 75 ? 'red'\n                : maintenance_risk_score >= 50 ? 'yellow' : 'green';\n\nnode.status({\n    fill:  riskColor,\n    shape: 'dot',\n    text:  `${p.machine_id} | ${fault_type}(${fault_confidence}%) | Axis:${dominant_axis} | Risk:${maintenance_risk_score}% | ${predictive_status}`\n});\n\nreturn msg;\n",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 120,
+        "wires": [
+            [
+                "ef04bfbbd91995e0",
+                "cc6ae17d3288db72",
+                "b1a2c3d4e5f60002"
+            ]
+        ]
+    },
+    {
+        "id": "b1a2c3d4e5f60002",
+        "type": "debug",
+        "z": "630032e29663f58a",
+        "name": "Analytics Payload (dev)",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 980,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "a8784a0620bcf522",
+        "type": "influxdb out",
+        "z": "630032e29663f58a",
+        "influxdb": "ccd3e1d029752198",
+        "name": "✍️ Write InfluxDB",
+        "measurement": "",
+        "precision": "",
+        "retentionPolicy": "",
+        "database": "vibration",
+        "precisionV18FluxV20": "ms",
+        "retentionPolicyV18Flux": "",
+        "org": "promlogix",
+        "bucket": "iot_vibration",
+        "x": 1650,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "ea9d16adf0d904d3",
+        "type": "debug",
+        "z": "630032e29663f58a",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1760,
+        "y": 680,
+        "wires": []
+    },
+    {
+        "id": "271d86a3897f9309",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "mosquitto",
+        "port": "",
+        "tls": "2777591c27c5f00b",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "ccd3e1d029752198",
+        "type": "influxdb",
+        "hostname": "127.0.0.1",
+        "port": 8086,
+        "protocol": "http",
+        "database": "database",
+        "name": "promlogix",
+        "usetls": false,
+        "tls": "",
+        "influxdbVersion": "2.0",
+        "url": "http://influxdb:8086",
+        "timeout": 10,
+        "rejectUnauthorized": false
+    },
+    {
+        "id": "2777591c27c5f00b",
+        "type": "tls-config",
+        "name": "",
+        "cert": "/certs/pump01.crt",
+        "key": "/certs/pump01.key",
+        "ca": "/certs/ca.crt",
+        "certname": "",
+        "keyname": "",
+        "caname": "",
+        "servername": "mosquitto",
+        "verifyservercert": false,
+        "alpnprotocol": ""
+    },
+    {
+        "id": "83912823b432e9b7",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-influxdb": "0.7.0"
+        }
+    }
+]

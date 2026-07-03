@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>矩阵曲面图</title>
+	<meta charset="utf-8">
+    <script src="../js/echarts.min.js"></script>
+    <script src="../js/echarts-gl.min.js"></script>
+</head>
+<body>
+<div id="main" style="width: 100%;height:800px;"></div>
+</body>
+
+<script type="text/javascript">
+    var chartDom = document.getElementById('main');
+    var myChart = echarts.init(chartDom);
+    var option;
+
+    var data = [
+        [0,0,0,0,0,0,0,0],
+        [0,0,6,0,0,2,0,0],
+        [0,0,0,0,0,0,0,0],
+        [0,1,0,0,0,1,0,1],
+        [0,0,0,2,0,8,0,0],
+        [0,2,0,0,0,0,0,1],
+        [0,0,0,4,0,1,0,0],
+        [0,0,0,0,0,0,0,0]
+    ];
+
+    option = {
+        tooltip: {},
+        backgroundColor: '#0B3049',
+        visualMap: {
+            show: true,
+            dimension: 2,
+            min: 0,
+            // 最大距离
+            max: 8,
+            inRange: {
+                color: [
+                    '#313695',
+                    '#4575b4',
+                    '#74add1',
+                    '#abd9e9',
+                    '#e0f3f8',
+                    '#ffffbf',
+                    '#fee090',
+                    '#fdae61',
+                    '#f46d43',
+                    '#d73027',
+                    '#a50026'
+                ]
+            },
+            textStyle: {
+                // 取色器字体颜色
+                color: '#EEEEEE'
+            }
+        },
+        xAxis3D: {
+            type: 'value',
+            nameTextStyle: {
+                // 标题颜色
+                color:'#EEEEEE'
+            },
+            axisLine: {
+                lineStyle: {
+                    // 线段颜色
+                    color:'#EEEEEE'
+                }
+            }
+        },
+        yAxis3D: {
+            type: 'value',
+            nameTextStyle: {
+                // 标题颜色
+                color:'#EEEEEE'
+            },
+            axisLine: {
+                lineStyle: {
+                    // 线段颜色
+                    color:'#EEEEEE'
+                }
+            }
+        },
+        zAxis3D: {
+            type: 'value',
+            nameTextStyle: {
+                // 标题颜色
+                color:'#EEEEEE'
+            },
+            axisLine: {
+                lineStyle: {
+                    // 线段颜色
+                    color:'#EEEEEE'
+                }
+            }
+        },
+        grid3D: {
+            viewControl: {
+            // projection: 'orthographic'
+            }
+        },
+        series: [
+            {
+                type: 'surface',
+                wireframe: {
+                    // show: false
+                },
+                equation: {
+                    x: {
+                    min: 0,
+                    max: 7,
+                    step: 1
+                    },
+                    y: {
+                    min: 0,
+                    max: 7,
+                    step: 1
+                    },
+                    z: function (x, y) {
+                    return data[x][y];
+                    }
+                }
+            }
+        ]
+    };
+
+    option && myChart.setOption(option);
+
+
+    // 接口方法 ----------------------------------------------------------------------
+
+    // 页面加载时
+    window.onload = function () {
+        // 更改主题
+
+    }
+
+    // 更改矩阵的数据
+    function setMatrixData(data) {
+        this.data = data;
+        this.reloadChart();
+    }
+
+    // 更改X轴最大高度
+    function setXHeightMax(data) {
+        option.series[0].equation.x.max = data - 1;
+        this.reloadChart();
+    }
+
+    // 更改Y轴最大高度
+    function setYHeightMax(data) {
+        option.series[0].equation.y.max = data - 1;
+        this.reloadChart();
+    }
+
+    // 设置z高度最大值
+    function setZHeightMax(data) {
+        option.visualMap.max = data;
+        this.reloadChart();
+    }
+    
+    // 设置颜色组
+    function setColorGroup(data) {
+        option.visualMap.inRange.color = data;
+        this.reloadChart();
+    }
+
+    // 重新加载图表
+    function reloadChart() {
+        myChart = echarts.init(chartDom);
+        option && myChart.setOption(option);
+    }
+    </script>
+</html>
+

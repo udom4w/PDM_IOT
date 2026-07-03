@@ -1,0 +1,71 @@
+ssh root@iot.promlogix.com
+ssh iotprom@iot.promlogix.com
+ssh iotprom@10.10.0.1
+cd /opt/iot-stack
+
+docker logs -f iot-stack_mosquitto_1
+nano docker-compose.yml
+Measurement : vibration
+Bucket : factory
+Bucket: iot_vibration   → Measurement: vibration
+Bucket: iot_energy      → Measurement: power
+Bucket: iot_environment → Measurement: temperature
+influx admin's Token
+tnR5Al1MmTy_byHFnQpDpKE2yaLS10G6DLpXsLMr6zO5-2hy_LPr44AVQ-s3NXfL7Wzosr3jjKm4WFdrhBH_Kw==
+iot-writer-token
+TKmAxAslKDTy-d5crv8twjcpATjfy7Jh0L2IBAQCWnMt63yAnSBwayWzK1CFDuj2mfVTqsn8usA_tW9yuz9KuQ==
+iot-read-token
+gnNZO8TJc9GDf1a_mPpq95pYlF8sD4TaN9J8hOzETBvEVVr1tzSDl5v5T564wFeeVKOCRLPD_yyZQZ2wJWlKvg==
+
+cd /opt/iot-stack/mosquitto/certs
+
+mosquitto_sub -h localhost -p 8883 \
+--cafile ca.crt \
+--cert pump01.crt \
+--key pump01.key \
+--insecure \
+-t "#" -v -d
+
+https://dash.promlogix.com/nr
+https://influx.promlogix.com
+https://dash.promlogix.com
+
+
+nano nginx.conf
+
+https://influx.promlogix.com
+https://dash.promlogix.com/nr/
+
+
+
+ssh -L 8086:localhost:8086 root@134.209.111.165
+http://localhost:8086
+https://dash.promlogix.com
+https://dash.promlogix.com/nodered/
+
+ESP32 (4G + mTLS)
+   ↓
+Mosquitto (8883 TLS + client cert)
+   ↓
+Node-RED (subscribe)
+   ↓
+Analytics + Alert Engine
+   ↓
+InfluxDB
+   ↓
+Grafana
+
+
+
+🎯 ถ้าจะให้ “Production Grade IoT”
+
+คุณต้องมี 4 layer นี้:
+
+Edge Security
+MQTT mTLS ✔
+Network Security
+firewall + private ports
+Access Control
+Grafana / Node-RED auth
+Application Security
+rate limit + header + token rotation

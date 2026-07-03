@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+	<script type="text/javascript" src="http://api.map.baidu.com/api?v=2.0&ak=tyOIrkldr9NfEzQ8mBUdVi5x3yMadKnK"></script>
+    <!--加载鼠标绘制工具-->   
+    <script type="text/javascript" src="http://api.map.baidu.com/library/DrawingManager/1.4/src/DrawingManager_min.js"></script>   
+    <link rel="stylesheet" href="http://api.map.baidu.com/library/DrawingManager/1.4/src/DrawingManager_min.css" />   
+    <!--加载检索信息窗口-->   
+    <script type="text/javascript" src="http://api.map.baidu.com/library/SearchInfoWindow/1.4/src/SearchInfoWindow_min.js"></script>   
+    <link rel="stylesheet" href="http://api.map.baidu.com/library/SearchInfoWindow/1.4/src/SearchInfoWindow_min.css" />   
+    <title>鼠标绘制工具(GL)</title>
+    <style type="text/css">
+        body, html, #container {width: 100%; height: 100%; overflow: hidden; margin: 0; font-family: "微软雅黑";}
+        ul li {list-style: none;}
+        .info {
+            z-index: 999;
+            width: auto;
+            min-width: 22rem;
+            padding: .75rem 1.25rem;
+            margin-left: 1.25rem;
+            position: fixed;
+            top: 1rem;
+            background-color: #fff;
+            border-radius: .25rem;
+            font-size: 14px;
+            color: #666;
+            box-shadow: 0 2px 6px 0 rgba(27, 142, 236, 0.5);
+        }
+        .drawing-panel {
+            z-index: 999;
+            position: fixed;
+            bottom: 3.5rem;
+            margin-left: 2.5rem;
+            padding-left: 0;
+            border-radius: .25rem;
+            height: 47px;
+            box-shadow: 0 2px 6px 0 rgba(27, 142, 236, 0.5);
+        }
+        .bmap-btn {
+            border-right: 1px solid #d2d2d2;
+            float: left;
+            width: 64px;
+            height: 100%;
+            background-image: url(//api.map.baidu.com/library/DrawingManager/1.4/src/bg_drawing_tool.png);
+            cursor: pointer;
+        }
+        .drawing-panel .bmap-marker {
+            background-position: -65px 0;
+        }
+        .drawing-panel .bmap-polyline {
+            background-position: -195px 0;
+        }
+        .drawing-panel .bmap-rectangle {
+            background-position: -325px 0;
+        }
+        .drawing-panel .bmap-polygon {
+            background-position: -260px 0;
+        }
+        .drawing-panel .bmap-circle {
+            background-position: -130px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id = "container"></div>
+</body>
+</html>
+<script type="text/javascript">
+    function $(id){   
+    return document.getElementById(id);   
+}
+	function myFun(result){
+		    var cityName = result.name;
+		    map.setCenter(cityName);
+		    map.centerAndZoom(cityName,12);  
+		}   
+    // 百度地图API功能   
+  
+	var IsDraw=false;
+
+	var overlayIndex=-1;
+    var map = new BMap.Map('container');  
+    var poi = new BMap.Point(113.948913,22.530844);   
+    var markerPlace;
+    map.centerAndZoom(poi, 16);   
+    map.enableScrollWheelZoom();   
+	
+	var myCity = new BMap.LocalCity();
+	myCity.get(myFun);
+
+
+	//轨迹列表
+	var trackOverlays = [];
+	//名称
+	var trackName='';
+	//标题列表
+	var labels = [];
+	
+	var GpsHeight='';
+	
+	var areaType='';
+	
+	
+	
+    var overlaycomplete = function(e){   
+
+		if (areaType=='0'){
+			// 弹出一个输入框，提示用户输入他们的名字
+			var sVal = window.prompt('请输入当前高度:', '');
+			 
+			// 检查用户是否点击了取消或输入了名字
+			if (sVal != null) {
+				// 用户输入了名字，显示一个包含名字的消息
+				GpsHeight=sVal
+			} else {
+				// 用户点击了取消，显示一条消息
+				GpsHeight='0';
+			}
+		}
+		trackOverlays.push({sname:trackName,mType:areaType,height:GpsHeight,track:e.overlay});
+		sendmessage('dbclick',getOverlayPoint(e.overlay));
+		//showText(trackName,e.overlay.getPath()[0]);
+        console.log('结束');  
+		enableoverlay(-1)
+		areaType='';
+
+
+    };   
+    var styleOptionsRed = {   
+        strokeColor:"red",    //边线颜色。   
+        fillColor:"red",      //填充颜色。当参数为空时，圆形将没有填充效果。   
+        strokeWeight: 3,       //边线的宽度，以像素为单位。   
+        strokeOpacity: 0.8,    //边线透明度，取值范围0 - 1。   
+        fillOpacity: 0.6,      //填充的透明度，取值范围0 - 1。   
+        strokeStyle: 'solid' //边线的样式，solid或dashed。   
+    }   
+    var styleOptionsGreen = {   
+        strokeColor:"green",    //边线颜色。   
+        fillColor:"green",      //填充颜色。当参数为空时，圆形将没有填充效果。   
+        strokeWeight: 3,       //边线的宽度，以像素为单位。   
+        strokeOpacity: 0.8,    //边线透明度，取值范围0 - 1。   
+        fillOpacity: 0.6,      //填充的透明度，取值范围0 - 1。   
+        strokeStyle: 'solid' //边线的样式，solid或dashed。   
+    }  
+         
+    //实例化鼠标绘制工具   
+    var drawingManager = null;     
+         
+         
+         
+    map.addEventListener("rightclick",function(e){   
+               console.log('点击位置经纬度：' + e.point.lng + ',' + e.point.lat);
+			   sendmessage('rightclick',e.point.lng + "," + e.point.lat);
+	return;
+        if(confirm(e.point.lng + "," + e.point.lat)){   
+            $("shape").innerHTML=$("shape").innerHTML+" <br/>("+e.point.lng+","+e.point.lat+")";   
+            }   
+        });   
+
+    map.addEventListener("mouseup",function(e){   
+           console.log('释放');  
+			sendmessage('mouseup',e.point.lng + "," + e.point.lat);
+        });   
+
+	map.addEventListener('click', function (e) {
+		 sendmessage('click',e.point.lng + "," + e.point.lat);
+	});
+	sendmessage("LoadCompleted","");
+	
+	
+	function setDrawingManager(styleOptions){
+		drawingManager = new BMapLib.DrawingManager(map, {   
+				isOpen: false, //是否开启绘制模式   
+				//enableDrawingTool: true, //是否显示工具栏   
+				drawingToolOptions: {   
+					anchor: BMAP_ANCHOR_TOP_RIGHT, //位置   
+					offset: new BMap.Size(5, 5), //偏离值   
+				},   
+				circleOptions: styleOptions, //圆的样式   
+				polylineOptions: styleOptions, //线的样式   
+				polygonOptions: styleOptions, //多边形的样式   
+				rectangleOptions: styleOptions //矩形的样式   
+			});  
+		 //添加鼠标绘制工具监听事件，用于获取绘制结果   
+		drawingManager.addEventListener('overlaycomplete', overlaycomplete);   
+	}
+
+	//发送消息
+	function sendmessage(type, data)
+	{
+		return;
+		var obj = {type:type,data: data};
+		var strJs = JSON.stringify(obj);
+		window.cReceiveDataEvent.receiveMsg(strJs);
+	}
+
+	// 画线
+	function DrawTrackLine(gpsJson){
+		var trackPoints = [];
+		var gpsData = JSON.parse(gpsJson);
+		for(var i = 0;i < gpsData.length; i++){
+			trackPoints = [];
+			for(var	j=0;j<gpsData[i].points.length;j++){
+				trackPoints.push(new BMap.Point(gpsData[i].points[j].lng, gpsData[i].points[j].lat));
+			}
+			if (i==0){
+				map.centerAndZoom(trackPoints[0], 18);
+			}
+			if (gpsData[i].areaType==0){
+				var polyline1 = new BMap.Polyline(trackPoints, {
+
+				strokeColor: "GREEN",
+
+				strokeWeight: 3,
+
+				strokeOpacity: 1
+
+				});
+				map.addOverlay(polyline1);
+				trackOverlays.push({sname:''+ i,mType:''+gpsData[i].areaType,height:gpsData[i].height,track:polyline1});
+			}
+			else{
+				var polyline2 = new BMap.Polyline(trackPoints, {
+
+				strokeColor: "RED",
+
+				strokeWeight: 3,
+
+				strokeOpacity: 1
+
+				});
+				map.addOverlay(polyline2);
+				trackOverlays.push({sname:''+ i,mType:''+gpsData[i].areaType,height:gpsData[i].height,track:polyline2});
+			}
+			
+
+		}
+
+
+
+		//showText('',trackPoints[0]);
+	}
+	
+	// 画线
+	function LoadTrack(pointJson){
+		var pointArr = JSON.parse(pointJson);
+		for (var i = 0; i< pointArr.length; i++) {
+			DrawTrackLine(JSON.stringify(pointArr[i]));
+		}
+	}
+	//清除轨迹
+	function ClearTrack(cIndex){
+		var tIndex = parseInt(cIndex);
+		if (tIndex==-1){
+			for(var i=0;i<trackOverlays.length;i++){
+				//清除标签
+				ClearLabel(trackOverlays[i].sname);
+				map.removeOverlay(trackOverlays[i].track);  
+			}
+			trackOverlays=[];
+		}
+		else{
+			var tArr=[];
+			for(var i=0;i<trackOverlays.length;i++){
+				if (tIndex!=i){
+					tArr.push(trackOverlays[i]);
+				}
+			}
+			//清除标签
+			ClearLabel(trackOverlays[tIndex].sname);
+			map.removeOverlay(trackOverlays[tIndex].track);  
+			trackOverlays = tArr;
+		}
+		map.removeOverlay(markerPlace);  
+	}
+	//重命名
+	function RenameTarck(sname){
+		if (overlayIndex<0) return;
+		ClearLabel(trackOverlays[overlayIndex].sname);
+		trackOverlays[overlayIndex].sname = sname;
+		showText(sname,trackOverlays[overlayIndex].track.getPath()[0]);
+	}
+	//查找标签索引
+	function findlabelIndex(sname){
+		var tIndex = -1;
+		for(var i=0;i<labels.length;i++){
+			if (labels[i].sname==sname){
+			
+				tIndex=i;
+				break;
+			}
+		}
+		return tIndex;
+	}
+	//清除标签
+	function ClearLabel(sname){
+		var tIndex = findlabelIndex(sname);
+		var tArr=[];
+		if (tIndex>=0){
+			for(var i=0;i<labels.length;i++){
+				if (tIndex!=i){
+					tArr.push(labels[i]);
+				}
+			}
+			map.removeOverlay(labels[tIndex].lbl);  
+			labels = tArr;
+		}
+	}
+
+	//编辑轨迹
+    function enableoverlay(cIndex){   
+		if (cIndex==-1){
+			for(var i=0;i<trackOverlays.length;i++){
+				trackOverlays[i].track.enableEditing();  
+			}
+		}
+		else{
+			overlayIndex = parseInt(cIndex);
+			trackOverlays[overlayIndex].track.enableEditing();  
+			var overlay = trackOverlays[overlayIndex].track.getPath(); 
+			var tIndex = Math.floor(overlay.length/2);
+			var poi = new BMap.Point(overlay[tIndex].lng,overlay[tIndex].lat);   
+			map.centerAndZoom(poi, 18); 
+		}
+		
+    } 
+
+	
+	//不可编辑轨迹
+    function disableoverlay(cIndex){   
+		if (cIndex==-1){
+			for(var i=0;i<trackOverlays.length;i++){
+				trackOverlays[i].track.disableEditing();  
+			}
+		}else{
+			var tIndex = parseInt(cIndex);
+			trackOverlays[tIndex].track.disableEditing();  
+		}
+ 
+    }  
+	
+		//返回指定的轨迹
+	function getOverlayPoints(cIndex){
+		var tIndex = parseInt(cIndex);
+		var arrPoints=[];
+		var overlay = trackOverlays[tIndex].track.getPath(); 
+        for(var i = 0; i < overlay.length; i++){ 
+			arrPoints.push(overlay[i]);
+		}
+		var strJs = JSON.stringify(arrPoints);
+		sendmessage('getOverlayPoints' + cIndex,strJs);
+		RenameTarck(trackOverlays[tIndex].sname);
+		return strJs
+	}
+	
+			//返回指定的轨迹
+	function getAllOverlayPoints(cIndex){
+		var tIndex = parseInt(cIndex);
+		var OverlayConn=[];
+		for(var i=0;i<trackOverlays.length;i++){
+			var arrPoints=[];
+			var overlay = trackOverlays[i].track.getPath(); 
+			for(var j = 0; j < overlay.length; j++){ 
+				arrPoints.push(overlay[j]);
+			}
+
+			RenameTarck(trackOverlays[i].sname);
+			OverlayConn.push({sname:trackOverlays[i].sname,areaType:''+trackOverlays[i].mType,height:trackOverlays[i].height,points:arrPoints});
+		}
+		var strJs = JSON.stringify(OverlayConn);
+		sendmessage('getOverlayPoints',strJs);
+		return strJs
+	}
+	
+	//trackOverlays.push({sname:''+ i,mType:''+gpsData[i].areaType,height:gpsData[i].height,track:polyline2});
+
+		//返回指定的轨迹
+	function getOverlayPoint(trackoverlay){
+		var arrPoints=[];
+		var overlay = trackoverlay.getPath(); 
+        for(var i = 0; i < overlay.length; i++){ 
+			arrPoints.push(overlay[i]);
+		}
+		var strJs = JSON.stringify(arrPoints);
+		return strJs;
+	}
+
+    function DrawTrack(sname,mType){   
+		if (mType=="0"){
+			setDrawingManager(styleOptionsGreen);
+		}
+		else{
+			setDrawingManager(styleOptionsRed);
+		}
+        drawingManager.open();    
+        drawingManager.setDrawingMode(BMAP_DRAWING_POLYLINE);   
+        IsDraw=true;
+		trackName = sname;
+		areaType = mType;
+		disableoverlay(-1);
+    }   	
+     
+           
+    function addMark(JsonStr)
+    {
+	var point = JSON.parse(JsonStr);
+	// 创建标注
+	markerPlace = new BMap.Marker(new BMap.Point(point[0].lng, point[0].lat));
+	// 将标注添加到地图中
+	map.addOverlay(markerPlace);
+    }
+         
+    function  showPolygon(btn){   
+      var polygon = new BMap.Polygon([   
+          new BMap.Point(113.941853,22.530777),   
+          new BMap.Point(113.940487,22.527789),   
+          new BMap.Point(113.94788,22.527597),   
+          new BMap.Point(113.947925,22.530618)   
+      ], styleOptions);  //创建多边形   
+      map.addOverlay(polygon);   //增加多边形   
+      // overlays.push(polygon); //是否把该图像加入到编辑和删除行列   
+       btn.setAttribute('disabled','false');   
+       showText();   
+     }   
+    
+	function getStringByteCount(sTxt){
+		var iSize=0;
+		var ic=0;
+		for(var i=0;i<sTxt.length;i++){
+			var c = sTxt.charCodeAt(i); 
+			if ((c >= 0x0001 && c <= 0x007e) || (0xff60<=c && c<=0xff9f)) {     
+                iSize++;                
+            } else {
+                iSize+=2;  
+				ic++;
+        	}            
+		}
+		iSize=iSize - (ic*2)/4;
+		return iSize;
+	}
+	var markIndex=0;
+	var marklabel;
+	function UpdateMark(JsonStr){   
+
+		if (markIndex>0){
+			map.removeOverlay(marklabel); 
+		}
+	     
+	    var point = JSON.parse(JsonStr);
+		var marker = new BMap.Marker(point); // 创建点
+		map.addOverlay(marker);            //增加点
+		marklabel = marker;
+		if(markIndex==0){
+			map.centerAndZoom(point, 18);
+		}
+		markIndex=1;
+	} 
+	function showText(sTxt,point){   
+	
+		return;
+        var iSize=getStringByteCount(sTxt);
+		var tX= iSize/3 * (-30);
+		var opts = {   
+		position : point,//new BMap.Point(113.941853,22.530777),    // 指定文本标注所在的地理位置   
+		offset   : new BMap.Size(tX, 1)    //设置文本偏移量   
+		}   
+		var label = new BMap.Label(sTxt, opts);  // 创建文本标注对象   
+		label.setStyle({   
+		color : "black",   
+		fontSize : "12px",   
+		fillColor:"red",      //填充颜色。当参数为空时，圆形将没有填充效果。  
+		cursor: 'pointer',
+		//backgroundColor: "rgba(200, 200, 200, 0.5)",//"rgba(0, 0, 0, 0.5)",
+		//borderRadius: "10px",
+		//padding: "0 10px",
+		//lineHeight: "20px",
+		//border :"1",
+
+		});   
+		map.addOverlay(label); 
+		labels.push({sname:sTxt,lbl:label} );
+        label.addEventListener("click", function(){ //点击label隐藏label
+			sendmessage('lblclick',sTxt);
+        });
+	}   
+    
+</script>
