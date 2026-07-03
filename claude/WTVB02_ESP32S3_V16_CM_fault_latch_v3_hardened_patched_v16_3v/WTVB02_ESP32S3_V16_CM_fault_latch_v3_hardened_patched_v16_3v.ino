@@ -2061,10 +2061,13 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   } else {
     s->buffered_ts = 0u;
   }
-  s->rms_overall       = data->rms_overall;
-  s->rms_x             = data->rms_x;
-  s->rms_y             = data->rms_y;
-  s->rms_z             = data->rms_z;
+  // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
+  // noise-floor/garbage ที่ยังไม่ได้ deglitch -> เก็บ 0 กัน replay ส่ง garbage ออก MQTT ทีหลัง
+  bool isRunningBuf   = (data->motor_state == 2);
+  s->rms_overall       = isRunningBuf ? data->rms_overall : 0.0f;
+  s->rms_x             = isRunningBuf ? data->rms_x       : 0.0f;
+  s->rms_y             = isRunningBuf ? data->rms_y       : 0.0f;
+  s->rms_z             = isRunningBuf ? data->rms_z       : 0.0f;
   s->vel_peak_x        = data->vel_peak_x;
   s->vel_peak_y        = data->vel_peak_y;
   s->vel_peak_z        = data->vel_peak_z;
@@ -4690,8 +4693,10 @@ void drawMachineScreen(VibrationData_t* data) {
   u8g2.drawStr(15, 24, "STATUS: NORMAL");
 
   // Line 3: RMS value (y=38) - LARGE
+  // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
+  // noise-floor/garbage (de-glitch filter v16.3x ทำงานเฉพาะตอน RUNNING) -> แสดง 0
   u8g2.setFont(u8g2_font_ncenB10_tr);
-  snprintf(buf, sizeof(buf), "%.2f", data->rms_overall);
+  snprintf(buf, sizeof(buf), "%.2f", (data->motor_state == 2) ? data->rms_overall : 0.0f);
   uint8_t w = u8g2.getStrWidth(buf);
   u8g2.drawStr((128 - w) / 2, 40, buf);
 
@@ -4792,26 +4797,30 @@ void drawAxisScreen(VibrationData_t* data) {
   // === Data rows (normal font) ===
   u8g2.setFont(u8g2_font_6x10_tr);
 
+  // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
+  // noise-floor/garbage (de-glitch filter v16.3x ทำงานเฉพาะตอน RUNNING) -> แสดง 0
+  bool isRunningDisp = (data->motor_state == 2);
+
   // Row 1: VX / FX   (y=26)
-  snprintf(buf, sizeof(buf), "VX = %03.2f", data->rms_x);
+  snprintf(buf, sizeof(buf), "VX = %03.2f", isRunningDisp ? data->rms_x : 0.0f);
   u8g2.drawStr(5, 26, buf);
   snprintf(buf, sizeof(buf), "FX = %02.0f", data->freq_x);
   u8g2.drawStr(70, 26, buf);
 
   // Row 2: VY / FY   (y=37)
-  snprintf(buf, sizeof(buf), "VY = %03.2f", data->rms_y);
+  snprintf(buf, sizeof(buf), "VY = %03.2f", isRunningDisp ? data->rms_y : 0.0f);
   u8g2.drawStr(5, 37, buf);
   snprintf(buf, sizeof(buf), "FY = %02.0f", data->freq_y);
   u8g2.drawStr(70, 37, buf);
 
   // Row 3: VZ / FZ   (y=48)
-  snprintf(buf, sizeof(buf), "VZ = %03.2f", data->rms_z);
+  snprintf(buf, sizeof(buf), "VZ = %03.2f", isRunningDisp ? data->rms_z : 0.0f);
   u8g2.drawStr(5, 48, buf);
   snprintf(buf, sizeof(buf), "FZ = %02.0f", data->freq_z);
   u8g2.drawStr(70, 48, buf);
 
   // Row 4: MAX / [2/3]  (y=60)
-  snprintf(buf, sizeof(buf), "MAX= %03.2f", data->rms_overall);
+  snprintf(buf, sizeof(buf), "MAX= %03.2f", isRunningDisp ? data->rms_overall : 0.0f);
   u8g2.drawStr(5, 60, buf);
   u8g2.drawStr(98, 60, "[2/3]");
 }
@@ -5170,6 +5179,24 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     g_velPeakHold = 0.0f;               // reset ทิ้งเพื่อไม่ค้างเข้า RUNNING ถัดไป
   }
 
+  // [v16.3ae] RMS garbage gate for non-RUNNING states
+  // อาการ: sensor VRMS register ส่ง noise-floor / glitch ค่าสูงผิดปกติขณะ STOPPED
+  // เพราะ de-glitch filter (v16.3x, taskStateMachine) ทำงานเฉพาะ motor_state==2 (RUNNING)
+  // เท่านั้น → ค่า garbage วิ่งตรงเข้า MQTT rms/vx/vy/vz โดยไม่มีการกรอง
+  // Fix: gate เหมือน peak/kurtosis/freq_ratio ด้านบน — ไม่ใช่ RUNNING → รายงาน 0
+  float reportedRms, reportedVx, reportedVy, reportedVz;
+  if (data->motor_state == 2) {         // MOTOR_RUNNING
+    reportedRms = data->rms_overall;
+    reportedVx  = data->rms_x;
+    reportedVy  = data->rms_y;
+    reportedVz  = data->rms_z;
+  } else {
+    reportedRms = 0.0f;                 // STOPPED/STARTING/STOPPING → ไม่รายงาน rms
+    reportedVx  = 0.0f;
+    reportedVy  = 0.0f;
+    reportedVz  = 0.0f;
+  }
+
   // v15.1: ใช้ cf_max (max ของทั้ง 3 แกน) แทน cf_x เพียงแกนเดียว
   // sensor คำนวณจาก raw 16KHz FIFO ภายใน chip:  CF = Peak_acc / RMS_acc
   float crestFactor = (data->cf_max > 0.0f)
@@ -5271,10 +5298,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     s["deglitch_count"]      = g_deglitchCount;  // [v16.3y] อัตรา VRMS glitch สะสม
 
     // Estimated RMS velocity (Peak / √2)
-    s["rms"]   = round(data->rms_overall * 100) / 100.0f;
-    s["vx"]    = round(data->rms_x       * 100) / 100.0f;
-    s["vy"]    = round(data->rms_y       * 100) / 100.0f;
-    s["vz"]    = round(data->rms_z       * 100) / 100.0f;
+    // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
+    s["rms"]   = round(reportedRms * 100) / 100.0f;
+    s["vx"]    = round(reportedVx  * 100) / 100.0f;
+    s["vy"]    = round(reportedVy  * 100) / 100.0f;
+    s["vz"]    = round(reportedVz  * 100) / 100.0f;
 
     // True peak velocity hold [mm/s] -- v15.0
     s["peak"]       = round(currentPeak            * 100) / 100.0f;
@@ -5405,10 +5433,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     doc["machine_id"] = MACHINE_ID;
     doc["sensor_id"]  = SENSOR_ID;
 
-    doc["rms"]   = round(data->rms_overall * 100) / 100.0f;
-    doc["vx"]    = round(data->rms_x       * 100) / 100.0f;
-    doc["vy"]    = round(data->rms_y       * 100) / 100.0f;
-    doc["vz"]    = round(data->rms_z       * 100) / 100.0f;
+    // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
+    doc["rms"]   = round(reportedRms * 100) / 100.0f;
+    doc["vx"]    = round(reportedVx  * 100) / 100.0f;
+    doc["vy"]    = round(reportedVy  * 100) / 100.0f;
+    doc["vz"]    = round(reportedVz  * 100) / 100.0f;
     doc["peak"]  = round(currentPeak        * 100) / 100.0f;
     // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
     doc["temp"]  = round(data->temperature *  10) /  10.0f;
