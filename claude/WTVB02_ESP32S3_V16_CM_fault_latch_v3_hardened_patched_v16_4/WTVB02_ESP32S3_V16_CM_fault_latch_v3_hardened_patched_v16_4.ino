@@ -1162,6 +1162,7 @@ typedef struct {
   bool buzzerActive;
   bool blinkState;
   uint32_t stateEntryTime;
+  bool mqttConnected;  // [v16.5] Section 7 Item 4 (design v16.5 §4.2) — Network4G-only writer, dormant until Items 6-8 wire readers
 } SystemState_t;
 
 // Network status (Core 1 only) - Modified for 4G
@@ -1287,7 +1288,8 @@ static SystemState_t g_systemState = {
   .alarmAcknowledged = false,
   .buzzerActive = false,
   .blinkState = false,
-  .stateEntryTime = 0
+  .stateEntryTime = 0,
+  .mqttConnected = false
 };
 static NetworkStatus_t g_network = { 0 };
 static TimeSyncStatus_t g_timeSync = { 0 };
@@ -4080,7 +4082,13 @@ void taskNetwork(void* parameter) {
         }
 
         // Try to connect MQTT if GPRS is up but MQTT is down
-        if (gprs && !mqttClient.connected() &&
+        bool mqttConnSnap9 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #9)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap9;
+          xSemaphoreGive(mutexSystemState);
+        }
+        if (gprs && !mqttConnSnap9 &&
             (now - lastConnectionAttempt > mqttBackoffMs)) {
 
           lastConnectionAttempt = now;
@@ -4146,7 +4154,13 @@ void taskNetwork(void* parameter) {
 
 
         // Update modem state
-        if (gprs && mqttClient.connected()) {
+        bool mqttConnSnap14 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #14)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap14;
+          xSemaphoreGive(mutexSystemState);
+        }
+        if (gprs && mqttConnSnap14) {
           g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
         } else if (gprs) {
           g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
@@ -4169,6 +4183,11 @@ void taskNetwork(void* parameter) {
 
         if (mqttClient.connected() != lastMqttState) {
           bool nowConnected = mqttClient.connected();
+          // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #15/16)
+          if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+            g_systemState.mqttConnected = nowConnected;
+            xSemaphoreGive(mutexSystemState);
+          }
           Serial.printf("[CORE 1] MQTT: %s\n", nowConnected ? "CONNECTED" : "DISCONNECTED");
 
           // เมื่อ reconnect สำเร็จ: แจ้ง Serial ว่ามี backlog รอ replay เท่าไหร่
@@ -4187,7 +4206,13 @@ void taskNetwork(void* parameter) {
 
     // -- mqttClient.loop() ??? iteration = ??? 100ms --
     // ????????????? publish ????? process ACK/PINGREQ ??????
-    if (mqttClient.connected()) {
+    bool mqttConnSnap17 = mqttClient.connected();
+    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #17)
+    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+      g_systemState.mqttConnected = mqttConnSnap17;
+      xSemaphoreGive(mutexSystemState);
+    }
+    if (mqttConnSnap17) {
       mqttClient.loop();
     }
 
@@ -4220,14 +4245,27 @@ void taskNetwork(void* parameter) {
     // หยุดทันทีถ้า MQTT หลุด กลาง burst (replayTelemBuf() returns false)
     // ล็อก mutex เฉพาะ peek + pop (ดู replayTelemBuf()) — ไม่บล็อก loop นาน
     // ────────────────────────────────────────────────────────────────────────
-    if (mqttClient.connected() && g_telemBufCount > 0) {
+    bool mqttConnSnap19 = mqttClient.connected();
+    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #19)
+    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+      g_systemState.mqttConnected = mqttConnSnap19;
+      xSemaphoreGive(mutexSystemState);
+    }
+    if (mqttConnSnap19 && g_telemBufCount > 0) {
       replayTelemBuf();
       vTaskDelay(pdMS_TO_TICKS(75));  // 75ms delay between replayed messages
                                       // 120 slots × 75ms ≈ 9s burst สูงสุด (ไม่ flood broker)
     }
 
     // -- Publish telemetry (?? FreeRTOS task ???????? ???????? ISR) --
-    if (mqttClient.connected() && (now - lastPublish >= publishInterval)) {
+    bool mqttConnSnap20 = mqttClient.connected();
+    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #20/#22 — same
+    // if/else-if evaluation, no intervening mqttClient call, so one write covers both)
+    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+      g_systemState.mqttConnected = mqttConnSnap20;
+      xSemaphoreGive(mutexSystemState);
+    }
+    if (mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
       if (localVibData.valid) {
         // -- Normal telemetry --
         if (publishTelemetry(&localVibData, localState)) {
@@ -4275,7 +4313,7 @@ void taskNetwork(void* parameter) {
           }
         }
       }
-    } else if (!mqttClient.connected() && (now - lastPublish >= publishInterval)) {
+    } else if (!mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
       // MQTT offline แต่ถึงเวลา publish -- บันทึกลง ring buffer แทน
       if (localVibData.valid) {
         pushTelemBuf(&localVibData, localState);
@@ -4288,7 +4326,13 @@ void taskNetwork(void* parameter) {
     {
       MaintenanceEvent_t mEvt;
       while (xQueueReceive(queueMaintEvent, &mEvt, 0) == pdPASS) {
-        if (mqttClient.connected()) {
+        bool mqttConnSnap23 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #23)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap23;
+          xSemaphoreGive(mutexSystemState);
+        }
+        if (mqttConnSnap23) {
           char tsBuf[32];
           if (mEvt.rtcValid) {
             snprintf(tsBuf, sizeof(tsBuf),
@@ -4358,7 +4402,13 @@ void taskNetwork(void* parameter) {
         Serial.println("[LATCH] replay snapshot mutex timeout — retry next loop");
       }
 
-      if (mqttClient.connected() && snapPending) {
+      bool mqttConnSnap25 = mqttClient.connected();
+      // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #25)
+      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+        g_systemState.mqttConnected = mqttConnSnap25;
+        xSemaphoreGive(mutexSystemState);
+      }
+      if (mqttConnSnap25 && snapPending) {
 
         char flTs[26] = {};
         const bool flTsKnown = (snapTs >= FL_TS_MIN_VALID);
