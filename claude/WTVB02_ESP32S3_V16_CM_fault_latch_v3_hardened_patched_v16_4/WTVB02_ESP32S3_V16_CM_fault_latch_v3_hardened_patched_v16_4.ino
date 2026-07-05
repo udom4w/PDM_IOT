@@ -2319,6 +2319,21 @@ static bool enqueueMqttOutbound(MqttOutboundTopic_t topicId, const char* payload
   return true;
 }
 
+// ============================================================================
+// CACHED MQTT CONNECTION-STATE READER (Section 7 Item 5, design v16.5 §4.2)
+// Dormant: no caller wired yet (DisplayUpdate/Analytics/loopTask are wired in
+// later checklist items). Uses the same xSemaphoreTake(mutexSystemState, ...)
+// pattern already used elsewhere in the file for g_systemState reads.
+// ============================================================================
+static bool getMqttConnectedCached() {
+  bool cached = false;
+  if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+    cached = g_systemState.mqttConnected;
+    xSemaphoreGive(mutexSystemState);
+  }
+  return cached;
+}
+
 static void checkAndLatchFault(const VibrationData_t* data,
                                 MachineState_t         newState,
                                 int                    healthScore,
