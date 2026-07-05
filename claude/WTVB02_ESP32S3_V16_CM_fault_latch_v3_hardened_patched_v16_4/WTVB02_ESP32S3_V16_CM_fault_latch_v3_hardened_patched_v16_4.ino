@@ -4272,6 +4272,32 @@ void taskNetwork(void* parameter) {
                                       // 120 slots × 75ms ≈ 9s burst สูงสุด (ไม่ flood broker)
     }
 
+    // ── MQTT Outbound Queue Drain (Section 7 Item 9, design v16.5 §4.1) ──────
+    // Consumer side of the dormant queue added in Item 3. No producer is wired
+    // yet (Analytics still calls mqttClient.publish() directly, per Item 6 not
+    // being implemented in this commit) -- queueMqttOutboundTrend is therefore
+    // always empty here, xQueueReceive always returns pdFALSE immediately, and
+    // this block's body cannot execute. Rate-limited to 1 message per
+    // taskNetwork() iteration, analogous to the g_telemBuf replay above.
+    // Publishes exactly like the existing /sensor, /status, /trend logic.
+    // ──────────────────────────────────────────────────────────────────────────
+    if (mqttConnSnap19 && queueMqttOutboundTrend != NULL) {
+      MqttOutboundMsg_t outMsg;
+      if (xQueueReceive(queueMqttOutboundTrend, &outMsg, 0) == pdPASS) {
+        const char* outTopic = (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_TREND)
+                                 ? g_mqttTopicTrend : NULL;
+        if (outTopic != NULL) {
+          if (mqttClient.publish(outTopic, outMsg.payload, (int)outMsg.len, false, outMsg.qos)) {
+            g_network.publishCount++;
+            Serial.printf("[MQTT] Outbound queue published -> %s (%u B)\n", outTopic, (unsigned)outMsg.len);
+          } else {
+            g_network.publishFailures++;
+            Serial.printf("[MQTT] Outbound queue publish FAILED -> %s (err=%d)\n", outTopic, mqttClient.lastError());
+          }
+        }
+      }
+    }
+
     // -- Publish telemetry (?? FreeRTOS task ???????? ???????? ISR) --
     bool mqttConnSnap20 = mqttClient.connected();
     // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #20/#22 — same
