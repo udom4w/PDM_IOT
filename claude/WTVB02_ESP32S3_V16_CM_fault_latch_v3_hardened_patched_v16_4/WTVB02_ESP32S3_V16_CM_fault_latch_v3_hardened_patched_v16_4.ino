@@ -6665,7 +6665,9 @@ void loop() {
   // OFF = no signal, slow blink = connecting, fast blink = GPRS up but MQTT down, solid = MQTT connected
   static uint32_t lastCloudBlink = 0;
   {
-    bool mqttUp = mqttClient.connected();
+    // [v16.5] Section 7 Item 8 (design v16.5 §3.3, §4.2) — read via cache
+    // instead of touching mqttClient directly; loopTask is not the owner task.
+    bool mqttUp = getMqttConnectedCached();
     bool gprsUp = g_network.gprsConnected;
     uint32_t cloudBlinkInterval = 0;
 
@@ -6722,7 +6724,9 @@ void loop() {
     Serial.println("+========================================================+");
     Serial.printf("| Modem:   %-45s |\n", g_network.modemReady ? "READY" : "NOT READY");
     Serial.printf("| GPRS:    %-45s |\n", g_network.gprsConnected ? "CONNECTED" : "DISCONNECTED");
-    Serial.printf("| MQTT:    %-45s |\n", mqttClient.connected() ? "CONNECTED (mTLS)" : "DISCONNECTED");
+    // [v16.5] Section 7 Item 8 (design v16.5 §3.3, §4.2) — read via cache
+    // instead of touching mqttClient directly; loopTask is not the owner task.
+    Serial.printf("| MQTT:    %-45s |\n", getMqttConnectedCached() ? "CONNECTED (mTLS)" : "DISCONNECTED");
     Serial.printf("| Signal:  %d%% (CSQ: %d)                                |\n",
                   g_network.signalPercent, g_network.signalQuality);
     Serial.printf("| Operator: %-44s |\n", g_network.operatorName);
