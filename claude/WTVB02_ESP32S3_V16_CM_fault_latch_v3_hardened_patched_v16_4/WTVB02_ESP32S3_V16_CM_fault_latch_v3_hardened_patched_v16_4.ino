@@ -6079,7 +6079,9 @@ analytics_publish:
     if (analyticsPublishCnt < 60) continue;
     analyticsPublishCnt = 0;
 
-    if (!mqttClient.connected()) continue;
+    // [v16.5] Section 7 Item 6 (design v16.5 §3.3, §4.2) — read via cache
+    // instead of touching mqttClient directly; Analytics is not the owner task.
+    if (!getMqttConnectedCached()) continue;
     if (g_buf1sCount < 4)        continue;
 
     // Shared timestamp for this publish round (all 7 topics use same value)
@@ -6200,10 +6202,14 @@ analytics_publish:
       if (sz == 0 || sz >= sizeof(buf) - 1)
         Serial.printf("[WARN] /trend JSON truncated! sz=%u buf=%u\n",
                       (unsigned)sz, (unsigned)sizeof(buf));
-      if (mqttClient.publish(g_mqttTopicTrend, buf, (int)sz, false, MQTT_QOS))
-        Serial.printf("[TREND] /trend %u B\n", (unsigned)sz);
+      // [v16.5] Section 7 Item 6 (design v16.5 §3.2) — enqueue for Network4G to
+      // publish instead of calling mqttClient.publish() directly; Analytics is
+      // not the owner task. Non-blocking; drop-newest + g_trendEnqueueDropCount
+      // on a full queue are handled inside enqueueMqttOutbound() (Item 3), unchanged here.
+      if (enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_TREND, buf, sz, MQTT_QOS))
+        Serial.printf("[TREND] /trend %u B queued\n", (unsigned)sz);
       else
-        Serial.printf("[TREND] FAILED -> %s\n", g_mqttTopicTrend);
+        Serial.printf("[TREND] FAILED to queue -> %s\n", g_mqttTopicTrend);
     }
 
     // ──────────────────────────────────────────────────────────────────────
