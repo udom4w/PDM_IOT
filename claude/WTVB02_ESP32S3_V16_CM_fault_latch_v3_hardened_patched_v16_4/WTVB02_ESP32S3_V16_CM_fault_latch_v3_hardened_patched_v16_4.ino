@@ -5013,8 +5013,10 @@ void drawNetworkScreen() {
   }
 
   // MQTT status
+  // [v16.5] Section 7 Item 7 (design v16.5 §3.3, §4.2) — read via cache instead
+  // of touching mqttClient directly; DisplayUpdate is not the owner task.
   snprintf(buf, sizeof(buf), "MQTT: %s",
-           mqttClient.connected() ? "CONN" : "DISC");
+           getMqttConnectedCached() ? "CONN" : "DISC");
   u8g2.drawStr(5, 52, buf);
 
   // Publish stats + NTP status
