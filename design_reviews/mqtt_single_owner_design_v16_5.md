@@ -168,6 +168,8 @@ Sharing one buffer creates two failure directions: a telemetry backlog (e.g., du
   - Recommended implementation: a small script (grep/ripgrep + whitelist diff) run as a pre-build or CI step; exact tooling is an implementation detail, but "fails the build on violation" is not optional
 - [ ] 11. Full diff review against v16.4 baseline before any flashing
 
+**Note — implementation sequencing (does not renumber or modify any item above):** Item 9 (Network4G queue drain) must be implemented and merged before Item 6 (Analytics enqueue wiring) is merged, regardless of their listed order. Until Item 9 exists, items enqueued by Item 6 would have no consumer to reach Network4G and would instead be subject to the queue's approved overflow policy (§4.1 — drop-newest with counter). Merging Item 9 first keeps the drain path in place — dormant, since no producer exists until Item 6 lands — before Item 6 introduces the producer. This note is an implementation sequencing clarification only; it does not modify the approved design, any architecture decision, or the scope of any checklist item.
+
 ---
 
 ## 8. Test plan
