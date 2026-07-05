@@ -354,6 +354,9 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define QUEUE_SIZE_BUTTON 3
 #define QUEUE_SIZE_DISPLAY 3
 #define QUEUE_SIZE_MAINT 2   // V14.4: maintenance reset events (Button -> Network)
+#define QUEUE_SIZE_MQTT_OUTBOUND 6  // [v16.5] Section 7 Item 3: dormant outbound MQTT queue (Analytics -> Network4G, not wired yet)
+
+#define MQTT_OUTBOUND_PAYLOAD_MAX 1024  // [v16.5] matches existing /trend serialization buffer size
 
 // --- Modem Timeouts ---
 #define MODEM_INIT_TIMEOUT 30000    // 30 seconds for modem init
@@ -1206,6 +1209,20 @@ typedef struct {
   uint8_t  second;
 } MaintenanceEvent_t;
 
+// [v16.5] Section 7 Item 3 — outbound MQTT queue message (design v16.5 §4.1).
+// Independent of g_telemBuf/mutexTelemBuf (Q1 decision). Producer (Analytics)
+// and consumer (Network4G) are wired in later checklist items; dormant here.
+typedef enum {
+  MQTT_OUTBOUND_TOPIC_TREND = 0,   // only topic routed through this queue (design v16.5 §3.2)
+} MqttOutboundTopic_t;
+
+typedef struct {
+  MqttOutboundTopic_t topic_id;
+  char                payload[MQTT_OUTBOUND_PAYLOAD_MAX];
+  size_t              len;
+  uint8_t             qos;
+} MqttOutboundMsg_t;
+
 // ============================================================================
 // FREERTOS HANDLES
 // ============================================================================
@@ -1224,6 +1241,7 @@ QueueHandle_t queueSensorData = NULL;
 QueueHandle_t queueButtonEvent = NULL;
 QueueHandle_t queueDisplayUpdate = NULL;
 QueueHandle_t queueMaintEvent = NULL;   // V14.4: maintenance reset (Button -> Network)
+QueueHandle_t queueMqttOutboundTrend = NULL;  // [v16.5] Section 7 Item 3: dormant, no producer/consumer wired yet
 
 // Mutex Handles
 SemaphoreHandle_t mutexVibData    = NULL;
@@ -1341,6 +1359,7 @@ static volatile uint8_t g_telemBufCount = 0;   // slots currently occupied (0..T
 // Diagnostic counters (cumulative, never reset)
 static volatile uint32_t g_telemBufOverflowCount = 0;  // times oldest slot was overwritten
 static volatile uint32_t g_telemBufReplayedCount = 0;  // cumulative successfully replayed
+static volatile uint32_t g_trendEnqueueDropCount = 0;  // [v16.5] Section 7 Item 3: dormant — incremented only once callers exist
 static bool           g_flPrevBearing   = false;
 static bool           g_flPrevHealthLow = false;
 static MachineState_t g_flPrevState     = STATE_NORMAL;
@@ -2268,6 +2287,33 @@ static bool replayTelemBuf() {
                 (unsigned long)snap.buffered_ts,
                 (unsigned)g_telemBufCount,
                 (unsigned long)g_telemBufReplayedCount);
+  return true;
+}
+
+// ============================================================================
+// MQTT OUTBOUND QUEUE — producer helper (Section 7 Item 3, design v16.5 §4.1)
+// Dormant: no caller wired yet (Analytics is wired in a later checklist item;
+// this commit implements Item 3 only). Overflow policy: drop-newest with
+// counter — non-blocking xQueueSend; on a full queue the new message is
+// dropped and nothing already queued is evicted (design v16.5 §4.1).
+// ============================================================================
+static bool enqueueMqttOutbound(MqttOutboundTopic_t topicId, const char* payload, size_t len, uint8_t qos) {
+  if (queueMqttOutboundTrend == NULL || payload == NULL ||
+      len == 0 || len >= MQTT_OUTBOUND_PAYLOAD_MAX) {
+    return false;
+  }
+
+  MqttOutboundMsg_t msg;
+  msg.topic_id = topicId;
+  msg.len      = len;
+  msg.qos      = qos;
+  memcpy(msg.payload, payload, len);
+  msg.payload[len] = '\0';
+
+  if (xQueueSend(queueMqttOutboundTrend, &msg, 0) != pdTRUE) {
+    g_trendEnqueueDropCount++;
+    return false;
+  }
   return true;
 }
 
@@ -6386,6 +6432,17 @@ void setup() {
   }
 
   Serial.println("[Init] Queues created");
+
+  // [v16.5] Section 7 Item 3 — dormant outbound MQTT queue.
+  // No producer/consumer wired yet (later checklist items); creation failure
+  // here does not affect current runtime behavior, since enqueueMqttOutbound()
+  // null-checks the handle and nothing calls it yet.
+  queueMqttOutboundTrend = xQueueCreate(QUEUE_SIZE_MQTT_OUTBOUND, sizeof(MqttOutboundMsg_t));
+  if (queueMqttOutboundTrend == NULL) {
+    Serial.println("[WARN] Failed to create queueMqttOutboundTrend (dormant, no current consumer)");
+  } else {
+    Serial.println("[Init] MQTT outbound queue created (dormant)");
+  }
 
   delay(2000);
 
