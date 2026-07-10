@@ -145,6 +145,10 @@
 #define REG_SAMPLE_RATE   0x0029  // Sample rate register
 #define SENSOR_UNLOCK_KEY 0xB588  // Unlock password
 #define SENSOR_SR_16K     0x0001  // Sample Rate = 16 kHz
+// [PD-0001] SR6=512Hz selected as Phase 1 production baseline (WTVB05_FIFO_Investigation_Report.md).
+// Constants only -- NOT wired into any write path. SR ownership/enforcement policy pending design doc.
+#define SENSOR_SR_512     0x0006  // Sample Rate = 512 Hz (SR6)
+#define SENSOR_SR_DEFAULT SENSOR_SR_512  // Phase 1 production baseline (unused -- no REG_SAMPLE_RATE write exists)
 #define REG_DRM           0x002B  // Displacement range mode register §6.4.11
 #define SENSOR_DRM_FREQ   0x0002  // 0x02 = Frequency domain algorithm
                                   // จำเป็นสำหรับ VRMS (0x50/0x5C/0x68) ให้คำนวณถูกต้อง
@@ -2687,11 +2691,11 @@ static const uint32_t SENSOR_RESTART_COOLDOWN = 15000; // shared cooldown ระ
 /**
  * Re-configure WTVB02-485 หลัง reboot ผ่าน Modbus (v15.7)
  *
- * ลำดับ config ตาม log ที่กำหนด:
- *   1. Unlock#1 (0x69=0xB588) → SR=16K              (0x29=0x0001)  [1500 RPM motor]
- *   2. Unlock#2 (0x69=0xB588) → DRM=Freq domain     (0x2B=0x0002)
- *   3. Unlock#3 (0x69=0xB588) → MODE=TDLF           (0x07=0x0000)
- *   4. Unlock#4 (0x69=0xB588) → Save                (0x00=0x0000)
+ * [v16.3] ลำดับ config จริงที่ทำงานอยู่ (SR และ DRM ถูกถอดออกแล้ว -- ดู [PATCHED v16.3] ด้านล่าง):
+ *   1. Unlock#1 (0x69=0xB588) → MODE=FreqDomain    (0x07=0x0002)
+ *   2. Unlock#2 (0x69=0xB588) → Save               (0x00=0x0000)
+ * ไม่มีการเขียน REG_SAMPLE_RATE (0x29) หรือ REG_DRM (0x2B) ในฟังก์ชันนี้ --
+ * sensor ใช้ค่าที่ persist อยู่ใน NVM ของตัวมันเอง
  *
  * @return true  ทุก step สำเร็จ
  *         false มี step ใดล้มเหลว (log warning แต่ caller ยังนับ restart ว่า OK)
@@ -2708,11 +2712,10 @@ static bool reconfigSensorAfterRestart() {
   //      เดิม: unlock FAIL แต่ยัง write ต่อ → register อาจถูกเขียนโดยไม่ผ่าน unlock จริง
   //      ใหม่: unlock FAIL → skip write step นั้น + set allOk=false + log ชัดเจน
   //
-  //   3. ลำดับ steps ที่ถูกต้องตาม WTVB02 manual §6.2 และ §6.4.1:
-  //      Step 1: Unlock → SR=16K   (0x29=0x0001)
-  //      Step 2: Unlock → DRM=0x02 (0x2B=0x0002)  [displacement range: 600um/0.01um]
-  //      Step 3: Unlock → MODE=0x02(0x07=0x0002)  [FreqDomain: ให้ CF/VRMS/Kurtosis]
-  //      Step 4: Unlock → Save     (0x00=0x0000)
+  //   3. ลำดับ steps ตาม WTVB02 manual §6.2 และ §6.4.1 ที่ทำงานอยู่จริง (หลัง [PATCHED v16.3] ถอด SR/DRM ออก):
+  //      Step 1: Unlock → MODE=0x02(0x07=0x0002)  [FreqDomain: ให้ CF/VRMS/Kurtosis]
+  //      Step 2: Unlock → Save     (0x00=0x0000)
+  //      (SR=16K (0x29) และ DRM=0x02 (0x2B) ไม่ได้เขียนในฟังก์ชันนี้ -- ดูเหตุผลด้านล่าง)
 
   uint8_t result;
   bool allOk = true;
@@ -2779,7 +2782,7 @@ static bool reconfigSensorAfterRestart() {
   vTaskDelay(pdMS_TO_TICKS(300));
 
   if (allOk) {
-    Serial.println("[SENSOR-CFG] All config steps OK -- SR=16K MODE=FreqDomain(0x02) DRM=0x02 saved");
+    Serial.println("[SENSOR-CFG] All config steps OK -- MODE=FreqDomain(0x02) saved (SR/DRM not written by this function)");
   } else {
     Serial.println("[SENSOR-CFG] WARNING: Some config steps FAILED -- sensor may not output CF/VRMS");
   }
@@ -6500,12 +6503,13 @@ void setup() {
   // reconfigSensorAfterRestart() เดิมถูกเรียกแค่ตอน stuck-auto-restart
   // ทำให้ทุก power cycle sensor กลับ default (MODE=0x00 → CF/VRMS = 0)
   // แก้โดยเรียก config ทุกครั้งที่ boot ก่อนสร้าง FreeRTOS tasks
-  // ลำดับ: Unlock → SR=16K → DRM=0x02 → MODE=0x02(FreqDomain) → Save
+  // ลำดับที่ทำงานอยู่จริง: Unlock → MODE=0x02(FreqDomain) → Unlock → Save
+  // (ไม่มีการเขียน SR หรือ DRM -- ถูกถอดออกใน [PATCHED v16.3], ดู reconfigSensorAfterRestart())
   //
   // Retry 3 รอบ: sensor บางตัวใช้เวลา settle หลัง power-on นานกว่า 200ms
   // รอ 500ms ก่อน attempt แรก และ 300ms ระหว่าง retry
   // -----------------------------------------------------------------------
-  Serial.println("[Init] Configuring WTVB02 sensor (SR=16K, MODE=FreqDomain)...");
+  Serial.println("[Init] Configuring WTVB02 sensor (MODE=FreqDomain)...");
   delay(500);  // [v16.2] เพิ่มจาก 200ms → 500ms ให้ sensor fully ready ก่อน config
 
   bool cfgOk = false;
