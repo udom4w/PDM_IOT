@@ -88,6 +88,13 @@
 #include <RTClib.h>
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
 
+// ============================================================================
+// VERIFICATION INSTRUMENTATION (Checkpoint 1 -- disabled by default)
+// ============================================================================
+// [VERIFY_TEST] RAM-only causal-proof capture for poll_seq / deglitch forensics.
+// Off in production builds; no runtime behavior change when undefined.
+// #define VERIFY_TEST
+
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -136,6 +143,8 @@
                          // CFY=0x53, CFZ=0x5F (ไม่ต่อเนื่อง -- อ่านแยก transaction ถ้าต้องการ)
 #define REG_CFY    0x53  // CFY=Accel Crest Factor Y, KY=Kurtosis Y (0x53~0x54) §6.4.15
 #define REG_CFZ    0x5F  // CFZ=Accel Crest Factor Z, KZ=Kurtosis Z (0x5F~0x60) §6.4.16
+#define REG_PEAK_X 0x3A  // [DESIGN-0004] VX~VZ (vibration speed), 3 consecutive registers
+                         // 0x3A~0x3C, signed, raw/100 -> mm/s, per datasheet §6.4.6
 
 // --- Sensor Re-config Registers (v15.7) ---
 // ใช้หลัง restartSensorViaModbus() เพื่อ restore config ที่อาจกลับเป็น default
@@ -145,10 +154,12 @@
 #define REG_SAMPLE_RATE   0x0029  // Sample rate register
 #define SENSOR_UNLOCK_KEY 0xB588  // Unlock password
 #define SENSOR_SR_16K     0x0001  // Sample Rate = 16 kHz
-// [PD-0001] SR6=512Hz selected as Phase 1 production baseline (WTVB05_FIFO_Investigation_Report.md).
-// Constants only -- NOT wired into any write path. SR ownership/enforcement policy pending design doc.
+// [PD-0001] SR6=512Hz was the Phase 1 experimental baseline (WTVB05_FIFO_Investigation_Report.md).
+// [PD-0003] Switched to SR5=1kHz. This constant IS wired into the write path
+// (see REG_SAMPLE_RATE write in the sensor-config sequence). SR ownership/enforcement
+// policy still pending design doc -- update this comment again if the baseline changes.
 #define SENSOR_SR_512     0x0006  // Sample Rate = 512 Hz (SR6)
-#define SENSOR_SR_DEFAULT SENSOR_SR_512  // Phase 1 production baseline (unused -- no REG_SAMPLE_RATE write exists)
+#define SENSOR_SR_1K      0x0005  // Sample Rate = 1 kHz (SR5)
 #define REG_DRM           0x002B  // Displacement range mode register §6.4.11
 #define SENSOR_DRM_FREQ   0x0002  // 0x02 = Frequency domain algorithm
                                   // จำเป็นสำหรับ VRMS (0x50/0x5C/0x68) ให้คำนวณถูกต้อง
@@ -171,7 +182,7 @@ static constexpr const char* GPRS_PASS = "";
 #define PLANT_ID "plant01"   // Plant / Site identity
 #define MACHINE_ID "pump01"  // Machine identity (tag-level)
 #define SENSOR_ID "vb01"     // Sensor identity
-#define NAMEPLATE_RPM 1500   // Motor nameplate RPM (used as RATED_RPM reference)
+#define NAMEPLATE_RPM 1800   // Motor nameplate RPM (used as RATED_RPM reference)
 
 // --- Proximity / RPM Sensor Configuration ---
 #define PIN_RPM               17      // Proximity sensor pulse input (PC817 or NPN)
@@ -354,9 +365,9 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 
 // --- Machine Configuration ---
 #define MACHINE_NAME MACHINE_ID  // Display uses MACHINE_ID for consistency
-#define BASELINE_RMS 2.1f
+#define BASELINE_RMS 2.8f
 #define WARNING_RMS 4.5f
-#define CRITICAL_RMS 7.1f
+#define CRITICAL_RMS 11.2f
 
 // --- FreeRTOS Configuration ---
 #define STACK_SIZE_MODBUS    4096   // Modbus task stack
@@ -381,6 +392,9 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define QUEUE_SIZE_DISPLAY 3
 #define QUEUE_SIZE_MAINT 2   // V14.4: maintenance reset events (Button -> Network)
 #define QUEUE_SIZE_MQTT_OUTBOUND 6  // [v16.5] Section 7 Item 3: dormant outbound MQTT queue (Analytics -> Network4G, not wired yet)
+#ifdef VERIFY_TEST
+#define QUEUE_SIZE_DIAG_SNAPSHOT 1  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
+#endif
 
 #define MQTT_OUTBOUND_PAYLOAD_MAX 1024  // [v16.5] matches existing /trend serialization buffer size
 
@@ -1144,6 +1158,12 @@ typedef struct {
   float vel_peak_z;      // [mm/s] peak velocity Z (0x3C / 100)
   float vel_peak_overall;// max(vel_peak_x, y, z) -- ใช้ drive g_velPeakHold
 
+  // --- Peak Velocity, register 0x3A-0x3C (signed, DESIGN-0004) ---
+  // ไม่ใช่ vel_peak_x/y/z ด้านบน (field นั้นเปลี่ยนไปเก็บ VRMS ตั้งแต่มีการ repoint register)
+  float peak_velocity_x; // [mm/s] signed, reg 0x3A / 100, datasheet §6.4.6
+  float peak_velocity_y; // [mm/s] signed, reg 0x3B / 100
+  float peak_velocity_z; // [mm/s] signed, reg 0x3C / 100
+
   // --- Sensor-computed features [v15.0/15.1] ---
   // คำนวณภายใน chip จาก 16KHz FIFO ถูกต้องกว่าคำนวณบน ESP32
   float cf_x;            // Acceleration Crest Factor X (reg 0x47 / 1000) -- Peak/RMS acc
@@ -1178,7 +1198,90 @@ typedef struct {
   uint16_t poll_interval_ms; // ระยะห่างจริงระหว่าง poll รอบนี้กับรอบก่อน (ms, nominal 250)
   uint8_t  retry_count;   // จำนวน sub-read ที่ fail ในรอบนี้ (0 = ผ่านหมด)
   bool     crc_ok;        // true = ทุก read ผ่าน CRC (มาถึง de-glitch = true เสมอ)
+
+#ifdef VERIFY_TEST
+  uint32_t poll_seq;      // [VERIFY_TEST] producer-assigned poll sequence identity
+                          // (Checkpoint 1: field only -- no assignment/read/publish yet)
+#endif
 } VibrationData_t;
+
+#ifdef VERIFY_TEST
+// [VERIFY_TEST] Minimum causal-proof diagnostic record (Checkpoint 1: storage only,
+// no capture logic). Fields cover producer sequence identity + the deglitch decision
+// inputs/outputs needed to correlate a poll against MQTT -> Node-RED -> InfluxDB.
+typedef struct {
+  uint32_t poll_seq;        // producer sequence identity
+  float    rawRmsOverall;   // raw RMS before deglitch
+  float    rawRmsZ;         // raw Z-axis RMS before deglitch
+  float    freq_z;
+  float    lastGoodRmsPre;  // s_lastGoodRms before this decision
+  float    lastGoodRmsPost; // s_lastGoodRms after this decision
+  float    outRms;          // rms_overall after deglitch decision
+  bool     isDropGlitch;
+  uint8_t  glitchHoldPre;   // s_glitchHold before this decision
+  uint8_t  branch;          // which deglitch branch was taken
+  uint8_t  motorState;      // MotorRunState_t at time of decision
+} PollDiagRecord_t;
+
+// [VERIFY_TEST] Checkpoint 5D: compile-time proof of the 32-byte size assumption
+// used for frozen-snapshot memory sizing (Checkpoint 5C Step 2/5).
+static_assert(sizeof(PollDiagRecord_t) == 32, "PollDiagRecord_t size drift");
+
+// [VERIFY_TEST] Single 64-record ring buffer -- unused at Checkpoint 1.
+static PollDiagRecord_t g_diagBuf[64];
+static uint32_t         g_diagHead  = 0;  // next write index
+static uint32_t         g_diagCount = 0;  // number of valid records (0..64)
+
+// [VERIFY_TEST] Checkpoint 3: explicit branch codes for PollDiagRecord_t.branch.
+// Assigned directly inside the existing taskStateMachine() deglitch branches --
+// never re-derives the production gating condition (motor_state/baseline/hold).
+enum : uint8_t {
+  DIAG_BRANCH_NONE = 0,
+  DIAG_BRANCH_NORMAL_ACCEPT,
+  DIAG_BRANCH_DROP_SUPPRESS,
+  DIAG_BRANCH_SPIKE_SUPPRESS,
+  DIAG_BRANCH_DROP_PASS_AFTER_HOLD,
+  DIAG_BRANCH_SPIKE_PASS_AFTER_HOLD,
+  DIAG_BRANCH_NOT_APPLICABLE_NOT_RUNNING,
+  DIAG_BRANCH_NOT_APPLICABLE_NO_BASELINE,
+};
+
+// [VERIFY_TEST] Checkpoint 3: minimum FSM for post-trigger freeze capture.
+enum : uint8_t { DIAG_FSM_ARMED = 0, DIAG_FSM_CAPTURING_POST, DIAG_FSM_FROZEN };
+static uint8_t g_diagFsmState  = DIAG_FSM_ARMED;
+static uint8_t g_diagPostCount = 0;  // valid post-trigger samples captured so far (0..10)
+
+// [VERIFY_TEST] Checkpoint 5A: immutable trigger identity. Written exactly once,
+// only at the ARMED -> CAPTURING_POST transition (taskStateMachine()); never
+// reset, never written again for the lifetime of this boot.
+static uint32_t g_diagTriggerPollSeq = 0;
+
+// [VERIFY_TEST] Checkpoint 5D: immutable frozen-capture snapshot, handed off
+// exactly once from taskStateMachine() (Core 0) to taskAnalytics() (Core 1)
+// through queueDiagSnapshot. records[] is stored in chronological order;
+// chronological_index is intentionally NOT stored (implicit array position);
+// is_trigger is intentionally NOT stored (future consumer derives it only
+// from records[i].poll_seq == trigger_poll_seq).
+typedef struct {
+  uint8_t          fsm_state;                  // g_diagFsmState at freeze (== DIAG_FSM_FROZEN)
+  uint8_t          count;                       // g_diagCount at freeze (0..64)
+  uint8_t          head;                        // g_diagHead at freeze
+  uint32_t         trigger_poll_seq;             // == g_diagTriggerPollSeq
+  PollDiagRecord_t records[64];                  // chronological order
+  uint8_t          physical_buffer_index[64];    // original g_diagBuf index per record
+} PollDiagSnapshot_t;
+
+// [VERIFY_TEST] Checkpoint 5D: one-shot handoff state -- minimum states needed
+// to distinguish queue-unavailable / not-yet-attempted / success / failure.
+// Written only by taskStateMachine(); no consumer reads it yet (Checkpoint 5E).
+enum : uint8_t {
+  DIAG_HANDOFF_NOT_ATTEMPTED = 0,
+  DIAG_HANDOFF_QUEUE_UNAVAILABLE,
+  DIAG_HANDOFF_SENT,
+  DIAG_HANDOFF_SEND_FAILED,
+};
+static uint8_t g_diagHandoffState = DIAG_HANDOFF_NOT_ATTEMPTED;
+#endif
 
 // System state (shared between cores)
 typedef struct {
@@ -1269,6 +1372,9 @@ QueueHandle_t queueButtonEvent = NULL;
 QueueHandle_t queueDisplayUpdate = NULL;
 QueueHandle_t queueMaintEvent = NULL;   // V14.4: maintenance reset (Button -> Network)
 QueueHandle_t queueMqttOutboundTrend = NULL;  // [v16.5] Section 7 Item 3: dormant, no producer/consumer wired yet
+#ifdef VERIFY_TEST
+QueueHandle_t queueDiagSnapshot = NULL;  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
+#endif
 
 // Mutex Handles
 SemaphoreHandle_t mutexVibData    = NULL;
@@ -2691,11 +2797,15 @@ static const uint32_t SENSOR_RESTART_COOLDOWN = 15000; // shared cooldown ระ
 /**
  * Re-configure WTVB02-485 หลัง reboot ผ่าน Modbus (v15.7)
  *
- * [v16.3] ลำดับ config จริงที่ทำงานอยู่ (SR และ DRM ถูกถอดออกแล้ว -- ดู [PATCHED v16.3] ด้านล่าง):
+ * [PD-0003] ลำดับ config จริงที่ทำงานอยู่ (DRM ยังไม่เขียน -- ดู [PATCHED v16.3] ด้านล่าง):
  *   1. Unlock#1 (0x69=0xB588) → MODE=FreqDomain    (0x07=0x0002)
- *   2. Unlock#2 (0x69=0xB588) → Save               (0x00=0x0000)
- * ไม่มีการเขียน REG_SAMPLE_RATE (0x29) หรือ REG_DRM (0x2B) ในฟังก์ชันนี้ --
- * sensor ใช้ค่าที่ persist อยู่ใน NVM ของตัวมันเอง
+ *   2. Unlock#2 (0x69=0xB588) → SR=SENSOR_SR_1K    (0x29=0x0005)  [SR5, 1 kHz]
+ *      → 500ms settle → one-shot read-back of REG_SAMPLE_RATE → decode via SR0-SR9 lookup (Serial only)
+ *   3. Unlock#3 (0x69=0xB588) → Save               (0x00=0x0000)
+ * ไม่มีการเขียน REG_DRM (0x2B) ในฟังก์ชันนี้ -- sensor ใช้ค่าที่ persist อยู่ใน NVM ของตัวมันเอง
+ *
+ * [PD-0003] SR5 (1 kHz) is the current write value, wired into the write path below.
+ * (Previously SR6/512Hz under PD-0002; changed to SR5/1kHz -- update again if this changes.)
  *
  * @return true  ทุก step สำเร็จ
  *         false มี step ใดล้มเหลว (log warning แต่ caller ยังนับ restart ว่า OK)
@@ -2712,25 +2822,29 @@ static bool reconfigSensorAfterRestart() {
   //      เดิม: unlock FAIL แต่ยัง write ต่อ → register อาจถูกเขียนโดยไม่ผ่าน unlock จริง
   //      ใหม่: unlock FAIL → skip write step นั้น + set allOk=false + log ชัดเจน
   //
-  //   3. ลำดับ steps ตาม WTVB02 manual §6.2 และ §6.4.1 ที่ทำงานอยู่จริง (หลัง [PATCHED v16.3] ถอด SR/DRM ออก):
+  //   3. ลำดับ steps ตาม WTVB02 manual §6.2 และ §6.4.1 ที่ทำงานอยู่จริง (หลัง [PD-0003] เปลี่ยนเป็น SR5/1kHz):
   //      Step 1: Unlock → MODE=0x02(0x07=0x0002)  [FreqDomain: ให้ CF/VRMS/Kurtosis]
-  //      Step 2: Unlock → Save     (0x00=0x0000)
-  //      (SR=16K (0x29) และ DRM=0x02 (0x2B) ไม่ได้เขียนในฟังก์ชันนี้ -- ดูเหตุผลด้านล่าง)
+  //      Step 2: Unlock → SR=SENSOR_SR_1K (0x29=0x0005) → 500ms → Read-back + decode (Serial only)
+  //      Step 3: Unlock → Save     (0x00=0x0000)
+  //      (DRM=0x02 (0x2B) ไม่ได้เขียนในฟังก์ชันนี้)
 
   uint8_t result;
   bool allOk = true;
 
   Serial.println("[SENSOR-CFG] ========================================");
   Serial.println("[SENSOR-CFG] Re-configuring sensor after restart...");
-  // [PATCHED v16.3] Unlock แยกทุก step + ข้าม SR (ไม่จำเป็น)
+  // [PATCHED v16.3, superseded by PD-0002] Unlock แยกทุก step
   // -----------------------------------------------------------------------
-  // จากการทดสอบ:
+  // จากการทดสอบ (v16.3):
   //   - Single unlock: SR=OK, MODE=FAIL, Save=OK → MODE ต้องการ unlock ใหม่
   //   - DRM ถูกลบออกเพราะ FAIL ทุกครั้งและไม่เกี่ยวกับ CF/VRMS
-  //   - SR=16K เป็น default อยู่แล้ว (sensor version 10059.1.14) → ลบออก
   //
-  // Sequence ใหม่: Unlock → MODE=0x02 → Unlock → Save
-  // ทดสอบว่า MODE และ Save ผ่านทั้งคู่ไหม
+  // [PD-0003] เขียน SENSOR_SR_1K (0x0005), ไม่ใช่ SENSOR_SR_512 (SR6) หรือ SENSOR_SR_16K เดิม
+  // SR5 (1 kHz) is the current write value, wired into the write path below.
+  // Read-back placed AFTER the 500ms settle delay (ไม่ใช่ทันทีหลัง write) -- หลักฐานเดียวที่มี (v16.3b)
+  // คือ settle delay มีไว้เพื่อความน่าเชื่อถือของ transaction ถัดไป ซึ่ง read ก็นับเป็น transaction
+  //
+  // Sequence: Unlock → MODE=0x02 → Unlock → SR=0x0006 → 500ms → Read SR → Unlock → Save
   // -----------------------------------------------------------------------
   Serial.println("[SENSOR-CFG] [v16.3] Unlock-per-step: MODE then Save");
 
@@ -2758,7 +2872,61 @@ static bool reconfigSensorAfterRestart() {
   vTaskDelay(pdMS_TO_TICKS(500));  // [v16.3b] 100→500ms: sensor ต้องการเวลา settle หลัง MODE write
 
   // ------------------------------------------------------------------
-  // Step 2: Unlock + Save config to NVM
+  // Step 2: Unlock + SR = SENSOR_SR_1K (0x0005, 1 kHz)
+  // [PD-0003] SR5 (1 kHz) is the current write value, wired into the write path.
+  // (Previously SR6/512Hz under PD-0002.)
+  // Includes one-shot read-back + SR0-SR9 lookup decode, Serial only
+  // (no retry, no MQTT, no struct, no analytics).
+  // ------------------------------------------------------------------
+  Serial.printf("[SENSOR-CFG] [Unlock for SR]...");
+  result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
+  if (result != modbus.ku8MBSuccess) {
+    Serial.printf(" x FAILED (err=%d) -- SKIP SR\n", result);
+    allOk = false;
+  } else {
+    Serial.println(" + OK");
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    Serial.printf("[SENSOR-CFG] SR5 (1 kHz) (0x%02X=0x%04X)...", REG_SAMPLE_RATE, SENSOR_SR_1K);
+    result = modbus.writeSingleRegister(REG_SAMPLE_RATE, SENSOR_SR_1K);
+    if (result != modbus.ku8MBSuccess) {
+      Serial.printf(" x FAILED (err=%d)\n", result);
+      allOk = false;
+    } else {
+      Serial.println(" + OK");
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    result = modbus.readHoldingRegisters(REG_SAMPLE_RATE, 1);
+    if (result == modbus.ku8MBSuccess) {
+      uint16_t srReadback = modbus.getResponseBuffer(0);
+      const char* srLabel;
+      switch (srReadback) {
+        case 0x00: srLabel = "SR0 (32 kHz)"; break;
+        case 0x01: srLabel = "SR1 (16 kHz)"; break;
+        case 0x02: srLabel = "SR2 (8 kHz)";  break;
+        case 0x03: srLabel = "SR3 (4 kHz)";  break;
+        case 0x04: srLabel = "SR4 (2 kHz)";  break;
+        case 0x05: srLabel = "SR5 (1 kHz)";  break;
+        case 0x06: srLabel = "SR6 (512 Hz)"; break;
+        case 0x07: srLabel = "SR7 (256 Hz)"; break;
+        case 0x08: srLabel = "SR8 (128 Hz)"; break;
+        case 0x09: srLabel = "SR9 (64 Hz)";  break;
+        default:   srLabel = NULL;           break;
+      }
+      if (srLabel != NULL) {
+        Serial.printf("[SR] Readback = %s\n", srLabel);
+      } else {
+        Serial.printf("[SR] Unexpected value = 0x%04X\n", srReadback);
+      }
+    } else {
+      Serial.println("[SR] Readback FAILED");
+      allOk = false;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Step 3: Unlock + Save config to NVM
   // SENSOR_CMD_SAVE = 0x0000 ตาม WTVB02 manual §6.4.1
   // ------------------------------------------------------------------
   Serial.printf("[SENSOR-CFG] [Unlock for Save]...");
@@ -3299,6 +3467,7 @@ void taskModbusRead(void* parameter) {
   uint16_t raw_cfx = 0, raw_kx = 0;  // v15.0: CFX (0x47), KX (0x48) -- unsigned per datasheet §6.4.14
   uint16_t raw_cfy = 0, raw_ky = 0;  // v15.1: CFY (0x53), KY (0x54) -- unsigned per datasheet §6.4.15
   uint16_t raw_cfz = 0, raw_kz = 0;  // v15.1: CFZ (0x5F), KZ (0x60) -- unsigned per datasheet §6.4.16
+  int16_t  raw_peak_x = 0, raw_peak_y = 0, raw_peak_z = 0;  // [DESIGN-0004] VX/VY/VZ (0x3A-0x3C) -- signed per datasheet §6.4.6
 
   Serial.println("[CORE 0] Modbus task started");
 
@@ -3306,6 +3475,12 @@ void taskModbusRead(void* parameter) {
 
   while (1) {
     g_sensorReads++;
+
+#ifdef VERIFY_TEST
+    // [VERIFY_TEST] Producer-side snapshot: one currentPollSeq per acquisition attempt.
+    // Block-scoped (fresh each loop iteration) -- never reused across iterations.
+    const uint32_t currentPollSeq = g_sensorReads;
+#endif
 
     // [v16.3y] diagnostic timing
     uint32_t t_pollNow      = millis();
@@ -3385,7 +3560,16 @@ void taskModbusRead(void* parameter) {
       raw_cfz = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.16
       raw_kz  = (uint16_t)modbus.getResponseBuffer(1);
     }
-    // ทั้ง T3/T4/T5 เป็น optional -- ไม่ set success = false ถ้า fail
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    // Transaction 6: Peak Velocity X,Y,Z (3 consecutive registers 0x3A~0x3C) [DESIGN-0004]
+    // Datasheet §6.4.6 worked example: 50 03 00 3A 00 03 -- single 3-register block read
+    if (modbus.readHoldingRegisters(REG_PEAK_X, 3) == modbus.ku8MBSuccess) {
+      raw_peak_x = (int16_t)modbus.getResponseBuffer(0);
+      raw_peak_y = (int16_t)modbus.getResponseBuffer(1);
+      raw_peak_z = (int16_t)modbus.getResponseBuffer(2);
+    }
+    // ทั้ง T3/T4/T5/T6 เป็น optional -- ไม่ set success = false ถ้า fail
 
     rs485Disable();
 
@@ -3611,6 +3795,13 @@ void taskModbusRead(void* parameter) {
       localData.freq_y = raw_fy / 10.0f;
       localData.freq_z = raw_fz / 10.0f;
 
+      // Step 4c: Peak Velocity X/Y/Z (signed, raw/100) [DESIGN-0004]
+      // เก็บค่า signed ตรงจาก register -- ไม่ทำ abs() (Decision 4, ยืนยันจาก datasheet §6.4.6)
+      // raw = 0 ถ้า T6 fail (optional transaction, ไม่กระทบ success หลัก) -> ค่าเป็น 0.0f เอง
+      localData.peak_velocity_x = raw_peak_x / 100.0f;
+      localData.peak_velocity_y = raw_peak_y / 100.0f;
+      localData.peak_velocity_z = raw_peak_z / 100.0f;
+
       // [v16.3u] Step 4b: NaN / Inf guard — Defensive float check
       // ป้องกัน PANIC จาก Modbus corrupt value ที่ผ่าน sanity check แต่ทำให้ float exception
       // เงื่อนไขที่ trigger: raw_x อยู่ใน valid range แต่ pattern แปลก
@@ -3671,6 +3862,10 @@ void taskModbusRead(void* parameter) {
       localData.retry_count      = retryCount;
       localData.crc_ok           = success;   // มาถึงจุดนี้ = ทุก read ผ่าน CRC
 
+#ifdef VERIFY_TEST
+      localData.poll_seq = currentPollSeq;  // [VERIFY_TEST] producer sequence identity
+#endif
+
       // Send to queue (non-blocking)
       if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
         Serial.println("[CORE 0] Sensor queue full!");
@@ -3694,6 +3889,9 @@ void taskModbusRead(void* parameter) {
         memset(&localData, 0, sizeof(VibrationData_t));
         localData.valid     = false;
         localData.timestamp = millis();
+#ifdef VERIFY_TEST
+        localData.poll_seq = currentPollSeq;  // [VERIFY_TEST] producer sequence identity (offline placeholder)
+#endif
         if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
           // queue ???? -- ??? critical, ??????????
         }
@@ -3786,6 +3984,17 @@ void taskStateMachine(void* parameter) {
                                     (sensorData.rms_overall > s_lastGoodRms * SPIKE_DEGLITCH_MULT ||
                                      sensorData.rms_overall > SANITY_RMS_MAX);
 
+#ifdef VERIFY_TEST
+        // [VERIFY_TEST] Checkpoint 3: pre-decision snapshot -- taken before the
+        // production if/else below can overwrite rms_overall or mutate
+        // s_lastGoodRms / s_glitchHold.
+        const float   diagRawRmsOverall  = sensorData.rms_overall;
+        const float   diagRawRmsZ        = sensorData.rms_z;
+        const float   diagLastGoodRmsPre = s_lastGoodRms;
+        const uint8_t diagGlitchHoldPre  = s_glitchHold;
+        uint8_t       diagBranch         = DIAG_BRANCH_NORMAL_ACCEPT;
+#endif
+
         if (sensorData.motor_state == 2 &&                       // เฉพาะตอน RUNNING
             s_lastGoodRms > 0.5f &&                              // มี baseline ที่เชื่อถือได้
             (isDropGlitch || isSpikeGlitch) &&
@@ -3807,6 +4016,9 @@ void taskStateMachine(void* parameter) {
           sensorData.rms_y = s_lastGoodY;
           sensorData.rms_z = s_lastGoodZ;
           s_glitchHold = 1;
+#ifdef VERIFY_TEST
+          diagBranch = isSpikeGlitch ? DIAG_BRANCH_SPIKE_SUPPRESS : DIAG_BRANCH_DROP_SUPPRESS;
+#endif
         } else {
           // ค่าปกติ หรือ low/high ต่อเนื่อง (ของจริง) → อัปเดต baseline และ reset hold
           s_lastGoodRms = sensorData.rms_overall;
@@ -3814,7 +4026,100 @@ void taskStateMachine(void* parameter) {
           s_lastGoodY   = sensorData.rms_y;
           s_lastGoodZ   = sensorData.rms_z;
           s_glitchHold  = 0;
+#ifdef VERIFY_TEST
+          // [VERIFY_TEST] Checkpoint 3A: classify why the else-branch was reached.
+          // Checks the same 4 gates the if-condition above tested, using the
+          // pre-decision snapshot -- does not re-derive or duplicate the decision
+          // itself (that decision already happened: this branch is only reached
+          // when the if-condition was false).
+          if (!(isDropGlitch || isSpikeGlitch)) {
+            diagBranch = DIAG_BRANCH_NORMAL_ACCEPT;
+          } else if (sensorData.motor_state != 2) {
+            diagBranch = DIAG_BRANCH_NOT_APPLICABLE_NOT_RUNNING;
+          } else if (diagLastGoodRmsPre <= 0.5f) {
+            diagBranch = DIAG_BRANCH_NOT_APPLICABLE_NO_BASELINE;
+          } else if (diagGlitchHoldPre != 0) {
+            diagBranch = isSpikeGlitch ? DIAG_BRANCH_SPIKE_PASS_AFTER_HOLD : DIAG_BRANCH_DROP_PASS_AFTER_HOLD;
+          } else {
+            // Unreachable if production logic is unchanged: all 4 if-condition
+            // gates would be true here, contradicting entry into this else-branch.
+            diagBranch = DIAG_BRANCH_NONE;
+          }
+#endif
         }
+
+#ifdef VERIFY_TEST
+        // [VERIFY_TEST] Checkpoint 3B/3C: construct and store exactly one diagnostic
+        // record for this valid consumed sample, unless the FSM is already FROZEN
+        // (once FROZEN, g_diagHead/g_diagCount/g_diagBuf must not change). PRE-decision
+        // fields come from the Checkpoint 3A snapshot; POST-decision fields are read
+        // only now, after the production if/else above has completed.
+        if (g_diagFsmState != DIAG_FSM_FROZEN) {
+          PollDiagRecord_t rec;
+          rec.poll_seq        = sensorData.poll_seq;
+          rec.rawRmsOverall   = diagRawRmsOverall;
+          rec.rawRmsZ         = diagRawRmsZ;
+          rec.freq_z          = sensorData.freq_z;
+          rec.lastGoodRmsPre  = diagLastGoodRmsPre;
+          rec.lastGoodRmsPost = s_lastGoodRms;
+          rec.outRms          = sensorData.rms_overall;
+          rec.isDropGlitch    = isDropGlitch;
+          rec.glitchHoldPre   = diagGlitchHoldPre;
+          rec.branch          = diagBranch;
+          rec.motorState      = sensorData.motor_state;
+
+          g_diagBuf[g_diagHead] = rec;
+          g_diagHead = (g_diagHead + 1) % 64;
+          if (g_diagCount < 64) g_diagCount++;
+
+          // [VERIFY_TEST] Checkpoint 3C: minimum trigger / post-trigger freeze FSM.
+          // Trigger fires only on the already-approved DIAG_BRANCH_DROP_SUPPRESS
+          // classification -- no re-derivation of the production deglitch condition.
+          if (g_diagFsmState == DIAG_FSM_ARMED) {
+            if (diagBranch == DIAG_BRANCH_DROP_SUPPRESS) {
+              // Poll N (this record, already written above) is the trigger --
+              // it does not count as post-trigger sample #1.
+              g_diagTriggerPollSeq = sensorData.poll_seq;  // [VERIFY_TEST] Checkpoint 5A: immutable trigger identity
+              g_diagFsmState  = DIAG_FSM_CAPTURING_POST;
+              g_diagPostCount = 0;
+            }
+          } else if (g_diagFsmState == DIAG_FSM_CAPTURING_POST) {
+            g_diagPostCount++;
+            if (g_diagPostCount >= 10) {
+              g_diagFsmState = DIAG_FSM_FROZEN;
+
+              // [VERIFY_TEST] Checkpoint 5D: construct the immutable snapshot
+              // exactly once, at this CAPTURING_POST -> FROZEN transition, from
+              // the now-frozen g_diagBuf/g_diagCount/g_diagHead/g_diagTriggerPollSeq.
+              // Chronological traversal uses only the approved ring-buffer formula;
+              // the trigger condition is not re-derived (g_diagTriggerPollSeq was
+              // already set, once, at the ARMED -> CAPTURING_POST transition above).
+              // Static storage duration (.bss, not the call stack) per Checkpoint
+              // 5D Step 4 -- never a large automatic/local variable.
+              static PollDiagSnapshot_t s_diagSnapshotStaging;
+              s_diagSnapshotStaging.fsm_state        = g_diagFsmState;
+              s_diagSnapshotStaging.count            = (uint8_t)g_diagCount;
+              s_diagSnapshotStaging.head             = (uint8_t)g_diagHead;
+              s_diagSnapshotStaging.trigger_poll_seq = g_diagTriggerPollSeq;
+
+              const uint32_t oldestIndex = (g_diagHead + 64 - g_diagCount) % 64;
+              for (uint32_t i = 0; i < g_diagCount; i++) {
+                const uint32_t physicalIndex = (oldestIndex + i) % 64;
+                s_diagSnapshotStaging.records[i]               = g_diagBuf[physicalIndex];
+                s_diagSnapshotStaging.physical_buffer_index[i] = (uint8_t)physicalIndex;
+              }
+
+              if (queueDiagSnapshot == NULL) {
+                g_diagHandoffState = DIAG_HANDOFF_QUEUE_UNAVAILABLE;
+              } else if (xQueueSend(queueDiagSnapshot, &s_diagSnapshotStaging, 0) == pdTRUE) {
+                g_diagHandoffState = DIAG_HANDOFF_SENT;
+              } else {
+                g_diagHandoffState = DIAG_HANDOFF_SEND_FAILED;
+              }
+            }
+          }
+        }
+#endif
       }
 
       // [v16.3ab] เผยแพร่ rms (หลัง de-glitch) ให้ isAnalysisReady() อ่าน — atomic float, ไม่ต้อง mutex
@@ -5519,6 +5824,12 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     s["peak"]       = round(currentPeak            * 100) / 100.0f;
     // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
 
+    // [DESIGN-0004] Peak Velocity X/Y/Z -- signed (no abs(), Decision 4), gated by
+    // MOTOR_RUNNING at publish time only (Decision 5, mirrors cf_x/y/z pattern below)
+    s["peak_velocity_x"] = (data->motor_state == 2) ? round(data->peak_velocity_x * 100) / 100.0f : 0.0f;
+    s["peak_velocity_y"] = (data->motor_state == 2) ? round(data->peak_velocity_y * 100) / 100.0f : 0.0f;
+    s["peak_velocity_z"] = (data->motor_state == 2) ? round(data->peak_velocity_z * 100) / 100.0f : 0.0f;
+
     s["temp"]  = round(data->temperature *  10) /  10.0f;
     s["rpm"]   = data->rpm;
 
@@ -5560,6 +5871,26 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     s["time_synced"] = g_timeSync.synced;
 
     char buf[1000];
+
+    // [DESIGN-0004] Requirement 6: measure actual size via ArduinoJson measureJson(),
+    // not an estimate -- reports the true serialized size even if serializeJson() below
+    // truncates against the fixed char buf[] below.
+    // NOTE: library is ArduinoJson v7.4.3 -- StaticJsonDocument<960> here is a deprecated
+    // compatibility shim; its .capacity() would only echo the literal "960", not a real
+    // pool limit (v7's JsonDocument allocates dynamically), so it is not logged here.
+    // memoryUsage() reports the JsonDocument's actual current allocation instead.
+    // [Code review fix] Compiled out entirely in production -- zero runtime cost
+    // when undefined, since neither the measureJson() call nor the printf exist
+    // in the compiled binary at all.
+    // Enable for diagnostic builds using: -DDEBUG_JSON_SIZE
+    // No source modification is required.
+#ifdef DEBUG_JSON_SIZE
+    size_t measuredSensorSize = measureJson(s);
+    Serial.printf("[DESIGN-0004] /sensor measureJson()=%u B (doc memoryUsage=%u B, buf cap=%u B)\n",
+                  (unsigned)measuredSensorSize, (unsigned)s.memoryUsage(),
+                  (unsigned)sizeof(buf));
+#endif
+
     size_t szSensor = serializeJson(s, buf, sizeof(buf));
     if (szSensor == 0 || szSensor >= sizeof(buf) - 1) {
       Serial.printf("[WARN] /sensor JSON truncated! sz=%u buf=%u\n",
@@ -5804,6 +6135,44 @@ void taskAnalytics(void* parameter) {
 
   while (1) {
     vTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+#ifdef VERIFY_TEST
+    // [VERIFY_TEST] Checkpoint 5E: one-shot, non-blocking consumption of the
+    // Checkpoint 5D frozen diagnostic snapshot. Queue capacity is 1 and
+    // taskStateMachine() sends exactly once per boot (at the CAPTURING_POST
+    // -> FROZEN transition), so this receive drains it exactly once -- no
+    // retry/poll loop, no second one-shot flag needed.
+    if (queueDiagSnapshot != NULL) {
+      static PollDiagSnapshot_t s_diagSnapshotRx;
+      if (xQueueReceive(queueDiagSnapshot, &s_diagSnapshotRx, 0) == pdTRUE) {
+        // Defensive cap only -- BEGIN/END still print the actual received
+        // count; count is never rewritten.
+        const uint8_t safeCount = (s_diagSnapshotRx.count <= 64) ? s_diagSnapshotRx.count : 64;
+
+        Serial.printf("[DIAG_SNAPSHOT_BEGIN] fsm_state=%u count=%u head=%u trigger_poll_seq=%lu\n",
+                      s_diagSnapshotRx.fsm_state, s_diagSnapshotRx.count, s_diagSnapshotRx.head,
+                      (unsigned long)s_diagSnapshotRx.trigger_poll_seq);
+
+        for (uint8_t i = 0; i < safeCount; i++) {
+          const PollDiagRecord_t& rec = s_diagSnapshotRx.records[i];
+          // Trigger identity derived only this way -- never re-derived from RMS/frequency.
+          const bool isTrigger = (rec.poll_seq == s_diagSnapshotRx.trigger_poll_seq);
+          Serial.printf("[DIAG_RECORD] chronological_index=%u physical_buffer_index=%u poll_seq=%lu "
+                        "is_trigger=%u rawRmsOverall=%.3f rawRmsZ=%.3f freq_z=%.3f "
+                        "lastGoodRmsPre=%.3f lastGoodRmsPost=%.3f outRms=%.3f "
+                        "isDropGlitch=%u glitchHoldPre=%u branch=%u motorState=%u\n",
+                        (unsigned)i, s_diagSnapshotRx.physical_buffer_index[i], (unsigned long)rec.poll_seq,
+                        (unsigned)isTrigger, rec.rawRmsOverall, rec.rawRmsZ, rec.freq_z,
+                        rec.lastGoodRmsPre, rec.lastGoodRmsPost, rec.outRms,
+                        (unsigned)rec.isDropGlitch, (unsigned)rec.glitchHoldPre,
+                        (unsigned)rec.branch, (unsigned)rec.motorState);
+        }
+
+        Serial.printf("[DIAG_SNAPSHOT_END] count=%u trigger_poll_seq=%lu\n",
+                      s_diagSnapshotRx.count, (unsigned long)s_diagSnapshotRx.trigger_poll_seq);
+      }
+    }
+#endif
 
     // ── Patent Claim 2: update slot duration from current RPM ────────────
     // Read RPM (written atomically by Core 0 processRPM).
@@ -6579,6 +6948,17 @@ void setup() {
   } else {
     Serial.println("[Init] MQTT outbound queue created (dormant)");
   }
+
+#ifdef VERIFY_TEST
+  // [VERIFY_TEST] Checkpoint 5D: one-shot diagnostic snapshot queue. Creation
+  // failure must not restart the DUT or alter production behavior -- recorded
+  // in g_diagHandoffState only; taskStateMachine() null-checks the handle
+  // before its one-shot send attempt.
+  queueDiagSnapshot = xQueueCreate(QUEUE_SIZE_DIAG_SNAPSHOT, sizeof(PollDiagSnapshot_t));
+  if (queueDiagSnapshot == NULL) {
+    g_diagHandoffState = DIAG_HANDOFF_QUEUE_UNAVAILABLE;
+  }
+#endif
 
   delay(2000);
 
