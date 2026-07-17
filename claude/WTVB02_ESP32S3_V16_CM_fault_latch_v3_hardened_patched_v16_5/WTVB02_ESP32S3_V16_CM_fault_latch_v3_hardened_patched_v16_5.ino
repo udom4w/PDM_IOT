@@ -1611,6 +1611,16 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 #define CT_RATIO_SECONDARY_A        1.0f    // external CT ratio secondary (A)
 #define CT_TURNS                    1       // times the conductor loops through the CT clamp
 #define MOTOR_RUNNING_PERCENT       20.0f   // % of expected full-load reading -- single stateless threshold
+// [Commit 4A] EMA smoothing for the Current evidence path -- CTR4A01's raw
+// Modbus reading has zero existing filtering (single instantaneous sample
+// every 500ms). Alpha matches RPM_SMOOTH_ALPHA (0.25) deliberately, for two
+// reasons: (1) consistency -- both evidence paths use the same smoothing
+// idiom rather than inventing a second, arbitrarily-different one; (2) time
+// constant -- ~1/alpha = 4 samples to reach ~63% of a step change, settling
+// in roughly 1-2s, fast enough not to meaningfully compound the existing
+// 15s/30s confirmed-absence timeouts, while still absorbing single-sample
+// noise and inrush transients before the threshold comparison.
+#define CURRENT_EMA_ALPHA           0.25f
 
 // --- Trend Sample Struct (Layer 1) ---
 typedef struct {
@@ -2688,12 +2698,16 @@ static float getCurrentRuntimeHour() {
   return g_runtimeHour;
 }
 
-// [Commit 3] Builds the semantic evidence updateMotorStateMachine() will act
-// on, based on g_motorStateSource. Each branch translates its own raw
+// [Commit 3/4A] Builds the semantic evidence updateMotorStateMachine() will
+// act on, based on g_motorStateSource. Each branch translates its own raw
 // measurement into {signalPresent, ageMs} only -- no raw values, thresholds,
-// or source-specific config (RATED_RPM, nameplate/CT/percent) ever leave
-// this function. Stateless: every call is a pure function of its current
-// inputs, with no memory of any previous call.
+// filter state, or source-specific config (RATED_RPM, nameplate/CT/percent)
+// ever leave this function; updateMotorStateMachine() remains completely
+// unaware of any of it. RPM/Proximity branches remain pure functions of
+// their current inputs with no memory of previous calls. The Current branch
+// (Commit 4A) now holds one piece of function-local filter state (the EMA
+// accumulator) -- confined entirely to this function, never exposed
+// elsewhere, still never touching the frozen MotorStateEvidence shape.
 // PROXIMITY is not implemented yet -- placeholder mirrors RPM for now.
 static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, float currentA) {
   MotorStateEvidence ev;
@@ -2704,8 +2718,16 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       static const float kExpectedFullLoadA = MOTOR_NAMEPLATE_CURRENT_A * CT_TURNS *
                                                (CT_RATIO_SECONDARY_A / CT_RATIO_PRIMARY_A);
       static const float kThresholdA = kExpectedFullLoadA * (MOTOR_RUNNING_PERCENT / 100.0f);
-      // Single stateless threshold per Commit 3 scope -- no hysteresis yet.
-      ev.signalPresent = (currentA >= kThresholdA);
+
+      // [Commit 4A] EMA filter -- see CURRENT_EMA_ALPHA for full justification.
+      // Function-local static: persists across calls, confined entirely to
+      // this branch -- not a global, not visible outside buildMotorStateEvidence().
+      static float s_currentFiltered = 0.0f;
+      s_currentFiltered = CURRENT_EMA_ALPHA * currentA + (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
+
+      // Single threshold on the FILTERED value -- no hysteresis, no latch,
+      // per Commit 4A scope.
+      ev.signalPresent = (s_currentFiltered >= kThresholdA);
       ev.ageMs = millis() - g_lastCurrentSampleMs;
       break;
     }
