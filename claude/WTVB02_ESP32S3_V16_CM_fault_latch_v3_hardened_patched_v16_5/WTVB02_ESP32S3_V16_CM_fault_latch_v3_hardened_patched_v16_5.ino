@@ -202,6 +202,17 @@ static constexpr const char* GPRS_PASS = "";
 #define FORCE_STOP_TIMEOUT_MS 2000    // No pulse > 2 s   -> STOPPED
 #define FAULT_WINDOW_MS       3000    // RUNNING but no pulse > 3 s -> prox=0 (Fault)
 #define RUNNING_WARMUP_MS     2500    // [v16.3z] ต้อง in-band ต่อเนื่อง 2.5s ก่อนเป็น RUNNING (กัน bounce/spurious)
+// [Commit 3A] Confirmed-absence timeouts -- deliberately separate from
+// NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS above, which are calibrated for
+// "no signal at all" (sub-second/2s). These instead bound "evidence is fresh
+// but signalPresent has been continuously false" -- e.g. Current reads
+// succeeding but reporting below threshold. Must be well above
+// RUNNING_WARMUP_MS so a normal startup ramp (signalPresent=false while
+// climbing toward the band) is never mistaken for a stopped motor.
+// PLACEHOLDER VALUES -- not validated against real startup ramp durations;
+// review before relying on this in production, especially for RPM.
+#define ABSENT_STOPPING_MS    15000   // signalPresent false (but fresh) > 15s -> STOPPING
+#define ABSENT_STOPPED_MS     30000   // ... > 30s -> STOPPED
 #define STOPPED_CLEAR_MS      (30UL*60UL*1000UL)  // [v16.3aa] หยุด > 30 นาที = clear trend (bearing state เทียบไม่ได้แล้ว)
 #define COLD_START_TEMP_DROP_C 5.0f   // [v16.3ad] temp ลดจากตอนหยุด >= 5°C = bearing เย็นลง = cold start (เทียบ trend ไม่ได้)
 #define RPM_FREQ_GATE         400     // v16.0: RPM floor สำหรับ freq_ratio / freq_alert
@@ -1135,15 +1146,17 @@ enum MotorStateSource {
   MOTOR_SRC_PROXIMITY
 };
 
-// [vNext] Generic evidence the state machine acts on -- decouples
-// updateMotorStateMachine() from any specific sensor. "value" is whatever
-// filtered magnitude the active source produces (RPM today); "msSinceLastSample"
-// is how long it's been since that source last had a fresh reading.
-// [Commit 2A] existing decay/zero mutation of "value" is preserved as-is,
-// applied here instead of directly to g_rpmFiltered; caller writes it back.
+// [Commit 3] Semantic evidence the state machine acts on -- decouples
+// updateMotorStateMachine() from any specific sensor. Each source translates
+// its own raw measurement into these two facts:
+//   signalPresent -- does this source currently observe "motor active"
+//                    conditions (RPM: in-band; Current: above threshold)?
+//   ageMs         -- time since this source last had a fresh/valid reading.
+// Deliberately minimal: no raw values, no thresholds, no source-specific
+// config -- those stay entirely inside buildMotorStateEvidence().
 struct MotorStateEvidence {
-  float    value;
-  uint32_t msSinceLastSample;
+  bool     signalPresent;
+  uint32_t ageMs;
 };
 
 // [v16.3ab] Analysis freeze reason (derived state) — วางไว้ต้นไฟล์เพราะ .ino auto-prototype
@@ -1588,6 +1601,17 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 #define CURRENT_SAMPLE_INTERVAL_S  0.5f    // same, in seconds (for linRegSlope())
 #define TEMP_SLOPE_WARN     0.001f   //  degC per sample -> temp rising (0.004 degC/s)
 
+// --- Current-based Motor State evidence [Commit 3] -- Layer 1 config -----
+// Consumed ENTIRELY inside buildMotorStateEvidence()'s MOTOR_SRC_CURRENT
+// branch; updateMotorStateMachine() never sees any of these values.
+// No real site values known yet -- placeholders until commissioning data
+// (motor nameplate FLA, installed CT ratio/turns) is available.
+#define MOTOR_NAMEPLATE_CURRENT_A   1.0f    // motor Full-Load Amps (nameplate) -- placeholder
+#define CT_RATIO_PRIMARY_A          1.0f    // external CT ratio primary (A) -- 1:1 if no external CT
+#define CT_RATIO_SECONDARY_A        1.0f    // external CT ratio secondary (A)
+#define CT_TURNS                    1       // times the conductor loops through the CT clamp
+#define MOTOR_RUNNING_PERCENT       20.0f   // % of expected full-load reading -- single stateless threshold
+
 // --- Trend Sample Struct (Layer 1) ---
 typedef struct {
   float rms;          // rms_overall [mm/s]
@@ -1610,6 +1634,7 @@ static float              g_currentBuf[CURRENT_BUF_SIZE];
 static volatile uint16_t  g_currentHead  = 0;
 static volatile uint16_t  g_currentCount = 0;
 static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
+static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of last SUCCESSFUL CTR4A01 read (0=never); drives MotorStateEvidence.ageMs for MOTOR_SRC_CURRENT
 
 // ============================================================================
 // MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
@@ -2026,6 +2051,7 @@ static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
 // API again. Default RPM preserves current behavior exactly.
 static MotorStateSource g_motorStateSource  = MOTOR_SRC_RPM;
 static uint32_t        g_runInBandSince      = 0;   // [v16.3z] millis() ที่ rpm เริ่ม in-band ต่อเนื่อง (0=ยังไม่เข้า)
+static uint32_t        g_absentSince         = 0;   // [Commit 3A] millis() when signalPresent first became continuously false (0=currently present)
 static uint32_t        g_motorStoppedSince   = 0;   // [v16.3aa] millis() ที่เข้า STOPPED (0=ไม่ได้หยุด) — วัดระยะเวลาหยุด
 static volatile AnalyticsCommand_t g_analyticsCmd = ANALYTICS_NONE; // [v16.3ac] Core0 → Core1 command (แทน boolean flag)
 static float           g_tempAtStop          = 0.0f; // [v16.3ad] อุณหภูมิตอนเข้า STOPPED — ใช้ตรวจ cold start ตอน resume
@@ -2662,54 +2688,82 @@ static float getCurrentRuntimeHour() {
   return g_runtimeHour;
 }
 
-// [vNext] Builds the evidence updateMotorStateMachine() will act on, based on
-// g_motorStateSource. CURRENT/PROXIMITY branches are placeholders -- they
-// currently return the same RPM-derived values as MOTOR_SRC_RPM, so behavior
-// is identical regardless of source until those paths are implemented.
-static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs) {
+// [Commit 3] Builds the semantic evidence updateMotorStateMachine() will act
+// on, based on g_motorStateSource. Each branch translates its own raw
+// measurement into {signalPresent, ageMs} only -- no raw values, thresholds,
+// or source-specific config (RATED_RPM, nameplate/CT/percent) ever leave
+// this function. Stateless: every call is a pure function of its current
+// inputs, with no memory of any previous call.
+// PROXIMITY is not implemented yet -- placeholder mirrors RPM for now.
+static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, float currentA) {
   MotorStateEvidence ev;
   switch (g_motorStateSource) {
-    case MOTOR_SRC_CURRENT:
-      // [placeholder] not implemented yet
-      ev.value = g_rpmFiltered;
-      ev.msSinceLastSample = timeSincePulseMs;
+    case MOTOR_SRC_CURRENT: {
+      // Layer 1 config consumed entirely here. static const -> computed once
+      // (first call), not re-derived every cycle.
+      static const float kExpectedFullLoadA = MOTOR_NAMEPLATE_CURRENT_A * CT_TURNS *
+                                               (CT_RATIO_SECONDARY_A / CT_RATIO_PRIMARY_A);
+      static const float kThresholdA = kExpectedFullLoadA * (MOTOR_RUNNING_PERCENT / 100.0f);
+      // Single stateless threshold per Commit 3 scope -- no hysteresis yet.
+      ev.signalPresent = (currentA >= kThresholdA);
+      ev.ageMs = millis() - g_lastCurrentSampleMs;
       break;
+    }
     case MOTOR_SRC_PROXIMITY:
-      // [placeholder] not implemented yet
-      ev.value = g_rpmFiltered;
-      ev.msSinceLastSample = timeSincePulseMs;
+      // [placeholder] not implemented yet -- falls back to the RPM computation
+      ev.signalPresent = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
+                         (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+      ev.ageMs = timeSincePulseMs;
       break;
     case MOTOR_SRC_RPM:
     default:
-      ev.value = g_rpmFiltered;
-      ev.msSinceLastSample = timeSincePulseMs;
+      ev.signalPresent = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
+                         (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+      ev.ageMs = timeSincePulseMs;
       break;
   }
   return ev;
 }
 
-// [v16.6e] Motor State Machine -- extracted verbatim from processRPM() so the
-// state-decision logic has one dedicated entry point. Driven by a generic
-// MotorStateEvidence rather than RPM globals directly -- this separation is
-// prep work so a future Current-based input source can be substituted in
-// buildMotorStateEvidence() without touching this function. [Commit 2A]
-// Existing g_rpmFiltered decay/zero logic is kept exactly where it was --
-// only now applied to evidence.value, written back by the caller -- no
-// behavior change. (A later, separate commit may relocate this logic.)
-static void updateMotorStateMachine(MotorStateEvidence& evidence) {
-  if (evidence.msSinceLastSample > FORCE_STOP_TIMEOUT_MS) {
-    g_motorRunState = MOTOR_STOPPED;
-    evidence.value   = 0.0f;
+// [Commit 3A] Motor State Machine -- consumes only semantic evidence
+// (signalPresent, ageMs). Knows nothing about RPM, Current, CT ratios,
+// nameplate values, or threshold percentages -- those all stay inside
+// buildMotorStateEvidence(). Responsibilities: STARTING/RUNNING debounce
+// (warmup), STOPPING/STOPPED (timeout, now via TWO independent triggers --
+// see below), and state transition. No RPM-value mutation happens here
+// (evidence carries no numeric value to mutate); the existing g_rpmFiltered
+// decay/zero on STOPPED/STOPPING lives in processRPM(), gated on the
+// resulting state -- see that function.
+//
+// Two independent, source-agnostic triggers can each drive STOPPING/STOPPED:
+//   (a) evidence itself is stale (ageMs) -- "we don't currently know"
+//   (b) evidence is fresh but has been continuously absent (signalPresent
+//       false) for a while -- "we know, and it says not-running"
+// For RPM these two conditions normally coincide (no pulses = both stale
+// and absent at once), so behavior is effectively unchanged for the typical
+// no-pulse-at-all case. They diverge only if RPM pulses keep arriving
+// (ageMs stays low) while never entering the rated band for longer than
+// ABSENT_STOPPING_MS/ABSENT_STOPPED_MS -- previously this sat in STARTING
+// indefinitely; it now eventually reaches STOPPING/STOPPED. This is an
+// intentional, accepted behavior change (see Commit 3A review) needed to
+// fix the equivalent, much more likely Current-source gap: CTR4A01 comms
+// staying healthy (ageMs low) while current genuinely reads "not running".
+static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
+  if (evidence.signalPresent) {
+    g_absentSince = 0;                    // [Commit 3A] reset absence timer
+  } else if (g_absentSince == 0) {
+    g_absentSince = millis();             // [Commit 3A] start absence timer
+  }
+  uint32_t absentMs = evidence.signalPresent ? 0 : (millis() - g_absentSince);
+
+  if (evidence.ageMs > FORCE_STOP_TIMEOUT_MS || absentMs > ABSENT_STOPPED_MS) {
+    g_motorRunState  = MOTOR_STOPPED;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else if (evidence.msSinceLastSample > NO_PULSE_STOPPING_MS) {
+  } else if (evidence.ageMs > NO_PULSE_STOPPING_MS || absentMs > ABSENT_STOPPING_MS) {
     g_motorRunState  = MOTOR_STOPPING;
-    evidence.value  *= 0.80f;
-    if (evidence.value < MIN_RPM_VALID) evidence.value = 0.0f;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
   } else {
-    bool inBand = (evidence.value >= (RATED_RPM - RATED_RPM_TOL)) &&
-                  (evidence.value <= (RATED_RPM + RATED_RPM_TOL));
-    if (inBand) {
+    if (evidence.signalPresent) {
       // [v16.3z] Warm-up debounce: ต้อง in-band ต่อเนื่อง RUNNING_WARMUP_MS ก่อนเป็น RUNNING
       // กัน spurious STOPPED→RUNNING จาก pulse ที่หายชั่วขณะ (ซึ่งจะ flush freq_ratio 240 slots)
       if (g_runInBandSince == 0) g_runInBandSince = millis();
@@ -2757,9 +2811,21 @@ static void processRPM(VibrationData_t* data) {
   }
 
   // ---------- Motor State Machine ----------
-  MotorStateEvidence evidence = buildMotorStateEvidence(timeSincePulseMs);
+  MotorStateEvidence evidence = buildMotorStateEvidence(timeSincePulseMs, data->current_a);
   updateMotorStateMachine(evidence);
-  g_rpmFiltered = evidence.value;   // [Commit 2A] write back FORCE_STOP/STOPPING decay -- same value as before, existing logic unmoved
+
+  // [Commit 3] RPM-specific signal conditioning on STOPPED/STOPPING -- lives
+  // here because MotorStateEvidence is now purely semantic (no mutable
+  // numeric value to carry this). Gated on the resulting state rather than
+  // re-checking timeSincePulseMs directly, since MOTOR_STOPPED/MOTOR_STOPPING
+  // are only ever set by updateMotorStateMachine()'s ageMs timeout checks --
+  // same net effect on g_rpmFiltered, same timing, as the original inline code.
+  if (g_motorRunState == MOTOR_STOPPED) {
+    g_rpmFiltered = 0.0f;
+  } else if (g_motorRunState == MOTOR_STOPPING) {
+    g_rpmFiltered *= 0.80f;
+    if (g_rpmFiltered < MIN_RPM_VALID) g_rpmFiltered = 0.0f;
+  }
 
   // v15.2 Fix 18: Reset g_velPeakHold เมื่อ motor transition → STOPPED
   // ป้องกัน peak hold สะสมค่า impulse จาก deceleration ค้างถึง publish ถัดไป
@@ -3592,7 +3658,10 @@ static bool readCTR4A01Current(float &amps) {
   bool ok = readCurrentSensor(currentMa);
   modbus.begin(MODBUS_SLAVE_ID, SerialRS485);  // restore WTVB02 addressing
   vTaskDelay(pdMS_TO_TICKS(5));
-  if (ok) amps = currentMa / 1000.0f;
+  if (ok) {
+    amps = currentMa / 1000.0f;
+    g_lastCurrentSampleMs = millis();  // [Commit 3] only updated on success -- drives evidence ageMs
+  }
   else    g_ctReadErrors++;  // [v16.6b] remote-visible failure counter -- see /vibration current_read_errors
   return ok;
 }
