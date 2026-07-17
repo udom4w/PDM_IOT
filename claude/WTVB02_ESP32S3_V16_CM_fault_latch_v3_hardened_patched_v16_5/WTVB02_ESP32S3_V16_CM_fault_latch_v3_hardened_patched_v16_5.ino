@@ -131,6 +131,11 @@
 // --- Modbus Configuration ---
 #define MODBUS_BAUDRATE 9600
 #define MODBUS_SLAVE_ID 0x50
+
+// --- CTR4A01 Current Sensor (shared RS485 bus, multi-drop Modbus) [v16.6a] ---
+// Register map reused verbatim from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino
+#define CURRENT_SENSOR_ID   0x01     // CTR4A01 slave address
+#define CT_REG_AC_CURRENT   0x0000   // function 04 (input register), unit mA (0-5000 = 0-5A)
 // §6.4.14-16: Velocity RMS (True RMS, ÷1000 → mm/s)
 // เปลี่ยนจาก VX/VY/VZ (0x3A Peak ÷100) → VRMSX/Y/Z (True RMS ÷1000)
 // ต้องตั้ง DRM=0x02 (Frequency domain) เพื่อให้ค่าถูกต้อง
@@ -1190,6 +1195,10 @@ typedef struct {
   float    runtime_hour;  // Accumulated running hours (NVS persistent)
   uint8_t  prox;          // 1=pulse normal, 0=Fault/?????? pulse
 
+  // --- CTR4A01 current sensor [v16.6a] ---
+  float    current_a;     // AC current [A], valid only if current_valid
+  bool     current_valid; // true only on cycles where a fresh 500ms CT sample was taken
+
   // --- [v16.3y] Diagnostic fields for VRMS glitch forensics (steps 1-3) ---
   int16_t  raw_x;         // ค่าดิบ register VRMS X ก่อนแปลง (getResponseBuffer) — 0 = sensor คืน 0
   int16_t  raw_y;         // ค่าดิบ register VRMS Y
@@ -1550,6 +1559,13 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 #define TREND_SLOPE_DOWN   -0.002f   // mm/s per sample -> "DOWN"
 #define SPIKE_RMS_FACTOR    1.5f     // peak > WARNING_RMS x 1.5 -> ??? spike
 #define FREQ_DRIFT_THRESH   0.15f    // freq_ratio drift > 0.15x -> drift detected
+
+// --- Current Trend Buffer (CTR4A01, 500ms cadence) [v16.6a] ---
+#define CURRENT_BUF_SIZE           120     // samples (60s @ 2Hz)
+#define CURRENT_WINDOW_SAMPLES      60     // samples used for regression (30s window)
+#define CURRENT_MIN_SAMPLES         10     // minimum samples before slope reported (5s)
+#define CURRENT_SAMPLE_INTERVAL_MS 500     // acquisition cadence (matches CTR4A01_SENSOR.ino SAMPLE_RATE_HZ=2)
+#define CURRENT_SAMPLE_INTERVAL_S  0.5f    // same, in seconds (for linRegSlope())
 #define TEMP_SLOPE_WARN     0.001f   //  degC per sample -> temp rising (0.004 degC/s)
 
 // --- Trend Sample Struct (Layer 1) ---
@@ -1566,6 +1582,13 @@ typedef struct {
 static TrendSample_t     g_trendBuf[TREND_BUF_SIZE];
 static volatile uint16_t g_trendHead  = 0;
 static volatile uint16_t g_trendCount = 0;
+
+// --- Current Trend Buffer Globals (Core 0 writes / Core 1 reads) [v16.6a] ---
+// Same cross-core convention as g_trendBuf above: plain float array + volatile
+// head/count (atomic on Xtensa), no mutex -- single writer (taskStateMachine).
+static float              g_currentBuf[CURRENT_BUF_SIZE];
+static volatile uint16_t  g_currentHead  = 0;
+static volatile uint16_t  g_currentCount = 0;
 
 // ============================================================================
 // MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
@@ -1872,6 +1895,7 @@ typedef struct {
   // -- Phase 1 fields (30s single-resolution) ------------------------------
   float    rms_slope;       // mm/s per sample (+= rising, -= falling)
   float    temp_slope;      //  degC per sample
+  float    current_slope;   // [v16.6a] A per second (CTR4A01, 500ms samples, no thresholds)
   int8_t   trend_dir;       // +1=UP  0=STABLE  -1=DOWN  (from linreg slope)
   uint16_t spike_count;     // peak > WARNINGx1.5 ?? 30s window
   float    freq_drift_x;    // harmonic drift X
@@ -3448,6 +3472,33 @@ void checkAndSyncTime() {
 // CORE 0 TASKS - TIME CRITICAL OPERATIONS
 // ============================================================================
 
+// [v16.6a] CTR4A01 current sensor read -- reused verbatim (same signature/body)
+// from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino readCurrentSensor().
+// Caller must already have the bus addressed to CURRENT_SENSOR_ID -- see
+// readCTR4A01Current() below, which owns that addressing.
+static bool readCurrentSensor(uint16_t &milliAmps) {
+  uint8_t r = modbus.readInputRegisters(CT_REG_AC_CURRENT, 1);
+  bool success = (r == modbus.ku8MBSuccess);
+  if (success) milliAmps = modbus.getResponseBuffer(0);
+  return success;
+}
+
+// [v16.6a] Owns the CTR4A01 slave-ID switch + read + restore sequence, so
+// taskModbusRead() only has to handle cadence gating and where to store the
+// result -- not Modbus addressing details. Assumes RS485 is already enabled
+// by the caller (shares the WTVB02 bus/rs485Enable() window, single
+// acquisition source, no new UART/task/timer). Always restores
+// MODBUS_SLAVE_ID before returning, whether the read succeeded or not.
+static bool readCTR4A01Current(float &amps) {
+  uint16_t currentMa = 0;
+  modbus.begin(CURRENT_SENSOR_ID, SerialRS485);
+  bool ok = readCurrentSensor(currentMa);
+  modbus.begin(MODBUS_SLAVE_ID, SerialRS485);  // restore WTVB02 addressing
+  vTaskDelay(pdMS_TO_TICKS(5));
+  if (ok) amps = currentMa / 1000.0f;
+  return ok;
+}
+
 /**
  * Task 1: Modbus RTU Communication (CORE 0, Priority 5)
  * Runs every 250ms
@@ -3472,6 +3523,7 @@ void taskModbusRead(void* parameter) {
   Serial.println("[CORE 0] Modbus task started");
 
   static uint32_t s_lastPollStart = 0;  // [v16.3y] วัด poll interval จริง
+  static uint32_t s_lastCurrentSampleMs = 0;  // [v16.6a] CTR4A01 500ms cadence gate
 
   while (1) {
     g_sensorReads++;
@@ -3570,6 +3622,16 @@ void taskModbusRead(void* parameter) {
       raw_peak_z = (int16_t)modbus.getResponseBuffer(2);
     }
     // ทั้ง T3/T4/T5/T6 เป็น optional -- ไม่ set success = false ถ้า fail
+
+    // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
+    // Cadence gating + result storage only -- readCTR4A01Current() owns the
+    // slave-ID switch/restore (shares this RS485-enabled window, runs before
+    // rs485Disable() below).
+    localData.current_valid = false;
+    if (millis() - s_lastCurrentSampleMs >= CURRENT_SAMPLE_INTERVAL_MS) {
+      s_lastCurrentSampleMs = millis();
+      localData.current_valid = readCTR4A01Current(localData.current_a);
+    }
 
     rs485Disable();
 
@@ -4151,6 +4213,16 @@ void taskStateMachine(void* parameter) {
         };
         g_trendHead  = (g_trendHead + 1) % TREND_BUF_SIZE;
         if (g_trendCount < TREND_BUF_SIZE) g_trendCount++;
+      }
+
+      // -- Push current sample into circular buffer (Core 0 only, no mutex) [v16.6a] --
+      // sensorData.current_valid is only true on cycles where taskModbusRead actually
+      // sampled CTR4A01 (~500ms cadence); other cycles are skipped so calcTrend()'s
+      // regression sees one entry per real sample, not per 250ms task tick.
+      if (sensorData.current_valid) {
+        g_currentBuf[g_currentHead] = sensorData.current_a;
+        g_currentHead  = (g_currentHead + 1) % CURRENT_BUF_SIZE;
+        if (g_currentCount < CURRENT_BUF_SIZE) g_currentCount++;
       }
 
       // Determine new state based on RMS
@@ -5440,6 +5512,50 @@ static float computeRmsVariance(const AggSample_t* buf, uint16_t bufHead,
 }
 
 // ============================================================================
+// GENERIC LINEAR REGRESSION -- linRegSlope()  [v16.6a]
+// ============================================================================
+// Least-squares slope over the most recent `windowSamples` entries of a
+// circular buffer, addressed via an accessor callback (X = sample index
+// 0..n-1, Y = getValue(idx)) instead of a flat float array -- lets callers
+// read directly out of whatever storage they already have (a struct array's
+// field, a plain float array, ...) with no intermediate copy.
+// Generalizes the regression math that was previously inlined in calcTrend()
+// for temp_slope. Reused for:
+//   - temp_slope:    intervalSec=1.0f -- no time-scaling, preserves the
+//                    original "degC per sample" output exactly.
+//   - current_slope: intervalSec=CURRENT_SAMPLE_INTERVAL_S -- normalizes to
+//                    "per second" since current is sampled at a different,
+//                    fixed 500ms cadence.
+// Returns 0.0f if fewer than 2 samples are available.
+// ============================================================================
+static float linRegSlope(uint16_t bufHead, uint16_t bufCount, uint16_t bufSize,
+                          uint16_t windowSamples, float intervalSec,
+                          float (*getValue)(uint16_t idx)) {
+  uint16_t n = (bufCount < windowSamples) ? bufCount : windowSamples;
+  if (n < 2 || bufSize == 0) return 0.0f;
+  uint16_t startIdx = (bufHead + bufSize - n) % bufSize;
+  double sumX=0.0, sumX2=0.0, sumY=0.0, sumXY=0.0;
+  for (uint16_t i = 0; i < n; i++) {
+    uint16_t idx = (startIdx + i) % bufSize;
+    double x = (double)i;
+    double y = (double)getValue(idx);
+    sumX  += x;
+    sumX2 += x * x;
+    sumY  += y;
+    sumXY += x * y;
+  }
+  double denom = (double)n * sumX2 - sumX * sumX;
+  if (denom == 0.0) return 0.0f;
+  float slopePerSample = (float)(((double)n * sumXY - sumX * sumY) / denom);
+  return (intervalSec > 0.0f) ? (slopePerSample / intervalSec) : slopePerSample;
+}
+
+// Accessors for linRegSlope() -- trivial index->value lookups into the two
+// buffers it's used against. [v16.6a]
+static float trendBufTempAccessor(uint16_t idx) { return g_trendBuf[idx].temp; }
+static float currentBufAccessor(uint16_t idx)   { return g_currentBuf[idx]; }
+
+// ============================================================================
 // TREND ENGINE -- calcTrend()
 // ============================================================================
 // ???????? publishTelemetry() (Core 1) ???? build JSON
@@ -5471,7 +5587,6 @@ static void calcTrend() {
 
     double sumX=0, sumX2=0;
     double sumRms=0, sumXRms=0;
-    double sumTemp=0, sumXTemp=0;
     double sumFrX=0, sumFrY=0, sumFrZ=0;
     uint16_t spike_count = 0;
 
@@ -5482,8 +5597,6 @@ static void calcTrend() {
       sumX2    += (double)i * i;
       sumRms   += s->rms;
       sumXRms  += (double)i * s->rms;
-      sumTemp  += s->temp;
-      sumXTemp += (double)i * s->temp;
       sumFrX   += s->freq_ratio_x;
       sumFrY   += s->freq_ratio_y;
       sumFrZ   += s->freq_ratio_z;
@@ -5492,7 +5605,14 @@ static void calcTrend() {
 
     double denom = (double)n * sumX2 - sumX * sumX;
     float rmsSlope  = (denom != 0.0) ? (float)((n * sumXRms  - sumX * sumRms)  / denom) : 0.0f;
-    float tempSlope = (denom != 0.0) ? (float)((n * sumXTemp - sumX * sumTemp) / denom) : 0.0f;
+    // [v16.6a] temp_slope goes through the generic linRegSlope() utility, reading
+    // g_trendBuf directly via trendBufTempAccessor() -- no scratch array/copy.
+    // Called with the SAME snapHead/snapCount/TREND_BUF_SIZE/TREND_WINDOW_SAMPLES
+    // that produced startIdx/n above, so it recomputes the identical n and the
+    // identical idx=(startIdx+i)%TREND_BUF_SIZE sequence -- same values, same
+    // order, same formula as the inline computation it replaces -- output unchanged.
+    float tempSlope = linRegSlope(snapHead, snapCount, TREND_BUF_SIZE,
+                                   TREND_WINDOW_SAMPLES, 1.0f, trendBufTempAccessor);
 
     float driftX = 0.0f, driftY = 0.0f, driftZ = 0.0f;
     if (n >= 20) {
@@ -5569,6 +5689,19 @@ static void calcTrend() {
     g_trendResult.freq_alert     = false;
     g_trendResult.ttw_hours      = 0.0f;
     g_trendResult.window_samples = snapCount;
+  }
+
+  // -- Current Trend (CTR4A01, 500ms cadence) [v16.6a] ---------------------
+  // Independent buffer/readiness from the vibration trend buffer above
+  // (different source, different sample rate) -- reuses the same
+  // linRegSlope() utility. No thresholds/direction classification (Phase 1
+  // scope is the trend engine only -- Motor State logic is untouched).
+  if (g_currentCount >= CURRENT_MIN_SAMPLES) {
+    g_trendResult.current_slope = linRegSlope(g_currentHead, g_currentCount, CURRENT_BUF_SIZE,
+                                               CURRENT_WINDOW_SAMPLES, CURRENT_SAMPLE_INTERVAL_S,
+                                               currentBufAccessor);
+  } else {
+    g_trendResult.current_slope = 0.0f;
   }
 
   // -- Phase 2: Multi-Resolution Slopes ------------------------------------
@@ -6024,6 +6157,7 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
     doc["rms_slope"]      = g_trendResult.rms_slope;
     doc["temp_slope"]     = g_trendResult.temp_slope;
+    doc["current_slope"]  = g_trendResult.current_slope;  // [v16.6a] CTR4A01, A/s
     doc["trend_dir"]      = trendDirStr;
     doc["spike_count"]    = g_trendResult.spike_count;
     // v15.2 Fix 17: suppress freq fields เมื่อ RPM < RPM_FREQ_GATE
