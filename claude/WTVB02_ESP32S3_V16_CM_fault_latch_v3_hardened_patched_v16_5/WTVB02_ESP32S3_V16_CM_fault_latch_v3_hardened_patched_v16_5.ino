@@ -2638,31 +2638,13 @@ static float getCurrentRuntimeHour() {
   return g_runtimeHour;
 }
 
-// Process RPM -- ???? ISR vars -> ????? rpm / motor_state / prox / runtime_hour
-// ???????? taskStateMachine ??? 250 ms (Core 0, no mutex needed)
-static void processRPM(VibrationData_t* data) {
-  uint32_t interval, pulseCopy;
-  noInterrupts();
-  interval  = g_rpmPulseInterval;
-  pulseCopy = g_rpmTotalPulses;
-  interrupts();
-
-  bool newPulse = (pulseCopy != g_rpmLastPulseCount);
-  if (newPulse) g_rpmLastPulseMillis = millis();
-  g_rpmLastPulseCount = pulseCopy;
-
-  uint32_t timeSincePulseMs = millis() - g_rpmLastPulseMillis;
-
-  // ---------- RPM Calculation (EMA filtered) ----------
-  if (newPulse && interval >= RPM_MIN_INTERVAL_US) {
-    float rpmRaw = (60000000.0f / interval) / PULSE_PER_REV;
-    if (rpmRaw <= MAX_RPM * SPIKE_REJECT_FACTOR) {
-      g_rpmFiltered = RPM_SMOOTH_ALPHA * rpmRaw
-                    + (1.0f - RPM_SMOOTH_ALPHA) * g_rpmFiltered;
-    }
-  }
-
-  // ---------- Motor State Machine ----------
+// [v16.6e] Motor State Machine -- extracted verbatim from processRPM() so the
+// state-decision logic has one dedicated entry point. Currently still driven
+// by RPM-derived timeSincePulseMs (tachometer pulse timing); this separation
+// is prep work so a future Current-based input source can be substituted
+// here without touching processRPM()'s ISR/EMA handling. No logic changed --
+// same statements, same order, same globals, same side effects.
+static void updateMotorStateMachine(uint32_t timeSincePulseMs) {
   if (timeSincePulseMs > FORCE_STOP_TIMEOUT_MS) {
     g_motorRunState = MOTOR_STOPPED;
     g_rpmFiltered   = 0.0f;
@@ -2696,6 +2678,34 @@ static void processRPM(VibrationData_t* data) {
       g_bearingStableCnt = 0;
     }
   }
+}
+
+// Process RPM -- ???? ISR vars -> ????? rpm / motor_state / prox / runtime_hour
+// ???????? taskStateMachine ??? 250 ms (Core 0, no mutex needed)
+static void processRPM(VibrationData_t* data) {
+  uint32_t interval, pulseCopy;
+  noInterrupts();
+  interval  = g_rpmPulseInterval;
+  pulseCopy = g_rpmTotalPulses;
+  interrupts();
+
+  bool newPulse = (pulseCopy != g_rpmLastPulseCount);
+  if (newPulse) g_rpmLastPulseMillis = millis();
+  g_rpmLastPulseCount = pulseCopy;
+
+  uint32_t timeSincePulseMs = millis() - g_rpmLastPulseMillis;
+
+  // ---------- RPM Calculation (EMA filtered) ----------
+  if (newPulse && interval >= RPM_MIN_INTERVAL_US) {
+    float rpmRaw = (60000000.0f / interval) / PULSE_PER_REV;
+    if (rpmRaw <= MAX_RPM * SPIKE_REJECT_FACTOR) {
+      g_rpmFiltered = RPM_SMOOTH_ALPHA * rpmRaw
+                    + (1.0f - RPM_SMOOTH_ALPHA) * g_rpmFiltered;
+    }
+  }
+
+  // ---------- Motor State Machine ----------
+  updateMotorStateMachine(timeSincePulseMs);
 
   // v15.2 Fix 18: Reset g_velPeakHold เมื่อ motor transition → STOPPED
   // ป้องกัน peak hold สะสมค่า impulse จาก deceleration ค้างถึง publish ถัดไป
