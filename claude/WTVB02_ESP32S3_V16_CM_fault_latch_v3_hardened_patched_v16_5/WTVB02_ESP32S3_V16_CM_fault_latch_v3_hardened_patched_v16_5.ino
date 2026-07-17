@@ -2059,7 +2059,16 @@ static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
 // [vNext] Motor State evidence source -- runtime-mutable (not #define) so a
 // future Preferences/NVS-backed config can change it without touching this
 // API again. Default RPM preserves current behavior exactly.
+// [Commit 4B] TEST_CURRENT_SOURCE -- bench-test-only build flag. Undefined
+// by default: production builds are unaffected, this branch does not exist
+// in the translation unit at all. Define via -DTEST_CURRENT_SOURCE to select
+// MOTOR_SRC_CURRENT for bench testing. No runtime branch either way -- the
+// preprocessor resolves this before compilation.
+#ifdef TEST_CURRENT_SOURCE
+static MotorStateSource g_motorStateSource  = MOTOR_SRC_CURRENT;
+#else
 static MotorStateSource g_motorStateSource  = MOTOR_SRC_RPM;
+#endif
 static uint32_t        g_runInBandSince      = 0;   // [v16.3z] millis() ที่ rpm เริ่ม in-band ต่อเนื่อง (0=ยังไม่เข้า)
 static uint32_t        g_absentSince         = 0;   // [Commit 3A] millis() when signalPresent first became continuously false (0=currently present)
 static uint32_t        g_motorStoppedSince   = 0;   // [v16.3aa] millis() ที่เข้า STOPPED (0=ไม่ได้หยุด) — วัดระยะเวลาหยุด
