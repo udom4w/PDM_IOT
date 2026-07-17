@@ -3633,6 +3633,9 @@ void taskModbusRead(void* parameter) {
     localData.current_valid = false;
     if (millis() - s_lastCurrentSampleMs >= CURRENT_SAMPLE_INTERVAL_MS) {
       s_lastCurrentSampleMs = millis();
+      // [PHASE2-EXPERIMENT] single controlled inter-frame delay before the only
+      // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
+      vTaskDelay(pdMS_TO_TICKS(5));
       localData.current_valid = readCTR4A01Current(localData.current_a);
     }
 
