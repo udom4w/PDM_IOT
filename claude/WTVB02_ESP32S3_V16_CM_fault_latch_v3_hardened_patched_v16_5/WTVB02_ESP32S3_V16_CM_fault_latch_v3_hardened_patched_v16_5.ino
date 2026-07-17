@@ -1589,6 +1589,7 @@ static volatile uint16_t g_trendCount = 0;
 static float              g_currentBuf[CURRENT_BUF_SIZE];
 static volatile uint16_t  g_currentHead  = 0;
 static volatile uint16_t  g_currentCount = 0;
+static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
 
 // ============================================================================
 // MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
@@ -3475,14 +3476,43 @@ void checkAndSyncTime() {
 // CORE 0 TASKS - TIME CRITICAL OPERATIONS
 // ============================================================================
 
+// [v16.6c] Diagnostic-only: symbolic name for a ModbusMaster return code, for
+// Serial logging. Does not affect control flow -- string lookup only.
+static const char* modbusRcName(uint8_t rc) {
+  switch (rc) {
+    case ModbusMaster::ku8MBSuccess:          return "ku8MBSuccess";
+    case ModbusMaster::ku8MBInvalidSlaveID:   return "ku8MBInvalidSlaveID";
+    case ModbusMaster::ku8MBInvalidFunction:  return "ku8MBInvalidFunction";
+    case ModbusMaster::ku8MBResponseTimedOut: return "ku8MBResponseTimedOut";
+    case ModbusMaster::ku8MBInvalidCRC:       return "ku8MBInvalidCRC";
+    case ModbusMaster::ku8MBIllegalFunction:      return "ku8MBIllegalFunction";
+    case ModbusMaster::ku8MBIllegalDataAddress:   return "ku8MBIllegalDataAddress";
+    case ModbusMaster::ku8MBIllegalDataValue:     return "ku8MBIllegalDataValue";
+    case ModbusMaster::ku8MBSlaveDeviceFailure:   return "ku8MBSlaveDeviceFailure";
+    default:                                  return "?";
+  }
+}
+
 // [v16.6a] CTR4A01 current sensor read -- reused verbatim (same signature/body)
 // from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino readCurrentSensor().
 // Caller must already have the bus addressed to CURRENT_SENSOR_ID -- see
 // readCTR4A01Current() below, which owns that addressing.
 static bool readCurrentSensor(uint16_t &milliAmps) {
+  // [v16.6c] diagnostic-only timing around the Modbus call -- millis() reads
+  // add no delay and do not alter the call itself or its return value.
+  uint32_t t0 = millis();
   uint8_t r = modbus.readInputRegisters(CT_REG_AC_CURRENT, 1);
+  uint32_t elapsedMs = millis() - t0;
   bool success = (r == modbus.ku8MBSuccess);
-  if (success) milliAmps = modbus.getResponseBuffer(0);
+  if (success) {
+    milliAmps = modbus.getResponseBuffer(0);
+    Serial.printf("[CURRENT] raw=%u mA\n", milliAmps);  // [v16.6c] diagnostic only
+  } else {
+    // [v16.6c] diagnostic only -- current_read_errors/current_valid handling
+    // is unchanged, still owned entirely by readCTR4A01Current() below.
+    Serial.printf("[CURRENT] FAIL rc=0x%02X (%s) elapsed=%lu ms\n",
+                  r, modbusRcName(r), (unsigned long)elapsedMs);
+  }
   return success;
 }
 
@@ -3499,6 +3529,7 @@ static bool readCTR4A01Current(float &amps) {
   modbus.begin(MODBUS_SLAVE_ID, SerialRS485);  // restore WTVB02 addressing
   vTaskDelay(pdMS_TO_TICKS(5));
   if (ok) amps = currentMa / 1000.0f;
+  else    g_ctReadErrors++;  // [v16.6b] remote-visible failure counter -- see /vibration current_read_errors
   return ok;
 }
 
@@ -6170,6 +6201,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     doc["rms_slope"]      = g_trendResult.rms_slope;
     doc["temp_slope"]     = g_trendResult.temp_slope;
     doc["current_slope"]  = g_trendResult.current_slope;  // [v16.6a] CTR4A01, A/s
+    // [v16.6b] Remote diagnostics for current_slope=0 ambiguity -- if current_buf_count
+    // stays 0 while current_read_errors keeps climbing, CTR4A01 Modbus reads are failing
+    // (check slave address/wiring/baud); if both stay 0, the 500ms cadence itself never fired.
+    doc["current_buf_count"]    = g_currentCount;   // 0..CURRENT_BUF_SIZE, buffer fill level
+    doc["current_read_errors"]  = g_ctReadErrors;    // cumulative CTR4A01 Modbus failures since boot
     doc["trend_dir"]      = trendDirStr;
     doc["spike_count"]    = g_trendResult.spike_count;
     // v15.2 Fix 17: suppress freq fields เมื่อ RPM < RPM_FREQ_GATE
