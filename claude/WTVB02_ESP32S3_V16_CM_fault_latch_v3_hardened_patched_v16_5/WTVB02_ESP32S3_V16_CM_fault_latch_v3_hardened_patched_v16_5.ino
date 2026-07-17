@@ -1126,6 +1126,26 @@ typedef enum {
   MOTOR_STOPPING = 3    // ????? stop (pulse ??????????????)
 } MotorRunState_t;
 
+// [vNext] Evidence source selector for the Motor State Machine.
+// MOTOR_SRC_RPM is the only implemented path today; CURRENT and PROXIMITY
+// are reserved for future commits and currently fall back to RPM values.
+enum MotorStateSource {
+  MOTOR_SRC_RPM,
+  MOTOR_SRC_CURRENT,
+  MOTOR_SRC_PROXIMITY
+};
+
+// [vNext] Generic evidence the state machine acts on -- decouples
+// updateMotorStateMachine() from any specific sensor. "value" is whatever
+// filtered magnitude the active source produces (RPM today); "msSinceLastSample"
+// is how long it's been since that source last had a fresh reading.
+// [Commit 2A] existing decay/zero mutation of "value" is preserved as-is,
+// applied here instead of directly to g_rpmFiltered; caller writes it back.
+struct MotorStateEvidence {
+  float    value;
+  uint32_t msSinceLastSample;
+};
+
 // [v16.3ab] Analysis freeze reason (derived state) — วางไว้ต้นไฟล์เพราะ .ino auto-prototype
 // ต้องเห็น type ก่อน function ที่ return มัน (analysisReason)
 typedef enum {
@@ -2001,6 +2021,10 @@ static float           g_rpmFiltered       = 0.0f;
 static uint32_t        g_rpmLastPulseCount  = 0;
 static uint32_t        g_rpmLastPulseMillis = 0;
 static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
+// [vNext] Motor State evidence source -- runtime-mutable (not #define) so a
+// future Preferences/NVS-backed config can change it without touching this
+// API again. Default RPM preserves current behavior exactly.
+static MotorStateSource g_motorStateSource  = MOTOR_SRC_RPM;
 static uint32_t        g_runInBandSince      = 0;   // [v16.3z] millis() ที่ rpm เริ่ม in-band ต่อเนื่อง (0=ยังไม่เข้า)
 static uint32_t        g_motorStoppedSince   = 0;   // [v16.3aa] millis() ที่เข้า STOPPED (0=ไม่ได้หยุด) — วัดระยะเวลาหยุด
 static volatile AnalyticsCommand_t g_analyticsCmd = ANALYTICS_NONE; // [v16.3ac] Core0 → Core1 command (แทน boolean flag)
@@ -2638,25 +2662,53 @@ static float getCurrentRuntimeHour() {
   return g_runtimeHour;
 }
 
+// [vNext] Builds the evidence updateMotorStateMachine() will act on, based on
+// g_motorStateSource. CURRENT/PROXIMITY branches are placeholders -- they
+// currently return the same RPM-derived values as MOTOR_SRC_RPM, so behavior
+// is identical regardless of source until those paths are implemented.
+static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs) {
+  MotorStateEvidence ev;
+  switch (g_motorStateSource) {
+    case MOTOR_SRC_CURRENT:
+      // [placeholder] not implemented yet
+      ev.value = g_rpmFiltered;
+      ev.msSinceLastSample = timeSincePulseMs;
+      break;
+    case MOTOR_SRC_PROXIMITY:
+      // [placeholder] not implemented yet
+      ev.value = g_rpmFiltered;
+      ev.msSinceLastSample = timeSincePulseMs;
+      break;
+    case MOTOR_SRC_RPM:
+    default:
+      ev.value = g_rpmFiltered;
+      ev.msSinceLastSample = timeSincePulseMs;
+      break;
+  }
+  return ev;
+}
+
 // [v16.6e] Motor State Machine -- extracted verbatim from processRPM() so the
-// state-decision logic has one dedicated entry point. Currently still driven
-// by RPM-derived timeSincePulseMs (tachometer pulse timing); this separation
-// is prep work so a future Current-based input source can be substituted
-// here without touching processRPM()'s ISR/EMA handling. No logic changed --
-// same statements, same order, same globals, same side effects.
-static void updateMotorStateMachine(uint32_t timeSincePulseMs) {
-  if (timeSincePulseMs > FORCE_STOP_TIMEOUT_MS) {
+// state-decision logic has one dedicated entry point. Driven by a generic
+// MotorStateEvidence rather than RPM globals directly -- this separation is
+// prep work so a future Current-based input source can be substituted in
+// buildMotorStateEvidence() without touching this function. [Commit 2A]
+// Existing g_rpmFiltered decay/zero logic is kept exactly where it was --
+// only now applied to evidence.value, written back by the caller -- no
+// behavior change. (A later, separate commit may relocate this logic.)
+static void updateMotorStateMachine(MotorStateEvidence& evidence) {
+  if (evidence.msSinceLastSample > FORCE_STOP_TIMEOUT_MS) {
     g_motorRunState = MOTOR_STOPPED;
-    g_rpmFiltered   = 0.0f;
+    evidence.value   = 0.0f;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else if (timeSincePulseMs > NO_PULSE_STOPPING_MS) {
+  } else if (evidence.msSinceLastSample > NO_PULSE_STOPPING_MS) {
     g_motorRunState  = MOTOR_STOPPING;
-    g_rpmFiltered   *= 0.80f;
-    if (g_rpmFiltered < MIN_RPM_VALID) g_rpmFiltered = 0.0f;
+    evidence.value  *= 0.80f;
+    if (evidence.value < MIN_RPM_VALID) evidence.value = 0.0f;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
   } else {
-    bool inBand = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
-                  (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+    bool inBand = (evidence.value >= (RATED_RPM - RATED_RPM_TOL)) &&
+                  (evidence.value <= (RATED_RPM + RATED_RPM_TOL));
     if (inBand) {
       // [v16.3z] Warm-up debounce: ต้อง in-band ต่อเนื่อง RUNNING_WARMUP_MS ก่อนเป็น RUNNING
       // กัน spurious STOPPED→RUNNING จาก pulse ที่หายชั่วขณะ (ซึ่งจะ flush freq_ratio 240 slots)
@@ -2705,7 +2757,9 @@ static void processRPM(VibrationData_t* data) {
   }
 
   // ---------- Motor State Machine ----------
-  updateMotorStateMachine(timeSincePulseMs);
+  MotorStateEvidence evidence = buildMotorStateEvidence(timeSincePulseMs);
+  updateMotorStateMachine(evidence);
+  g_rpmFiltered = evidence.value;   // [Commit 2A] write back FORCE_STOP/STOPPING decay -- same value as before, existing logic unmoved
 
   // v15.2 Fix 18: Reset g_velPeakHold เมื่อ motor transition → STOPPED
   // ป้องกัน peak hold สะสมค่า impulse จาก deceleration ค้างถึง publish ถัดไป
