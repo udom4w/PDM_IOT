@@ -3119,6 +3119,9 @@ bool modemInit() {
   while (!modemInitialized && modemRetryCount < MAX_MODEM_RETRIES) {
     modemRetryCount++;
     Serial.printf("[Modem] Initialization attempt %d/%d\n", modemRetryCount, MAX_MODEM_RETRIES);
+    // [v16.6d] FIX-WDT: modemPowerOn()+checkModemResponse() may take ~28s/attempt;
+    // reset once per retry iteration so no single attempt runs unfed.
+    esp_task_wdt_reset();
 
     // Power on modem
     modemPowerOn();
@@ -4398,6 +4401,8 @@ void taskNetwork(void* parameter) {
   vTaskDelay(pdMS_TO_TICKS(5000));  // Wait for system to stabilize
 
   // Initialize modem
+  // [v16.6d] FIX-WDT: modemInit() may block up to ~85s across its internal retries.
+  esp_task_wdt_reset();
   if (!modemInit()) {
     Serial.println("[CORE 1] Modem init failed!");
     // Continue running but in error state
@@ -4405,10 +4410,14 @@ void taskNetwork(void* parameter) {
     // Enable automatic network time update on the modem
     modemEnableNetworkTime();
   }
+  esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemInit() returned
 
   // Connect to GPRS if modem is ready
   if (g_network.modemReady) {
+    // [v16.6d] FIX-WDT: modemConnectGPRS() -> waitForNetwork(30000L) may block up to 30s.
+    esp_task_wdt_reset();
     modemConnectGPRS();
+    esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemConnectGPRS() returned
 
     // Perform initial time sync after GPRS connects
     if (g_network.gprsConnected) {
