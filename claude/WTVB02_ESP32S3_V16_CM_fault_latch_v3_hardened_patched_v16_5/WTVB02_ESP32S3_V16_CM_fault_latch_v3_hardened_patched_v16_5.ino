@@ -6384,6 +6384,12 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
     doc["rms_slope"]      = g_trendResult.rms_slope;
     doc["temp_slope"]     = g_trendResult.temp_slope;
+    // [v16.6d / Commit 2] Instantaneous current -- same data->current_a field already
+    // pushed into g_currentBuf[] (source of current_slope below) and gated by
+    // current_valid at the push site; held at its last-sampled value between the
+    // ~500ms CTR4A01 cadence ticks, same as current_slope/current_buf_count already are.
+    // No new measurement, no new gating -- exposes the existing value as-is.
+    doc["current_a"]      = roundf(data->current_a * 1000.0f) / 1000.0f;  // CTR4A01, amperes
     doc["current_slope"]  = g_trendResult.current_slope;  // [v16.6a] CTR4A01, A/s
     // [v16.6b] Remote diagnostics for current_slope=0 ambiguity -- if current_buf_count
     // stays 0 while current_read_errors keeps climbing, CTR4A01 Modbus reads are failing
