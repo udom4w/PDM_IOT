@@ -384,6 +384,10 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define BASELINE_RMS 2.8f
 #define WARNING_RMS 4.5f
 #define CRITICAL_RMS 11.2f
+// [v16.5.2 Commit 1] WARNING hysteresis exit threshold: rms must drop below this
+// (not just below WARNING_RMS) to leave STATE_WARNING -- eliminates NORMAL<->WARNING
+// chatter when rms hovers near WARNING_RMS. Entry still uses WARNING_RMS unchanged.
+#define WARNING_RMS_EXIT 4.2f
 
 // --- FreeRTOS Configuration ---
 #define STACK_SIZE_MODBUS    4096   // Modbus task stack
@@ -4438,16 +4442,32 @@ void taskStateMachine(void* parameter) {
         g_sensorWarmupReads--;
       }
 
+      // [v16.5.2 Commit 1 rev2] WARNING hysteresis (NORMAL<->WARNING chatter fix):
+      // Hysteresis input is a mutex-protected snapshot of the canonical alarm
+      // state (g_systemState.state) itself -- no shadow/duplicate state. This
+      // means every existing forced-state path (sensor offline -> NORMAL,
+      // MAINTENANCE, WARMUP) is automatically respected with zero extra code
+      // here, since they all write g_systemState.state directly.
+      // Enter WARNING only at rms >= WARNING_RMS (unchanged threshold/value).
+      // Once WARNING, stay WARNING until rms < WARNING_RMS_EXIT (4.2f).
+      // CRITICAL_RMS comparison/threshold is untouched (Commit 1 does not
+      // redesign CRITICAL hysteresis).
+      MachineState_t currentAlarmState = STATE_NORMAL;
+      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(10)) == pdTRUE) {
+        currentAlarmState = g_systemState.state;
+        xSemaphoreGive(mutexSystemState);
+      }
+
       if (g_motorRunState != MOTOR_RUNNING) {
         newState = STATE_NORMAL;  // STOPPED/STARTING/STOPPING → ไม่ประเมิน alarm
       } else if (g_sensorWarmupReads > 0) {
         newState = STATE_NORMAL;  // warmup reads หลัง sensor online → suppress spike
-      } else if (rms < WARNING_RMS) {
-        newState = STATE_NORMAL;
-      } else if (rms < CRITICAL_RMS) {
-        newState = STATE_WARNING;
-      } else {
+      } else if (rms >= CRITICAL_RMS) {
         newState = STATE_CRITICAL;
+      } else if (currentAlarmState == STATE_WARNING) {
+        newState = (rms < WARNING_RMS_EXIT) ? STATE_NORMAL : STATE_WARNING;
+      } else {
+        newState = (rms >= WARNING_RMS) ? STATE_WARNING : STATE_NORMAL;
       }
 
       // Update system state (with mutex)
