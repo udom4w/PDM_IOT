@@ -1,0 +1,7 @@
+เข้าไปที่โฟลเดอร์ WTVB05_ValidationTool_FIFO แล้วรัน run_fifo_capture.py
+เพื่อดึงข้อมูล Raw FIFO waveform จากเซนเซอร์ผ่าน COM5 (SR1, 16kHz)
+สคริปต์จะเปิดพอร์ต ส่งคำสั่ง SR 1 แล้ว FIFO test2 ไปยังเซนเซอร์ ฟังจนกว่าจะ
+capture ครบ 1024 samples แล้วรัน analyze_fifo_capture.py ให้เองอัตโนมัติ
+ท้ายสุด ผลลัพธ์ที่ต้องการคือไฟล์ fifo_analysis_TEST1_timeseries.png
+และ fifo_analysis_TEST1_fft.png ในโฟลเดอร์เดียวกัน เสร็จแล้วรายงานว่า
+capture สำเร็จกี่ attempt และมี CRC mismatch หรือ sample หายไหม

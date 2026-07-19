@@ -14,6 +14,9 @@ build/
 *.elf
 *.map
 
+# Investigation archives (local-only, kept out of git per team decision)
+investigation_archives/
+
 # VS Code
 .vscode/
 

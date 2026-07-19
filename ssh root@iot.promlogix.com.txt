@@ -1,9 +1,13 @@
 ssh root@iot.promlogix.com
-ssh iotprom@iot.promlogix.com
+ssh iot_promlogix
 ssh iotprom@10.10.0.1
 cd /opt/iot-stack
+sudo ss -tulpn
+sudo ufw status verbose
 
-docker logs -f iot-stack_mosquitto_1
+
+docker logs --tail 50 -f iot-stack-mosquitto-1
+
 nano docker-compose.yml
 Measurement : vibration
 Bucket : factory

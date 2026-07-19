@@ -1,0 +1,3679 @@
+[TREND] n=120 slope=-0.00007 dir=+0 spikes=0 | driftX=-0.121 driftY=0.380 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00031
+[TREND-P2] slope_1s=-0.00034 slope_10s=0.00019 slope_60s=0.00344 | ema=2.215 dir=-1 | stddev1m=0.024 maxRms10m=2.31
+[MQTT] /sensor 729 B
+[MQTT] /status 528 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.26                                       mm/s |
+| Temp:    37.3                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        4793 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    11980                          |
+| MQTT Publishes:        39 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         181508 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1207 seconds                  |
+| RTC Time: 2026-07-05 04:51:22                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1168 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=23/60
+EMA: rms=2.223 delta=0.00794 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[MQTT] /vibration 1218 B | NORMAL rms=2.24 peak=2.29 rpm=1505.3 state=2 | health=97% | frx=10.63 fry=10.63 frz=1.05 | cf=4.15 kurt_max=3.796(Z) bear=NORMAL
+[TREND] /trend 621 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=24 slot_ms=797
+[TREND] n=120 slope=-0.00003 dir=+0 spikes=0 | driftX=0.026 driftY=-0.322 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00052
+[TREND-P2] slope_1s=-0.00015 slope_10s=0.00007 slope_60s=0.00327 | ema=2.202 dir=-1 | stddev1m=0.023 maxRms10m=2.31
+[MQTT] /sensor 725 B
+[MQTT] /status 529 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.28                                       mm/s |
+| Temp:    37.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        4913 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    12281                          |
+| MQTT Publishes:        40 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         181508 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1237 seconds                  |
+| RTC Time: 2026-07-05 04:51:53                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1199 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=24/60
+EMA: rms=2.217 delta=0.01451 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[MQTT] /vibration 1215 B | NORMAL rms=2.20 peak=2.29 rpm=1505.5 state=2 | health=98% | frx=8.62 fry=8.62 frz=1.05 | cf=4.31 kurt_max=3.686(Z) bear=NORMAL
+[TREND] n=120 slope=0.00008 dir=+0 spikes=0 | driftX=0.044 driftY=0.214 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00039
+[TREND-P2] slope_1s=0.00034 slope_10s=-0.00002 slope_60s=0.00327 | ema=2.235 dir=+1 | stddev1m=0.024 maxRms10m=2.31
+[MQTT] /sensor 728 B
+[MQTT] /status 527 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.20                                       mm/s |
+| Temp:    37.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5033 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    12582                          |
+| MQTT Publishes:        41 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         181508 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1268 seconds                  |
+| RTC Time: 2026-07-05 04:52:23                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1229 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=24/60
+EMA: rms=2.229 delta=-0.00640 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[MQTT] /vibration 1215 B | NORMAL rms=2.21 peak=2.30 rpm=1505.7 state=2 | health=98% | frx=10.63 fry=10.63 frz=1.05 | cf=4.61 kurt_max=3.807(Z) bear=NORMAL
+[TREND] /trend 620 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=25 slot_ms=796
+[TREND] n=120 slope=-0.00006 dir=+0 spikes=0 | driftX=-0.001 driftY=0.208 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00041
+[TREND-P2] slope_1s=-0.00016 slope_10s=-0.00005 slope_60s=0.00312 | ema=2.206 dir=-1 | stddev1m=0.024 maxRms10m=2.31
+[MQTT] /sensor 736 B
+[MQTT] /status 536 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.18                                       mm/s |
+| Temp:    37.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5153 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    12882                          |
+| MQTT Publishes:        42 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         181460 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1298 seconds                  |
+| RTC Time: 2026-07-05 04:52:53                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1259 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=25/60
+EMA: rms=2.214 delta=0.00791 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[MQTT] /vibration 1227 B | NORMAL rms=2.15 peak=2.29 rpm=1505.6 state=2 | health=99% | frx=10.63 fry=8.59 frz=1.05 | cf=4.62 kurt_max=4.072(Z) bear=EARLY_WARNING
+[TREND] n=120 slope=-0.00007 dir=+0 spikes=0 | driftX=0.046 driftY=0.719 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00046
+[TREND-P2] slope_1s=-0.00015 slope_10s=0.00025 slope_60s=0.00312 | ema=2.232 dir=+0 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 735 B
+[MQTT] /status 535 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.27                                       mm/s |
+| Temp:    37.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5274 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    13183                          |
+| MQTT Publishes:        43 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         181460 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1328 seconds                  |
+| RTC Time: 2026-07-05 04:53:23                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1289 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=25/60
+EMA: rms=2.235 delta=0.00345 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[MQTT] /vibration 1223 B | NORMAL rms=2.23 peak=2.34 rpm=1505.7 state=2 | health=97% | frx=8.56 fry=8.56 frz=1.05 | cf=4.79 kurt_max=4.271(Z) bear=EARLY_WARNING
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=26 slot_ms=797
+[TREND] /trend 619 B
+[TREND] n=120 slope=-0.00017 dir=+0 spikes=0 | driftX=0.053 driftY=-0.710 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00048
+[TREND-P2] slope_1s=-0.00066 slope_10s=0.00044 slope_60s=0.00305 | ema=2.224 dir=+1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 727 B
+[MQTT] /status 528 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.22                                       mm/s |
+| Temp:    37.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+[MQTT] /vibration 1215 B | NORMAL rms=2.23 peak=2.31 rpm=1505.3 state=2 | health=97% | frx=10.66 fry=8.59 frz=1.05 | cf=4.86 kurt_max=3.937(Z) bear=NORMAL
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5395 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    13487                          |
+| MQTT Publishes:        45 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183768 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1358 seconds                  |
+| RTC Time: 2026-07-05 04:53:53                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1319 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=26/60
+EMA: rms=2.219 delta=-0.00456 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=27 slot_ms=797
+[TREND] n=120 slope=-0.00007 dir=+0 spikes=0 | driftX=0.130 driftY=-0.339 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00016
+[TREND-P2] slope_1s=-0.00030 slope_10s=0.00044 slope_60s=0.00297 | ema=2.204 dir=+0 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 726 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1213 B | NORMAL rms=2.24 peak=2.32 rpm=1505.4 state=2 | health=97% | frx=8.62 fry=8.62 frz=1.05 | cf=4.46 kurt_max=3.922(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.19                                       mm/s |
+| Temp:    37.7                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5516 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    13788                          |
+| MQTT Publishes:        46 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183768 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1388 seconds                  |
+| RTC Time: 2026-07-05 04:54:23                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1349 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=27/60
+EMA: rms=2.197 delta=-0.00705 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] /trend 619 B
+[TREND] n=120 slope=-0.00006 dir=+0 spikes=0 | driftX=0.288 driftY=0.633 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00026
+[TREND-P2] slope_1s=-0.00029 slope_10s=0.00052 slope_60s=0.00297 | ema=2.222 dir=-1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 730 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1219 B | NORMAL rms=2.16 peak=2.31 rpm=1505.4 state=2 | health=99% | frx=10.66 fry=10.66 frz=1.05 | cf=4.57 kurt_max=3.908(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.20                                       mm/s |
+| Temp:    37.7                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5636 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    14090                          |
+| MQTT Publishes:        47 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183768 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1418 seconds                  |
+| RTC Time: 2026-07-05 04:54:53                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1379 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=27/60
+EMA: rms=2.220 delta=-0.00150 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=28 slot_ms=797
+[TREND] n=120 slope=0.00016 dir=+0 spikes=0 | driftX=-0.689 driftY=-0.850 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00056
+[TREND-P2] slope_1s=0.00067 slope_10s=0.00047 slope_60s=0.00287 | ema=2.242 dir=-1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 733 B
+[MQTT] /status 535 B
+[MQTT] /vibration 1221 B | NORMAL rms=2.22 peak=2.30 rpm=1505.5 state=2 | health=98% | frx=10.70 fry=10.70 frz=1.05 | cf=5.03 kurt_max=4.298(Z) bear=EARLY_WARNING
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.19                                       mm/s |
+| Temp:    37.7                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5757 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    14392                          |
+| MQTT Publishes:        48 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183768 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1448 seconds                  |
+| RTC Time: 2026-07-05 04:55:24                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1410 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=28/60
+EMA: rms=2.227 delta=-0.00865 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] /trend 621 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=29 slot_ms=797
+[TREND] n=120 slope=0.00015 dir=+0 spikes=0 | driftX=0.038 driftY=-0.616 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00029
+[TREND-P2] slope_1s=0.00063 slope_10s=0.00030 slope_60s=0.00278 | ema=2.206 dir=-1 | stddev1m=0.023 maxRms10m=2.34
+[MQTT] /sensor 727 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1214 B | NORMAL rms=2.25 peak=2.31 rpm=1505.9 state=2 | health=97% | frx=8.59 fry=8.59 frz=1.05 | cf=4.27 kurt_max=3.846(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.20                                       mm/s |
+| Temp:    37.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5878 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    14693                          |
+| MQTT Publishes:        49 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183580 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1479 seconds                  |
+| RTC Time: 2026-07-05 04:55:54                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1440 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=29/60
+EMA: rms=2.220 delta=-0.00316 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00003 dir=+0 spikes=0 | driftX=-0.372 driftY=0.501 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00015
+[TREND-P2] slope_1s=0.00015 slope_10s=-0.00003 slope_60s=0.00278 | ema=2.226 dir=+1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 727 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1215 B | NORMAL rms=2.17 peak=2.31 rpm=1505.6 state=2 | health=99% | frx=8.59 fry=10.63 frz=1.05 | cf=4.17 kurt_max=3.870(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.23                                       mm/s |
+| Temp:    37.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        5998 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    14994                          |
+| MQTT Publishes:        50 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1509 seconds                  |
+| RTC Time: 2026-07-05 04:56:24                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1470 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=29/60
+EMA: rms=2.217 delta=-0.00308 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] /trend 621 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=30 slot_ms=796
+[TREND] n=120 slope=0.00010 dir=+0 spikes=0 | driftX=0.343 driftY=-0.137 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00029
+[TREND-P2] slope_1s=0.00046 slope_10s=-0.00016 slope_60s=0.00266 | ema=2.219 dir=+0 | stddev1m=0.025 maxRms10m=2.34
+[MQTT] /sensor 728 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1215 B | NORMAL rms=2.25 peak=2.29 rpm=1505.9 state=2 | health=97% | frx=10.69 fry=10.69 frz=1.05 | cf=3.97 kurt_max=3.622(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.22                                       mm/s |
+| Temp:    37.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6119 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    15296                          |
+| MQTT Publishes:        51 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1539 seconds                  |
+| RTC Time: 2026-07-05 04:56:54                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1500 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=30/60
+EMA: rms=2.220 delta=0.00127 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00008 dir=+0 spikes=0 | driftX=-0.190 driftY=0.539 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00037
+[TREND-P2] slope_1s=-0.00039 slope_10s=-0.00007 slope_60s=0.00266 | ema=2.220 dir=-1 | stddev1m=0.023 maxRms10m=2.34
+[MQTT] /sensor 729 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1218 B | NORMAL rms=2.22 peak=2.29 rpm=1505.9 state=2 | health=98% | frx=10.63 fry=10.63 frz=1.05 | cf=4.01 kurt_max=3.802(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.23                                       mm/s |
+| Temp:    37.9                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  80% (CSQ: 25)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6239 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    15596                          |
+| MQTT Publishes:        52 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1569 seconds                  |
+| RTC Time: 2026-07-05 04:57:24                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1530 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=30/60
+EMA: rms=2.231 delta=0.01422 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=31 slot_ms=796
+[TREND] /trend 619 B
+[TREND] n=120 slope=0.00003 dir=+0 spikes=0 | driftX=0.126 driftY=0.387 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00053
+[TREND-P2] slope_1s=0.00020 slope_10s=0.00011 slope_60s=0.00238 | ema=2.215 dir=+1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 723 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1208 B | NORMAL rms=2.19 peak=2.30 rpm=1506.1 state=2 | health=98% | frx=8.62 fry=8.62 frz=1.05 | cf=4.79 kurt_max=3.962(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.24                                       mm/s |
+| Temp:    37.9                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6359 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    15897                          |
+| MQTT Publishes:        53 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1599 seconds                  |
+| RTC Time: 2026-07-05 04:57:54                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1560 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=31/60
+EMA: rms=2.228 delta=0.01276 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=32 slot_ms=796
+[TREND] n=120 slope=-0.00010 dir=+0 spikes=0 | driftX=-0.517 driftY=0.473 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00051
+[TREND-P2] slope_1s=-0.00039 slope_10s=0.00017 slope_60s=0.00227 | ema=2.216 dir=-1 | stddev1m=0.025 maxRms10m=2.34
+[MQTT] /sensor 733 B
+[MQTT] /status 535 B
+[MQTT] /vibration 1222 B | NORMAL rms=2.19 peak=2.31 rpm=1505.6 state=2 | health=98% | frx=10.59 fry=10.59 frz=1.05 | cf=5.41 kurt_max=4.388(Z) bear=EARLY_WARNING
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.22                                       mm/s |
+| Temp:    38.0                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  80% (CSQ: 25)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6479 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    16197                          |
+| MQTT Publishes:        54 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1629 seconds                  |
+| RTC Time: 2026-07-05 04:58:24                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1590 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=32/60
+EMA: rms=2.233 delta=0.00751 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] /trend 621 B
+[TREND] n=120 slope=-0.00007 dir=+0 spikes=0 | driftX=-0.298 driftY=0.175 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00003
+[TREND-P2] slope_1s=-0.00016 slope_10s=0.00020 slope_60s=0.00227 | ema=2.227 dir=-1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 724 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1213 B | NORMAL rms=2.18 peak=2.29 rpm=1505.4 state=2 | health=98% | frx=10.66 fry=10.66 frz=1.05 | cf=4.50 kurt_max=3.820(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.20                                       mm/s |
+| Temp:    38.0                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6599 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    16497                          |
+| MQTT Publishes:        55 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1659 seconds                  |
+| RTC Time: 2026-07-05 04:58:54                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1620 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=32/60
+EMA: rms=2.220 delta=-0.00014 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=33 slot_ms=797
+[TREND] n=120 slope=0.00013 dir=+0 spikes=0 | driftX=0.470 driftY=0.291 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00024
+[TREND-P2] slope_1s=0.00050 slope_10s=0.00010 slope_60s=0.00207 | ema=2.218 dir=+1 | stddev1m=0.023 maxRms10m=2.34
+[MQTT] /sensor 734 B
+[MQTT] /status 533 B
+[MQTT] /vibration 1217 B | NORMAL rms=2.23 peak=2.30 rpm=1505.5 state=2 | health=97% | frx=8.62 fry=8.62 frz=1.05 | cf=4.84 kurt_max=4.234(Z) bear=EARLY_WARNING
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.18                                       mm/s |
+| Temp:    38.1                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  80% (CSQ: 25)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6720 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    16798                          |
+| MQTT Publishes:        56 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1689 seconds                  |
+| RTC Time: 2026-07-05 04:59:24                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1650 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=33/60
+EMA: rms=2.216 delta=-0.00182 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] /trend 618 B
+[ANALYTICS] Frozen -- reason=STARTING
+[ANALYTICS] Frozen -- reason=STOPPING
+[MOTOR] STOPPED transition -- peak hold reset, freeze analytics
+[ANALYTICS] Frozen -- reason=STOPPED
+[ANALYTICS] Frozen -- reason=STARTING
+[TREND] n=120 slope=-0.01473 dir=-1 spikes=0 | driftX=-5.700 driftY=-5.770 driftZ=-0.632 alert=1 | ttw=0.0h tempSlope=0.00011
+[TREND-P2] slope_1s=-0.00025 slope_10s=0.00014 slope_60s=0.00207 | ema=2.200 dir=-1 | stddev1m=0.024 maxRms10m=2.34
+[MQTT] /sensor 689 B
+[MQTT] /status 519 B
+[MQTT] /vibration 1173 B | NORMAL rms=0.24 peak=0.00 rpm=533.9 state=1 | health=100% | frx=0.00 fry=0.00 frz=0.00 | cf=2.67 kurt_max=0.000(-) bear=STARTING
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     0.75                                       mm/s |
+| Temp:    38.2                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6840 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    17099                          |
+| MQTT Publishes:        57 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1719 seconds                  |
+| RTC Time: 2026-07-05 04:59:54                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1680 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=33/60
+EMA: rms=2.200 delta=-0.02366 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[MOTOR] Warm-up complete (in-band 2.5s) -> RUNNING
+[MOTOR] RUNNING -- RESUME, trend preserved (stop=20s, tempDrop=0.1°C, bearing warm)
+[ANALYTICS] Resumed -- analysis READY
+[ANALYTICS] Resume reinit -- gap=20s, EMA reseed, slope suppress=2 (raw data preserved)
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=34 slot_ms=797
+[TREND] n=120 slope=0.00646 dir=+1 spikes=0 | driftX=0.000 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00040
+[TREND-P2] slope_1s=~0.00000 slope_10s=~0.00000 slope_60s=~0.00000 | ema=2.219 dir=+0 | stddev1m=0.023 maxRms10m=2.34
+[MQTT] /sensor 726 B
+[MQTT] /status 519 B
+[MQTT] /vibration 1185 B | NORMAL rms=2.21 peak=2.29 rpm=1505.0 state=2 | health=98% | frx=10.70 fry=8.66 frz=1.05 | cf=4.51 kurt_max=4.010(Z) bear=WARMING_UP
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.22                                       mm/s |
+| Temp:    38.1                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        6960 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    17399                          |
+| MQTT Publishes:        58 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1749 seconds                  |
+| RTC Time: 2026-07-05 05:00:24                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1710 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=34/60
+EMA: rms=2.216 delta=-0.00348 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] /trend 559 B
+[TREND] n=120 slope=0.00017 dir=+0 spikes=0 | driftX=0.000 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00014
+[TREND-P2] slope_1s=~0.00000 slope_10s=~0.00000 slope_60s=~0.00000 | ema=2.211 dir=+1 | stddev1m=0.023 maxRms10m=2.34
+[MQTT] /sensor 732 B
+[MQTT] /status 524 B
+[MQTT] /vibration 1196 B | NORMAL rms=2.25 peak=2.32 rpm=1505.2 state=2 | health=97% | frx=10.70 fry=8.66 frz=1.05 | cf=4.17 kurt_max=3.662(Z) bear=WARMING_UP
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.20                                       mm/s |
+| Temp:    38.1                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7081 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    17703                          |
+| MQTT Publishes:        59 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1780 seconds                  |
+| RTC Time: 2026-07-05 05:00:55                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1741 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=34/60
+EMA: rms=2.191 delta=-0.00228 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=35 slot_ms=797
+[TREND] n=120 slope=0.00005 dir=+0 spikes=0 | driftX=0.000 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00035
+[TREND-P2] slope_1s=0.00016 slope_10s=-0.00050 slope_60s=0.00162 | ema=2.214 dir=+0 | stddev1m=0.022 maxRms10m=2.34
+[MQTT] /sensor 733 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1212 B | NORMAL rms=2.25 peak=2.31 rpm=1505.0 state=2 | health=97% | frx=8.63 fry=8.63 frz=1.05 | cf=4.53 kurt_max=4.092(Z) bear=EARLY_WARNING
+[TREND] /trend 616 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.18                                       mm/s |
+| Temp:    38.2                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7249 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    18122                          |
+| MQTT Publishes:        60 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1822 seconds                  |
+| RTC Time: 2026-07-05 05:01:37                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1783 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=35/60
+EMA: rms=2.226 delta=0.00276 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=36 slot_ms=797
+[TREND] n=120 slope=0.00014 dir=+0 spikes=0 | driftX=0.489 driftY=0.860 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00025
+[TREND-P2] slope_1s=0.00059 slope_10s=-0.00045 slope_60s=0.00141 | ema=2.221 dir=+0 | stddev1m=0.022 maxRms10m=2.33
+[MQTT] /sensor 730 B
+[MQTT] /status 526 B
+[MQTT] /vibration 1216 B | NORMAL rms=2.16 peak=2.33 rpm=1505.2 state=2 | health=99% | frx=10.66 fry=10.66 frz=1.05 | cf=4.69 kurt_max=3.922(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.22                                       mm/s |
+| Temp:    38.2                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7370 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    18423                          |
+| MQTT Publishes:        61 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1852 seconds                  |
+| RTC Time: 2026-07-05 05:02:07                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1813 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=36/60
+EMA: rms=2.215 delta=0.00014 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00006 dir=+0 spikes=0 | driftX=0.075 driftY=0.797 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=-0.00005
+[TREND-P2] slope_1s=-0.00015 slope_10s=-0.00034 slope_60s=0.00141 | ema=2.200 dir=+1 | stddev1m=0.021 maxRms10m=2.33
+[MQTT] /sensor 724 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1212 B | NORMAL rms=2.21 peak=2.29 rpm=1504.9 state=2 | health=98% | frx=8.66 fry=8.66 frz=1.05 | cf=4.50 kurt_max=3.774(Z) bear=NORMAL
+[TREND] /trend 622 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.17                                       mm/s |
+| Temp:    38.2                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7490 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    18725                          |
+| MQTT Publishes:        62 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183580 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1882 seconds                  |
+| RTC Time: 2026-07-05 05:02:37                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1843 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=36/60
+EMA: rms=2.218 delta=0.00964 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=37 slot_ms=797
+[TREND] n=120 slope=-0.00003 dir=+0 spikes=0 | driftX=0.802 driftY=-0.615 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00036
+[TREND-P2] slope_1s=-0.00006 slope_10s=-0.00018 slope_60s=0.00121 | ema=2.199 dir=+0 | stddev1m=0.022 maxRms10m=2.33
+[MQTT] /sensor 734 B
+[MQTT] /status 536 B
+[MQTT] /vibration 1224 B | NORMAL rms=2.18 peak=2.29 rpm=1505.1 state=2 | health=98% | frx=8.63 fry=8.63 frz=1.05 | cf=4.86 kurt_max=4.033(Z) bear=EARLY_WARNING
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.20                                       mm/s |
+| Temp:    38.2                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7610 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    19025                          |
+| MQTT Publishes:        63 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1912 seconds                  |
+| RTC Time: 2026-07-05 05:03:07                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1873 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=37/60
+EMA: rms=2.217 delta=-0.00285 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00003 dir=+0 spikes=0 | driftX=-0.507 driftY=-0.010 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00010
+[TREND-P2] slope_1s=-0.00023 slope_10s=-0.00011 slope_60s=0.00121 | ema=2.203 dir=+1 | stddev1m=0.024 maxRms10m=2.33
+[MQTT] /sensor 727 B
+[MQTT] /status 529 B
+[MQTT] /vibration 1216 B | NORMAL rms=2.25 peak=2.30 rpm=1505.3 state=2 | health=97% | frx=8.66 fry=8.66 frz=1.05 | cf=4.58 kurt_max=3.886(Z) bear=NORMAL
+[TREND] /trend 622 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=38 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.21                                       mm/s |
+| Temp:    38.2                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7731 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    19326                          |
+| MQTT Publishes:        64 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1942 seconds                  |
+| RTC Time: 2026-07-05 05:03:37                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1903 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=38/60
+EMA: rms=2.208 delta=-0.00555 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00002 dir=+0 spikes=0 | driftX=-0.720 driftY=-0.914 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00069
+[TREND-P2] slope_1s=-0.00018 slope_10s=0.00001 slope_60s=0.00103 | ema=2.220 dir=-1 | stddev1m=0.023 maxRms10m=2.33
+[MQTT] /sensor 729 B
+[MQTT] /status 529 B
+[MQTT] /vibration 1215 B | NORMAL rms=2.22 peak=2.29 rpm=1505.6 state=2 | health=98% | frx=10.63 fry=10.63 frz=1.05 | cf=4.46 kurt_max=3.686(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.25                                       mm/s |
+| Temp:    38.3                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  93% (CSQ: 29)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7851 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    19626                          |
+| MQTT Publishes:        65 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              1972 seconds                  |
+| RTC Time: 2026-07-05 05:04:07                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1933 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=38/60
+EMA: rms=2.218 delta=0.01098 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=39 slot_ms=796
+[TREND] n=120 slope=0.00008 dir=+0 spikes=0 | driftX=-0.516 driftY=-0.247 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=-0.00003
+[TREND-P2] slope_1s=0.00029 slope_10s=0.00019 slope_60s=0.00086 | ema=2.220 dir=+0 | stddev1m=0.023 maxRms10m=2.33
+[MQTT] /sensor 730 B
+[MQTT] /status 529 B
+[MQTT] /vibration 1218 B | NORMAL rms=2.25 peak=2.31 rpm=1505.9 state=2 | health=97% | frx=10.63 fry=10.63 frz=1.05 | cf=4.25 kurt_max=3.932(Z) bear=NORMAL
+[TREND] /trend 624 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.13                                       mm/s |
+| Temp:    38.3                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        7972 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    19928                          |
+| MQTT Publishes:        66 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              2002 seconds                  |
+| RTC Time: 2026-07-05 05:04:37                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1963 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=39/60
+EMA: rms=2.226 delta=-0.00229 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00011 dir=+0 spikes=0 | driftX=0.236 driftY=-0.273 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00009
+[TREND-P2] slope_1s=-0.00053 slope_10s=0.00013 slope_60s=0.00086 | ema=2.211 dir=+1 | stddev1m=0.024 maxRms10m=2.33
+[MQTT] /sensor 728 B
+[MQTT] /status 529 B
+[MQTT] /vibration 1217 B | NORMAL rms=2.23 peak=2.31 rpm=1505.7 state=2 | health=97% | frx=8.59 fry=8.59 frz=1.05 | cf=4.84 kurt_max=3.757(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=40 slot_ms=797
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.16                                       mm/s |
+| Temp:    38.3                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        8092 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    20230                          |
+| MQTT Publishes:        67 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              2032 seconds                  |
+| RTC Time: 2026-07-05 05:05:07                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    1993 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=40/60
+EMA: rms=2.210 delta=-0.00870 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00017 dir=+0 spikes=0 | driftX=1.188 driftY=0.843 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=-0.00010
+[TREND-P2] slope_1s=-0.00069 slope_10s=0.00017 slope_60s=0.00074 | ema=2.218 dir=-1 | stddev1m=0.025 maxRms10m=2.33
+[MQTT] /sensor 728 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1217 B | NORMAL rms=2.23 peak=2.30 rpm=1505.8 state=2 | health=97% | frx=10.63 fry=10.63 frz=1.05 | cf=3.94 kurt_max=3.356(Z) bear=NORMAL
+[TREND] /trend 621 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.19                                       mm/s |
+| Temp:    38.3                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        8214 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    20534                          |
+| MQTT Publishes:        68 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              2063 seconds                  |
+| RTC Time: 2026-07-05 05:05:38                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    2024 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=40/60
+EMA: rms=2.223 delta=0.00606 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=41 slot_ms=796
+[TREND] n=120 slope=-0.00001 dir=+0 spikes=0 | driftX=-0.037 driftY=-0.142 driftZ=-0.000 alert=0 | ttw=0.0h tempSlope=0.00000
+[TREND-P2] slope_1s=-0.00021 slope_10s=0.00014 slope_60s=0.00054 | ema=2.203 dir=+0 | stddev1m=0.024 maxRms10m=2.33
+[MQTT] /sensor 727 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1209 B | NORMAL rms=2.25 peak=2.32 rpm=1505.8 state=2 | health=97% | frx=8.59 fry=8.59 frz=1.05 | cf=4.02 kurt_max=3.679(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     2.22                                       mm/s |
+| Temp:    38.3                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        8334 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:    20835                          |
+| MQTT Publishes:        69 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183724 bytes                     |
+| Min Free Heap:     177904 bytes                     |
+| Uptime:              2093 seconds                  |
+| RTC Time: 2026-07-05 05:06:08                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T04:31:54Z                      |
+| Sync Age:    2054 seconds ago                        |
+| Last Drift:  +0 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2336
+  Button:      2364
+  Buzzer:      1236
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=41/60
+EMA: rms=2.222 delta=0.00994 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00000 dir=+0 spikes=0 | driftX=1.174 driftY=0.665 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00027
+[TREND-P2] slope_1s=-0.00032 slope_10s=-0.00001 slope_60s=0.00054 | ema=2.221 dir=+1 | stddev1m=0.024 maxRms10m=2.33
+[MQTT] /sensor 727 B
+[MQTT] /status 521 B
+[TREND] FAILED -> factory/plant01/machine/pump01/trend
+Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled.
+
+Core  1 register dump:
+PC      : 0x4202e95f  PS      : 0x00060e30  A0      : 0x8202ecb4  A1      : 0x3fcb6270  
+A2      : 0x3fca0030  A3      : 0x00000000  A4      : 0x00000005  A5      : 0x3fcb62d0  
+A6      : 0x00000003  A7      : 0x3fca0030  A8      : 0x00000005  A9      : 0x00000000  
+A10     : 0x00000005  A11     : 0x3fca12b8  A12     : 0x00000005  A13     : 0x00000021  
+A14     : 0x3fca031c  A15     : 0x00000021  SAR     : 0x0000000a  EXCCAUSE: 0x0000001c  
+EXCVADDR: 0x00000009  LBEG    : 0x40056f5c  LEND    : 0x40056f72  LCOUNT  : 0xffffffff  
+
+
+Backtrace: 0x4202e95c:0x3fcb6270 0x4202ecb1:0x3fcb62a0 0x4202f3ba:0x3fcb6310 0x42002fcb:0x3fcb6330 0x42012743:0x3fcb6350 0x42054032:0x3fcb6370 0x42012ae2:0x3fcb63a0 0x42012def:0x3fcb6400 0x42012a4d:0x3fcb6460 0x4200d6ae:0x3fcb64d0 0x4200ebad:0x3fcb6e70 0x4037c439:0x3fcb7490
+
+
+
+
+ELF file SHA256: f0a0fa8fb
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2b (SPI_FAST_FLASH_BOOT)
+Saved PC:0x42019a3b
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x10cc
+load:0x403c8700,len:0xc2c
+load:0x403cb700,len:0x30c0
+entry 0x403c88b8
+
+[CONFIG] Press ENTER within 5 seconds to enter Config Mode...
+[CONFIG] 5...
+[CONFIG] 4...
+[CONFIG] 3...
+[CONFIG] 2...
+[CONFIG] 1...
+[CONFIG] Boot normal
+
+
+
+
++========================================================+
+|  ESP32-S3 VIBRATION MONITOR v12.0 (Phase 5 Fusion AI)  |
+|        LilyGO T-Vending S3 + SIMCom A7670             |
++========================================================+
+
+CPU Frequency: 240 MHz
+Flash Size: 16 MB
+Free Heap: 300484 bytes
+
+[Init] MQTT Pipeline Topics:
+  /vibration (compat): factory/plant01/machine/pump01/vibration
+  /sensor:             factory/plant01/machine/pump01/sensor
+  /decision:           factory/plant01/machine/pump01/decision
+  /trend:              factory/plant01/machine/pump01/trend
+  /event:              factory/plant01/machine/pump01/vibration/event
+[Init] Identity: plant=plant01  machine=pump01  sensor=vb01  rated_rpm=1500
+[Init] GPIO configured
+[Init] OLED initialized
+[Init] RTC time looks reasonable (will verify via NTP)
+[Init] RTC: 2026-07-05 05:06:46 (sync pending)
+[Init] Modbus @ 9600 baud, ID: 0x50
+[Init] Configuring WTVB02 sensor (SR=16K, MODE=FreqDomain)...
+[SENSOR-CFG] ========================================
+[SENSOR-CFG] Re-configuring sensor after restart...
+[SENSOR-CFG] [v16.3] Unlock-per-step: MODE then Save
+[SENSOR-CFG] [Unlock for MODE]... + OK
+[SENSOR-CFG] MODE=FreqDomain (0x07=0x0002)... + OK
+[SENSOR-CFG] [Unlock for Save]... + OK
+[SENSOR-CFG] Save (0x00=0x0000)... + OK
+[SENSOR-CFG] All config steps OK -- SR=16K MODE=FreqDomain(0x02) DRM=0x02 saved
+[SENSOR-CFG] ========================================
+[Init] Sensor config OK -- CF/VRMS/Kurtosis will be active
+[RPM] Loaded runtime_hour = 1.1225 h
+[LATCH] RECOVER — no pending latch
+[Init] RPM sensor GPIO17 | RATED=1500 RPM +/-75 | PPR=1
+[Init] Mutexes created
+[Init] Queues created
+
+[Init] Creating FreeRTOS tasks...
+
++--- CORE 0 (PRO_CPU) - Time Critical ---------------+
+[CORE 0] Modbus task started
+| [+] Modbus RTU       (Priority 5, Stack 4096)      |
+[CORE 0] State machine task started
+| [+] State Machine    (Priority 4, Stack 8192)      |
++----------------------------------------------------+
+
++--- CORE 1 (APP_CPU) - User Interface --------------+
+[CORE 1] Display task started
+| [+] OLED Display     (Priority 3, Stack 6144)      |
+[CORE 1] Network task started (4G Modem)
+| [+] 4G Modem/MQTT    (Priority 2, Stack 24576)     |
+[CORE 1] Analytics task started (Phase 2+Claim2)
+| [+] Analytics        (Priority 3, Stack 6144)      |
+[CORE 1] Button task started (SELECT + ENTER)
+| [+] Button Input     (Priority 2, Stack 4096)      |
+| [+] Buzzer Control   (Priority 1, Stack 2048)      |
++----------------------------------------------------+
+
++========================================================+
+|  SYSTEM READY -- 4G LTE + mTLS + Phase 5 Fusion AI     |
++========================================================+
+
+Network Configuration:
+  APN:       internet
+  MQTT:      iot.promlogix.com:8883 (mTLS)
+  Client ID: pump01
+  QoS:       1
+  Topic:     factory/plant01/machine/pump01/vibration
+
+Vibration Thresholds:
+  Baseline: 2.1 mm/s
+  Warning:  4.5 mm/s
+  Critical: 7.1 mm/s
+
+Adaptive Sending:
+  NORMAL:   30 seconds
+  WARNING:  10 seconds
+  CRITICAL: 5 seconds
+
+Phase 2 Analytics:
+  taskAnalytics: Core 1, 1 Hz, Priority 3
+  Buffers: g_buf1s[60]=60s  g_buf10s[60]=10min  g_buf60s[60]=60min
+  RAM overhead: ~7920 bytes  (~7.7 KB)
+  Analytics topic: factory/plant01/machine/pump01/trend
+
+NTP Time Sync:
+  Sync Interval:  24 hours
+  Retry Interval: 30 minutes
+  Drift Warn:     5 seconds
+  Drift Max:      30 seconds
+
+FreeRTOS scheduler will now take over...
+
+[CORE 1] Buzzer task started
+[ANALYTICS] Frozen -- reason=STARTING
+[Modem] Starting initialization...
+[MOTOR] Warm-up complete (in-band 2.5s) -> RUNNING
+[MOTOR] RUNNING -- RESUME, trend preserved (stop=0s, tempDrop=0.0°C, bearing warm)
+[ANALYTICS] Resumed -- analysis READY
+[ANALYTICS] Resume reinit -- gap=0s, EMA reseed, slope suppress=2 (raw data preserved)
+[Modem] Initialization attempt 1/3
+[Modem] Starting power on sequence...
+[Modem] Power sequence completed
+[Modem] Modem responded
+[Modem] Initialized successfully
+[Modem] Info: Manufacturer: INCORPORATED Model: A7670E-FASE Revision: A7670M7_V1.11.1 IMEI: 861045087668755 +GCAP: +CGSM,+FCLASS,+DS
+[Modem] IMEI: 861045087668755
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.41                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    DISCONNECTED                                  |
+| MQTT:    DISCONNECTED                                  |
+| Signal:  0% (CSQ: 0)                                |
+| Operator:                                              |
++========================================================+
+| Sensor Reads:          85 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:      210                          |
+| MQTT Publishes:         0 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         231212 bytes                     |
+| Min Free Heap:     230900 bytes                     |
+| Uptime:                30 seconds                  |
+| RTC Time: 2026-07-05 05:07:11                    |
++========================================================+
+| NTP Synced:  NO x                                      |
+| Sync Count:  0  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     21124
+  Analytics:   3216
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=16/60  buf10s=2/60  buf60s=0/60
+EMA: rms=3.341 delta=0.01823 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[NTP] Network time auto-update enabled (CTZU=1, CLTS=1)
+[Modem] Waiting for network registration...
+[Modem] Network registered!
+[Modem] Operator: 52003
+[Modem] Signal: 22 (70%)
+[Modem] Connecting to GPRS APN: internet
+[Modem] GPRS connected!
+[Modem] IP: 10.38.203.89
+[CORE 1] Performing initial NTP time sync...
+[NTP] Raw GSM time: '26/07/05,12:07:15+28'
+[NTP] Parsed: local=2026-07-05T12:07:15 (TZ=+28 quarters = +7h)
+[NTP] UTC  : 2026-07-05T05:07:15Z
+[NTP] RTC drift: -1 seconds
+[NTP] RTC is accurate (drift <= 1s), no adjustment
+[CORE 1] Client ID: pump01
+[TLS] Parsing mTLS certificates into ESP32 mbedTLS...
+[TLS] Certificates parsed and loaded +
+[TLS] Client cert subject: CN=pump01
+[TLS] Client cert issuer:  C=TH, O=Promlogix, OU=IoT, CN=Promlogix-Root-CA
+[TLS] CA cert subject:     C=TH, O=Promlogix, OU=IoT, CN=Promlogix-Root-CA
+[TLS] Key type: RSA, bitlen: 2048
+[TLS] Context reset complete -- ready for fresh handshake
+[CORE 1] Connecting MQTT (mTLS, ID=pump01) backoff=30s attempt#1...
+[TLS] TCP connecting to iot.promlogix.com:8883 ...
+[TLS] TCP OK, starting TLS handshake...
+[TLS] mTLS handshake OK + (2s) cipher: TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384
+[CORE 1] MQTT Connected (mTLS) +
+[CORE 1] GPRS: CONNECTED
+[CORE 1] GPRS reconnected -- scheduling NTP sync
+[CORE 1] MQTT: CONNECTED
+[NTP] Time sync check (interval=86400s, synced=yes)
+[NTP] Raw GSM time: '26/07/05,12:07:19+28'
+[NTP] Parsed: local=2026-07-05T12:07:19 (TZ=+28 quarters = +7h)
+[NTP] UTC  : 2026-07-05T05:07:19Z
+[NTP] RTC drift: -1 seconds
+[NTP] RTC is accurate (drift <= 1s), no adjustment
+[TREND] n=119 slope=0.00008 dir=+0 spikes=0 | driftX=0.000 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00003
+[TREND-P2] slope_1s=~0.00000 slope_10s=~0.00000 slope_60s=~0.00000 | ema=3.431 dir=+0 | stddev1m=0.030 maxRms10m=3.53
+[MQTT] /sensor 733 B
+[MQTT] /status 524 B
+[MQTT] /vibration 1191 B | NORMAL rms=3.41 peak=3.53 rpm=1505.4 state=2 | health=74% | frx=93.03 fry=95.07 frz=0.68 | cf=4.15 kurt_max=3.821(Z) bear=WARMING_UP
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.46                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         208 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:      520                          |
+| MQTT Publishes:         1 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         184056 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:                61 seconds                  |
+| RTC Time: 2026-07-05 05:07:42                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    22 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   3216
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=46/60  buf10s=5/60  buf60s=0/60
+EMA: rms=3.461 delta=0.00449 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[ANALYTICS] 60s flush -> buf1s=48 buf10s=6 buf60s=1 slot_ms=797
+[TREND] n=120 slope=0.00003 dir=+0 spikes=0 | driftX=0.000 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00044
+[TREND-P2] slope_1s=~0.00000 slope_10s=~0.00000 slope_60s=~0.00000 | ema=3.430 dir=-1 | stddev1m=0.031 maxRms10m=3.53
+[MQTT] /sensor 733 B
+[MQTT] /status 524 B
+[MQTT] /vibration 1193 B | NORMAL rms=3.42 peak=3.53 rpm=1505.3 state=2 | health=74% | frx=93.04 fry=93.04 frz=0.68 | cf=4.58 kurt_max=3.652(Z) bear=WARMING_UP
+[TREND] /trend 549 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.45                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         329 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:      821                          |
+| MQTT Publishes:         2 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         184056 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:                91 seconds                  |
+| RTC Time: 2026-07-05 05:08:12                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    52 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=9/60  buf60s=1/60
+EMA: rms=3.442 delta=0.00189 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00012 dir=+0 spikes=0 | driftX=0.000 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=-0.00002
+[TREND-P2] slope_1s=-0.00038 slope_10s=0.00183 slope_60s=~0.00000 | ema=3.432 dir=-1 | stddev1m=0.028 maxRms10m=3.55
+[MQTT] /sensor 735 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1210 B | NORMAL rms=3.49 peak=3.55 rpm=1506.1 state=2 | health=72% | frx=91.63 fry=91.63 frz=0.68 | cf=5.61 kurt_max=4.263(Z) bear=EARLY_WARNING
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=12 buf60s=2 slot_ms=797
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.45                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         450 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     1123                          |
+| MQTT Publishes:         3 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         184056 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               122 seconds                  |
+| RTC Time: 2026-07-05 05:08:42                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    82 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=13/60  buf60s=2/60
+EMA: rms=3.444 delta=-0.00175 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00018 dir=+0 spikes=0 | driftX=-0.270 driftY=-0.586 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00007
+[TREND-P2] slope_1s=0.00073 slope_10s=-0.00038 slope_60s=~0.00000 | ema=3.456 dir=-1 | stddev1m=0.027 maxRms10m=3.55
+[MQTT] /sensor 727 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1208 B | NORMAL rms=3.42 peak=3.55 rpm=1505.6 state=2 | health=74% | frx=95.06 fry=93.02 frz=0.68 | cf=4.65 kurt_max=3.920(Z) bear=NORMAL
+[TREND] /trend 597 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.48                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         571 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     1426                          |
+| MQTT Publishes:         4 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183776 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               152 seconds                  |
+| RTC Time: 2026-07-05 05:09:12                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    112 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=17/60  buf60s=2/60
+EMA: rms=3.415 delta=-0.00531 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00011 dir=+0 spikes=0 | driftX=-0.040 driftY=0.084 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00029
+[TREND-P2] slope_1s=-0.00046 slope_10s=0.00012 slope_60s=~0.00000 | ema=3.443 dir=-1 | stddev1m=0.030 maxRms10m=3.55
+[MQTT] /sensor 730 B
+[MQTT] /status 529 B
+[MQTT] /vibration 1212 B | NORMAL rms=3.43 peak=3.54 rpm=1505.8 state=2 | health=73% | frx=95.04 fry=95.04 frz=0.68 | cf=4.29 kurt_max=3.529(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=18 buf60s=3 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.39                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         691 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     1727                          |
+| MQTT Publishes:         5 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183776 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               182 seconds                  |
+| RTC Time: 2026-07-05 05:09:43                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    142 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=20/60  buf60s=3/60
+EMA: rms=3.442 delta=-0.01020 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00021 dir=+0 spikes=0 | driftX=-0.001 driftY=0.045 driftZ=-0.000 alert=0 | ttw=0.0h tempSlope=0.00013
+[TREND-P2] slope_1s=-0.00084 slope_10s=0.00044 slope_60s=~0.00000 | ema=3.453 dir=+0 | stddev1m=0.026 maxRms10m=3.55
+[MQTT] /sensor 725 B
+[MQTT] /status 530 B
+[MQTT] /vibration 1208 B | NORMAL rms=3.45 peak=3.55 rpm=1505.6 state=2 | health=73% | frx=93.02 fry=95.06 frz=0.68 | cf=4.36 kurt_max=3.535(Z) bear=NORMAL
+[TREND] /trend 597 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=24 buf60s=4 slot_ms=797
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.49                                       mm/s |
+| Temp:    38.4                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         812 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     2028                          |
+| MQTT Publishes:         6 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               212 seconds                  |
+| RTC Time: 2026-07-05 05:10:13                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    173 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=24/60  buf60s=4/60
+EMA: rms=3.442 delta=-0.00349 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00011 dir=+0 spikes=0 | driftX=0.005 driftY=-0.301 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00007
+[TREND-P2] slope_1s=0.00044 slope_10s=0.00060 slope_60s=~0.00000 | ema=3.470 dir=-1 | stddev1m=0.027 maxRms10m=3.55
+[MQTT] /sensor 727 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1206 B | NORMAL rms=3.43 peak=3.54 rpm=1506.0 state=2 | health=73% | frx=95.03 fry=95.03 frz=0.68 | cf=4.39 kurt_max=3.772(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.43                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  77% (CSQ: 24)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:         932 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     2330                          |
+| MQTT Publishes:         7 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               242 seconds                  |
+| RTC Time: 2026-07-05 05:10:43                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    203 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=28/60  buf60s=4/60
+EMA: rms=3.460 delta=-0.01767 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00010 dir=+0 spikes=0 | driftX=0.294 driftY=0.520 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00002
+[TREND-P2] slope_1s=0.00045 slope_10s=0.00055 slope_60s=~0.00000 | ema=3.458 dir=+0 | stddev1m=0.028 maxRms10m=3.55
+[MQTT] /sensor 723 B
+[MQTT] /status 525 B
+[MQTT] /vibration 1200 B | NORMAL rms=3.47 peak=3.56 rpm=1505.8 state=2 | health=73% | frx=93.00 fry=93.00 frz=0.68 | cf=4.86 kurt_max=3.938(Z) bear=NORMAL
+[TREND] /trend 600 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=30 buf60s=5 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.48                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1052 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     2630                          |
+| MQTT Publishes:         8 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               272 seconds                  |
+| RTC Time: 2026-07-05 05:11:13                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    233 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=32/60  buf60s=5/60
+EMA: rms=3.462 delta=0.00312 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00012 dir=+0 spikes=0 | driftX=-0.235 driftY=-0.009 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00005
+[TREND-P2] slope_1s=-0.00044 slope_10s=0.00049 slope_60s=~0.00000 | ema=3.455 dir=+0 | stddev1m=0.028 maxRms10m=3.56
+[MQTT] /sensor 727 B
+[MQTT] /status 530 B
+[MQTT] /vibration 1210 B | NORMAL rms=3.40 peak=3.53 rpm=1505.7 state=2 | health=74% | frx=93.01 fry=93.01 frz=0.68 | cf=4.61 kurt_max=3.911(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=36 buf60s=6 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.40                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  64% (CSQ: 20)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1173 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     2931                          |
+| MQTT Publishes:         9 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               302 seconds                  |
+| RTC Time: 2026-07-05 05:11:43                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    263 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=36/60  buf60s=6/60
+EMA: rms=3.448 delta=-0.01104 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00009 dir=+0 spikes=0 | driftX=0.351 driftY=0.373 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00013
+[TREND-P2] slope_1s=0.00048 slope_10s=0.00017 slope_60s=~0.00000 | ema=3.449 dir=+0 | stddev1m=0.031 maxRms10m=3.56
+[MQTT] /sensor 730 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1209 B | NORMAL rms=3.42 peak=3.54 rpm=1505.6 state=2 | health=74% | frx=95.06 fry=93.02 frz=0.68 | cf=4.58 kurt_max=3.819(Z) bear=NORMAL
+[TREND] /trend 597 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.41                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  80% (CSQ: 25)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1293 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     3231                          |
+| MQTT Publishes:        10 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               332 seconds                  |
+| RTC Time: 2026-07-05 05:12:13                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    293 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=39/60  buf60s=6/60
+EMA: rms=3.437 delta=-0.00627 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00011 dir=+0 spikes=0 | driftX=-0.131 driftY=-0.471 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00026
+[TREND-P2] slope_1s=0.00057 slope_10s=0.00034 slope_60s=~0.00000 | ema=3.477 dir=+1 | stddev1m=0.029 maxRms10m=3.56
+[MQTT] /sensor 726 B
+[MQTT] /status 529 B
+[MQTT] /vibration 1207 B | NORMAL rms=3.39 peak=3.56 rpm=1505.9 state=2 | health=74% | frx=93.00 fry=95.04 frz=0.68 | cf=4.55 kurt_max=3.783(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=42 buf60s=7 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.47                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1413 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     3532                          |
+| MQTT Publishes:        11 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               363 seconds                  |
+| RTC Time: 2026-07-05 05:12:43                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    323 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=43/60  buf60s=7/60
+EMA: rms=3.435 delta=-0.00703 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00005 dir=+0 spikes=0 | driftX=-0.148 driftY=0.191 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00028
+[TREND-P2] slope_1s=0.00042 slope_10s=-0.00006 slope_60s=~0.00000 | ema=3.419 dir=+0 | stddev1m=0.028 maxRms10m=3.58
+[MQTT] /sensor 729 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1210 B | NORMAL rms=3.43 peak=3.58 rpm=1506.2 state=2 | health=73% | frx=92.98 fry=92.98 frz=0.68 | cf=4.72 kurt_max=3.809(Z) bear=NORMAL
+[TREND] /trend 602 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.51                                       mm/s |
+| Temp:    38.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  80% (CSQ: 25)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1537 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     3841                          |
+| MQTT Publishes:        12 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               394 seconds                  |
+| RTC Time: 2026-07-05 05:13:14                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    354 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     18016
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=47/60  buf60s=7/60
+EMA: rms=3.474 delta=0.00955 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00024 dir=+0 spikes=0 | driftX=-0.068 driftY=0.250 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00040
+[TREND-P2] slope_1s=0.00096 slope_10s=-0.00010 slope_60s=~0.00000 | ema=3.482 dir=+1 | stddev1m=0.028 maxRms10m=3.58
+[MQTT] /sensor 728 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1206 B | NORMAL rms=3.50 peak=3.53 rpm=1506.1 state=2 | health=72% | frx=95.03 fry=95.03 frz=0.68 | cf=4.71 kurt_max=3.846(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=48 buf60s=8 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.39                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1658 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     4144                          |
+| MQTT Publishes:        13 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183732 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               424 seconds                  |
+| RTC Time: 2026-07-05 05:13:44                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    384 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=51/60  buf60s=8/60
+EMA: rms=3.458 delta=0.00332 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00015 dir=+0 spikes=0 | driftX=-0.144 driftY=0.320 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=-0.00005
+[TREND-P2] slope_1s=0.00025 slope_10s=0.00001 slope_60s=~0.00000 | ema=3.477 dir=+1 | stddev1m=0.026 maxRms10m=3.58
+[MQTT] /sensor 728 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1205 B | NORMAL rms=3.50 peak=3.55 rpm=1505.7 state=2 | health=72% | frx=93.01 fry=93.01 frz=0.68 | cf=4.42 kurt_max=3.658(Z) bear=NORMAL
+[TREND] /trend 597 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=54 buf60s=9 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.47                                       mm/s |
+| Temp:    38.5                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1781 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     4452                          |
+| MQTT Publishes:        14 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183588 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               455 seconds                  |
+| RTC Time: 2026-07-05 05:14:15                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    415 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=55/60  buf60s=9/60
+EMA: rms=3.446 delta=-0.00483 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00003 dir=+0 spikes=0 | driftX=-0.314 driftY=-0.020 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00006
+[TREND-P2] slope_1s=-0.00033 slope_10s=0.00031 slope_60s=~0.00000 | ema=3.435 dir=-1 | stddev1m=0.030 maxRms10m=3.58
+[MQTT] /sensor 726 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1207 B | NORMAL rms=3.55 peak=3.57 rpm=1506.2 state=2 | health=71% | frx=95.02 fry=95.02 frz=0.68 | cf=4.35 kurt_max=3.561(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.44                                       mm/s |
+| Temp:    38.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        1902 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     4754                          |
+| MQTT Publishes:        15 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               485 seconds                  |
+| RTC Time: 2026-07-05 05:14:45                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    445 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2560
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=58/60  buf60s=9/60
+EMA: rms=3.468 delta=0.00419 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00013 dir=+0 spikes=0 | driftX=0.336 driftY=0.324 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00035
+[TREND-P2] slope_1s=-0.00067 slope_10s=0.00047 slope_60s=~0.00000 | ema=3.476 dir=+1 | stddev1m=0.031 maxRms10m=3.58
+[MQTT] /sensor 726 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1207 B | NORMAL rms=3.40 peak=3.56 rpm=1506.0 state=2 | health=74% | frx=92.31 fry=92.31 frz=0.68 | cf=4.09 kurt_max=3.768(Z) bear=NORMAL
+[TREND] /trend 599 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=10 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.46                                       mm/s |
+| Temp:    38.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  83% (CSQ: 26)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2022 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     5055                          |
+| MQTT Publishes:        16 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               515 seconds                  |
+| RTC Time: 2026-07-05 05:15:15                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    475 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=10/60
+EMA: rms=3.446 delta=-0.01001 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00006 dir=+0 spikes=0 | driftX=-0.136 driftY=0.000 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00011
+[TREND-P2] slope_1s=0.00010 slope_10s=0.00064 slope_60s=~0.00000 | ema=3.448 dir=+0 | stddev1m=0.031 maxRms10m=3.58
+[MQTT] /sensor 726 B
+[MQTT] /status 525 B
+[MQTT] /vibration 1203 B | NORMAL rms=3.50 peak=3.57 rpm=1506.0 state=2 | health=72% | frx=95.03 fry=95.03 frz=0.68 | cf=4.96 kurt_max=3.891(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=11 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.50                                       mm/s |
+| Temp:    38.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2142 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     5355                          |
+| MQTT Publishes:        17 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               545 seconds                  |
+| RTC Time: 2026-07-05 05:15:45                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    505 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=11/60
+EMA: rms=3.488 delta=0.01094 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00001 dir=+0 spikes=0 | driftX=0.051 driftY=0.198 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00019
+[TREND-P2] slope_1s=-0.00008 slope_10s=0.00061 slope_60s=~0.00000 | ema=3.479 dir=-1 | stddev1m=0.029 maxRms10m=3.58
+[MQTT] /sensor 722 B
+[MQTT] /status 525 B
+[MQTT] /vibration 1202 B | NORMAL rms=3.41 peak=3.53 rpm=1505.9 state=2 | health=74% | frx=93.00 fry=93.00 frz=0.68 | cf=4.30 kurt_max=3.921(Z) bear=NORMAL
+[TREND] /trend 602 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.47                                       mm/s |
+| Temp:    38.7                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2263 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     5657                          |
+| MQTT Publishes:        18 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               575 seconds                  |
+| RTC Time: 2026-07-05 05:16:16                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    535 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=11/60
+EMA: rms=3.484 delta=0.00818 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00019 dir=+0 spikes=0 | driftX=0.048 driftY=0.082 driftZ=0.000 alert=0 | ttw=0.0h tempSlope=0.00024
+[TREND-P2] slope_1s=0.00066 slope_10s=0.00064 slope_60s=~0.00000 | ema=3.493 dir=+1 | stddev1m=0.026 maxRms10m=3.58
+[MQTT] /sensor 730 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1211 B | NORMAL rms=3.52 peak=3.56 rpm=1505.5 state=2 | health=72% | frx=95.06 fry=92.35 frz=0.68 | cf=4.44 kurt_max=3.764(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=12 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.46                                       mm/s |
+| Temp:    38.6                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2383 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     5957                          |
+| MQTT Publishes:        19 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               605 seconds                  |
+| RTC Time: 2026-07-05 05:16:46                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    565 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=12/60
+EMA: rms=3.461 delta=0.00601 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00003 dir=+0 spikes=0 | driftX=0.058 driftY=-0.462 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00018
+[TREND-P2] slope_1s=-0.00030 slope_10s=0.00054 slope_60s=~0.00000 | ema=3.459 dir=+0 | stddev1m=0.027 maxRms10m=3.58
+[MQTT] /sensor 735 B
+[MQTT] /status 536 B
+[MQTT] /vibration 1217 B | NORMAL rms=3.45 peak=3.54 rpm=1506.3 state=2 | health=73% | frx=92.97 fry=92.97 frz=0.68 | cf=4.80 kurt_max=4.094(Z) bear=EARLY_WARNING
+[TREND] /trend 601 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.47                                       mm/s |
+| Temp:    38.7                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  70% (CSQ: 22)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2503 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     6257                          |
+| MQTT Publishes:        20 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               635 seconds                  |
+| RTC Time: 2026-07-05 05:17:16                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    595 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=12/60
+EMA: rms=3.481 delta=-0.00113 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00032 dir=+0 spikes=0 | driftX=0.445 driftY=0.230 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00038
+[TREND-P2] slope_1s=0.00140 slope_10s=0.00042 slope_60s=~0.00000 | ema=3.491 dir=+1 | stddev1m=0.028 maxRms10m=3.58
+[MQTT] /sensor 730 B
+[MQTT] /status 526 B
+[MQTT] /vibration 1208 B | NORMAL rms=3.49 peak=3.57 rpm=1505.9 state=2 | health=72% | frx=95.04 fry=92.32 frz=0.68 | cf=3.87 kurt_max=3.398(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=13 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.43                                       mm/s |
+| Temp:    38.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2623 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     6558                          |
+| MQTT Publishes:        21 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183728 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               665 seconds                  |
+| RTC Time: 2026-07-05 05:17:46                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    625 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=13/60
+EMA: rms=3.462 delta=0.00015 dir=+0
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00015 dir=+0 spikes=0 | driftX=-0.024 driftY=-0.114 driftZ=-0.000 alert=0 | ttw=0.0h tempSlope=0.00038
+[TREND-P2] slope_1s=0.00040 slope_10s=0.00024 slope_60s=~0.00000 | ema=3.470 dir=+1 | stddev1m=0.030 maxRms10m=3.58
+[MQTT] /sensor 723 B
+[MQTT] /status 530 B
+[MQTT] /vibration 1203 B | NORMAL rms=3.46 peak=3.54 rpm=1505.9 state=2 | health=73% | frx=93.00 fry=93.00 frz=0.68 | cf=4.74 kurt_max=3.835(Z) bear=NORMAL
+[TREND] /trend 603 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=14 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.43                                       mm/s |
+| Temp:    38.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2745 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     6862                          |
+| MQTT Publishes:        22 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183640 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               696 seconds                  |
+| RTC Time: 2026-07-05 05:18:16                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    656 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=14/60
+EMA: rms=3.445 delta=0.01466 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=-0.00022 dir=+0 spikes=0 | driftX=-0.116 driftY=-0.252 driftZ=0.362 alert=1 | ttw=0.0h tempSlope=-0.00001
+[TREND-P2] slope_1s=-0.00115 slope_10s=-0.00017 slope_60s=~0.00000 | ema=3.445 dir=+1 | stddev1m=0.032 maxRms10m=3.58
+[MQTT] /sensor 729 B
+[MQTT] /status 534 B
+[MQTT] /vibration 1216 B | NORMAL rms=3.46 peak=3.54 rpm=1506.2 state=2 | health=73% | frx=92.98 fry=92.98 frz=0.68 | cf=4.46 kurt_max=3.829(Z) bear=NORMAL
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.46                                       mm/s |
+| Temp:    38.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2867 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     7165                          |
+| MQTT Publishes:        23 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183640 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               726 seconds                  |
+| RTC Time: 2026-07-05 05:18:46                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    686 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=14/60
+EMA: rms=3.448 delta=0.01300 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00002 dir=+0 spikes=0 | driftX=0.174 driftY=0.197 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00022
+[TREND-P2] slope_1s=0.00007 slope_10s=-0.00036 slope_60s=~0.00000 | ema=3.448 dir=+0 | stddev1m=0.031 maxRms10m=3.58
+[MQTT] /sensor 729 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1210 B | NORMAL rms=3.45 peak=3.56 rpm=1505.9 state=2 | health=73% | frx=93.68 fry=93.68 frz=0.68 | cf=4.23 kurt_max=3.649(Z) bear=NORMAL
+[TREND] /trend 604 B
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=15 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.50                                       mm/s |
+| Temp:    38.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        2987 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     7467                          |
+| MQTT Publishes:        24 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183640 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               756 seconds                  |
+| RTC Time: 2026-07-05 05:19:17                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    716 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=15/60
+EMA: rms=3.479 delta=-0.00349 dir=-1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00011 dir=+0 spikes=0 | driftX=-0.438 driftY=0.105 driftZ=0.000 alert=1 | ttw=0.0h tempSlope=0.00004
+[TREND-P2] slope_1s=0.00041 slope_10s=-0.00051 slope_60s=~0.00000 | ema=3.486 dir=+1 | stddev1m=0.031 maxRms10m=3.58
+[MQTT] /sensor 730 B
+[MQTT] /status 528 B
+[MQTT] /vibration 1212 B | NORMAL rms=3.51 peak=3.57 rpm=1505.8 state=2 | health=72% | frx=95.04 fry=95.04 frz=0.68 | cf=4.46 kurt_max=3.855(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=16 slot_ms=796
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.45                                       mm/s |
+| Temp:    38.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        3107 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     7767                          |
+| MQTT Publishes:        25 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183640 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               786 seconds                  |
+| RTC Time: 2026-07-05 05:19:47                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    746 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=16/60
+EMA: rms=3.469 delta=0.00386 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00004 dir=+0 spikes=0 | driftX=0.316 driftY=0.214 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00003
+[TREND-P2] slope_1s=0.00015 slope_10s=-0.00041 slope_60s=~0.00000 | ema=3.469 dir=+0 | stddev1m=0.030 maxRms10m=3.58
+[MQTT] /sensor 730 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1210 B | NORMAL rms=3.47 peak=3.57 rpm=1506.1 state=2 | health=73% | frx=93.67 fry=95.03 frz=0.68 | cf=4.11 kurt_max=3.423(Z) bear=NORMAL
+[TREND] /trend 601 B
+
++========================================================+
+|              SYSTEM STATUS REPORT (4G mTLS)            |
++========================================================+
+| Machine: pump01                                        |
+| State:   NORMAL                                        |
+| RMS:     3.50                                       mm/s |
+| Temp:    38.8                                         degC |
++========================================================+
+| Modem:   READY                                         |
+| GPRS:    CONNECTED                                     |
+| MQTT:    CONNECTED (mTLS)                              |
+| Signal:  74% (CSQ: 23)                                |
+| Operator: 52003                                        |
++========================================================+
+| Sensor Reads:        3227 (Errors:        0)       |
+| VRMS Deglitch:          0  (0.0% of reads)          |
+| Display Updates:     8067                          |
+| MQTT Publishes:        26 (Failures:        0)     |
++========================================================+
+| Stuck Threshold:  5 reads x 250ms = 1.25 s           |
+| Vx Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vy Stuck Count:    0 / 5   (Restarts:   0)           |
+| Vz Stuck Count:    0 / 5   (Restarts:   0)           |
+| Last Restart:    never                              |
++========================================================+
+| Free Heap:         183640 bytes                     |
+| Min Free Heap:     177728 bytes                     |
+| Uptime:               816 seconds                  |
+| RTC Time: 2026-07-05 05:20:17                    |
++========================================================+
+| NTP Synced:  YES +                                     |
+| Last Sync:   2026-07-05T05:07:19Z                      |
+| Sync Age:    776 seconds ago                        |
+| Last Drift:  -1 seconds                            |
+| Sync Count:  2  (Failures: 0)                    |
++========================================================+
+
+Task Stack High Water Marks (bytes remaining):
+  Modbus:      2732
+  State:       5688
+  Display:     3988
+  Network:     17968
+  Analytics:   2368
+  Button:      3224
+  Buzzer:      1156
+
+Analytics Buffer Fill: buf1s=60/60  buf10s=60/60  buf60s=16/60
+EMA: rms=3.486 delta=0.01329 dir=+1
++========================================================+
+| TelemBuf Pending:    0 / 120 slots                     |
+| TelemBuf Overflow:        0  (oldest overwritten)      |
+| TelemBuf Replayed:        0  (cumulative sent OK)      |
++========================================================+
+
+[TREND] n=120 slope=0.00007 dir=+0 spikes=0 | driftX=0.245 driftY=-0.140 driftZ=-0.000 alert=1 | ttw=0.0h tempSlope=0.00001
+[TREND-P2] slope_1s=0.00028 slope_10s=-0.00012 slope_60s=~0.00000 | ema=3.479 dir=-1 | stddev1m=0.028 maxRms10m=3.58
+[MQTT] /sensor 729 B
+[MQTT] /status 527 B
+[MQTT] /vibration 1208 B | NORMAL rms=3.45 peak=3.55 rpm=1505.7 state=2 | health=73% | frx=88.94 fry=88.94 frz=0.68 | cf=4.65 kurt_max=3.992(Z) bear=NORMAL
+[ANALYTICS] 60s flush -> buf1s=60 buf10s=60 buf60s=17 slot_ms=797
