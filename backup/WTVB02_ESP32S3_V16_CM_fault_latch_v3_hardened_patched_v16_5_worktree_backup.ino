@@ -6,7 +6,29 @@
  * Modem: SIMCom A7670 (SIM7600 Compatible) - 4G LTE
  * RTC: DS3231
  *
- * Version: 16.4 (condition_monitoring_v1) [patched v16.4 -- spike deglitch]
+ * Version: 16.5 (condition_monitoring_v1) [patched v16.5 -- CF motor_state gate]
+ *
+ * v16.5 Changes (CF garbage-while-stopped fix):
+ * +--------------------------------------------------------------------+
+ * | ROOT CAUSE: crest_factor / cf_x / cf_y / cf_z were the only        |
+ * | vibration fields NOT gated by motor_state==RUNNING, unlike         |
+ * | rms/peak/kurtosis which all zero out when not RUNNING. Sensor CF   |
+ * | registers report noise-floor/garbage while STOPPED (unfiltered,    |
+ * | same deglitch-only-runs-when-RUNNING issue as v16.4).              |
+ * |                                                                    |
+ * | FIX (4 locations):                                                 |
+ * |  1. publishTelemetry(): crestFactor now requires motor_state==2    |
+ * |  2. s["cf_x"/"cf_y"/"cf_z"] (PUB-1 /sensor) gated                  |
+ * |  3. doc["cf_x"/"cf_y"/"cf_z"] (PUB-3 /vibration) gated             |
+ * |  4. pushTelemBuf(): s->cf_max gated -- prevents stale CF garbage   |
+ * |     from being replayed over MQTT after reconnect                 |
+ * +--------------------------------------------------------------------+
+ *
+ * v16.5.1 (follow-up): [MQTT] /vibration Serial debug print used raw
+ * data->rms_overall instead of the gated reportedRms -- console log
+ * showed nonzero RMS while STOPPED even though the actual published
+ * doc["rms"] was correctly 0. Fixed to print reportedRms so debug log
+ * matches what is actually sent over MQTT.
  *
  * v16.4 Changes (Priority 1 root cause fix):
  * +--------------------------------------------------------------------+
@@ -66,6 +88,13 @@
 #include <RTClib.h>
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
 
+// ============================================================================
+// VERIFICATION INSTRUMENTATION (Checkpoint 1 -- disabled by default)
+// ============================================================================
+// [VERIFY_TEST] RAM-only causal-proof capture for poll_seq / deglitch forensics.
+// Off in production builds; no runtime behavior change when undefined.
+// #define VERIFY_TEST
+
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -102,6 +131,11 @@
 // --- Modbus Configuration ---
 #define MODBUS_BAUDRATE 9600
 #define MODBUS_SLAVE_ID 0x50
+
+// --- CTR4A01 Current Sensor (shared RS485 bus, multi-drop Modbus) [v16.6a] ---
+// Register map reused verbatim from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino
+#define CURRENT_SENSOR_ID   0x01     // CTR4A01 slave address
+#define CT_REG_AC_CURRENT   0x0000   // function 04 (input register), unit mA (0-5000 = 0-5A)
 // §6.4.14-16: Velocity RMS (True RMS, ÷1000 → mm/s)
 // เปลี่ยนจาก VX/VY/VZ (0x3A Peak ÷100) → VRMSX/Y/Z (True RMS ÷1000)
 // ต้องตั้ง DRM=0x02 (Frequency domain) เพื่อให้ค่าถูกต้อง
@@ -114,6 +148,8 @@
                          // CFY=0x53, CFZ=0x5F (ไม่ต่อเนื่อง -- อ่านแยก transaction ถ้าต้องการ)
 #define REG_CFY    0x53  // CFY=Accel Crest Factor Y, KY=Kurtosis Y (0x53~0x54) §6.4.15
 #define REG_CFZ    0x5F  // CFZ=Accel Crest Factor Z, KZ=Kurtosis Z (0x5F~0x60) §6.4.16
+#define REG_PEAK_X 0x3A  // [DESIGN-0004] VX~VZ (vibration speed), 3 consecutive registers
+                         // 0x3A~0x3C, signed, raw/100 -> mm/s, per datasheet §6.4.6
 
 // --- Sensor Re-config Registers (v15.7) ---
 // ใช้หลัง restartSensorViaModbus() เพื่อ restore config ที่อาจกลับเป็น default
@@ -123,6 +159,12 @@
 #define REG_SAMPLE_RATE   0x0029  // Sample rate register
 #define SENSOR_UNLOCK_KEY 0xB588  // Unlock password
 #define SENSOR_SR_16K     0x0001  // Sample Rate = 16 kHz
+// [PD-0001] SR6=512Hz was the Phase 1 experimental baseline (WTVB05_FIFO_Investigation_Report.md).
+// [PD-0003] Switched to SR5=1kHz. This constant IS wired into the write path
+// (see REG_SAMPLE_RATE write in the sensor-config sequence). SR ownership/enforcement
+// policy still pending design doc -- update this comment again if the baseline changes.
+#define SENSOR_SR_512     0x0006  // Sample Rate = 512 Hz (SR6)
+#define SENSOR_SR_1K      0x0005  // Sample Rate = 1 kHz (SR5)
 #define REG_DRM           0x002B  // Displacement range mode register §6.4.11
 #define SENSOR_DRM_FREQ   0x0002  // 0x02 = Frequency domain algorithm
                                   // จำเป็นสำหรับ VRMS (0x50/0x5C/0x68) ให้คำนวณถูกต้อง
@@ -145,7 +187,7 @@ static constexpr const char* GPRS_PASS = "";
 #define PLANT_ID "plant01"   // Plant / Site identity
 #define MACHINE_ID "pump01"  // Machine identity (tag-level)
 #define SENSOR_ID "vb01"     // Sensor identity
-#define NAMEPLATE_RPM 1500   // Motor nameplate RPM (used as RATED_RPM reference)
+#define NAMEPLATE_RPM 1800   // Motor nameplate RPM (used as RATED_RPM reference)
 
 // --- Proximity / RPM Sensor Configuration ---
 #define PIN_RPM               17      // Proximity sensor pulse input (PC817 or NPN)
@@ -160,6 +202,17 @@ static constexpr const char* GPRS_PASS = "";
 #define FORCE_STOP_TIMEOUT_MS 2000    // No pulse > 2 s   -> STOPPED
 #define FAULT_WINDOW_MS       3000    // RUNNING but no pulse > 3 s -> prox=0 (Fault)
 #define RUNNING_WARMUP_MS     2500    // [v16.3z] ต้อง in-band ต่อเนื่อง 2.5s ก่อนเป็น RUNNING (กัน bounce/spurious)
+// [Commit 3A] Confirmed-absence timeouts -- deliberately separate from
+// NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS above, which are calibrated for
+// "no signal at all" (sub-second/2s). These instead bound "evidence is fresh
+// but signalPresent has been continuously false" -- e.g. Current reads
+// succeeding but reporting below threshold. Must be well above
+// RUNNING_WARMUP_MS so a normal startup ramp (signalPresent=false while
+// climbing toward the band) is never mistaken for a stopped motor.
+// PLACEHOLDER VALUES -- not validated against real startup ramp durations;
+// review before relying on this in production, especially for RPM.
+#define ABSENT_STOPPING_MS    15000   // signalPresent false (but fresh) > 15s -> STOPPING
+#define ABSENT_STOPPED_MS     30000   // ... > 30s -> STOPPED
 #define STOPPED_CLEAR_MS      (30UL*60UL*1000UL)  // [v16.3aa] หยุด > 30 นาที = clear trend (bearing state เทียบไม่ได้แล้ว)
 #define COLD_START_TEMP_DROP_C 5.0f   // [v16.3ad] temp ลดจากตอนหยุด >= 5°C = bearing เย็นลง = cold start (เทียบ trend ไม่ได้)
 #define RPM_FREQ_GATE         400     // v16.0: RPM floor สำหรับ freq_ratio / freq_alert
@@ -328,9 +381,9 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 
 // --- Machine Configuration ---
 #define MACHINE_NAME MACHINE_ID  // Display uses MACHINE_ID for consistency
-#define BASELINE_RMS 2.1f
+#define BASELINE_RMS 2.8f
 #define WARNING_RMS 4.5f
-#define CRITICAL_RMS 7.1f
+#define CRITICAL_RMS 11.2f
 
 // --- FreeRTOS Configuration ---
 #define STACK_SIZE_MODBUS    4096   // Modbus task stack
@@ -354,6 +407,12 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define QUEUE_SIZE_BUTTON 3
 #define QUEUE_SIZE_DISPLAY 3
 #define QUEUE_SIZE_MAINT 2   // V14.4: maintenance reset events (Button -> Network)
+#define QUEUE_SIZE_MQTT_OUTBOUND 6  // [v16.5] Section 7 Item 3: dormant outbound MQTT queue (Analytics -> Network4G, not wired yet)
+#ifdef VERIFY_TEST
+#define QUEUE_SIZE_DIAG_SNAPSHOT 1  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
+#endif
+
+#define MQTT_OUTBOUND_PAYLOAD_MAX 1024  // [v16.5] matches existing /trend serialization buffer size
 
 // --- Modem Timeouts ---
 #define MODEM_INIT_TIMEOUT 30000    // 30 seconds for modem init
@@ -1078,6 +1137,28 @@ typedef enum {
   MOTOR_STOPPING = 3    // ????? stop (pulse ??????????????)
 } MotorRunState_t;
 
+// [vNext] Evidence source selector for the Motor State Machine.
+// MOTOR_SRC_RPM is the only implemented path today; CURRENT and PROXIMITY
+// are reserved for future commits and currently fall back to RPM values.
+enum MotorStateSource {
+  MOTOR_SRC_RPM,
+  MOTOR_SRC_CURRENT,
+  MOTOR_SRC_PROXIMITY
+};
+
+// [Commit 3] Semantic evidence the state machine acts on -- decouples
+// updateMotorStateMachine() from any specific sensor. Each source translates
+// its own raw measurement into these two facts:
+//   signalPresent -- does this source currently observe "motor active"
+//                    conditions (RPM: in-band; Current: above threshold)?
+//   ageMs         -- time since this source last had a fresh/valid reading.
+// Deliberately minimal: no raw values, no thresholds, no source-specific
+// config -- those stay entirely inside buildMotorStateEvidence().
+struct MotorStateEvidence {
+  bool     signalPresent;
+  uint32_t ageMs;
+};
+
 // [v16.3ab] Analysis freeze reason (derived state) — วางไว้ต้นไฟล์เพราะ .ino auto-prototype
 // ต้องเห็น type ก่อน function ที่ return มัน (analysisReason)
 typedef enum {
@@ -1115,6 +1196,12 @@ typedef struct {
   float vel_peak_z;      // [mm/s] peak velocity Z (0x3C / 100)
   float vel_peak_overall;// max(vel_peak_x, y, z) -- ใช้ drive g_velPeakHold
 
+  // --- Peak Velocity, register 0x3A-0x3C (signed, DESIGN-0004) ---
+  // ไม่ใช่ vel_peak_x/y/z ด้านบน (field นั้นเปลี่ยนไปเก็บ VRMS ตั้งแต่มีการ repoint register)
+  float peak_velocity_x; // [mm/s] signed, reg 0x3A / 100, datasheet §6.4.6
+  float peak_velocity_y; // [mm/s] signed, reg 0x3B / 100
+  float peak_velocity_z; // [mm/s] signed, reg 0x3C / 100
+
   // --- Sensor-computed features [v15.0/15.1] ---
   // คำนวณภายใน chip จาก 16KHz FIFO ถูกต้องกว่าคำนวณบน ESP32
   float cf_x;            // Acceleration Crest Factor X (reg 0x47 / 1000) -- Peak/RMS acc
@@ -1141,6 +1228,10 @@ typedef struct {
   float    runtime_hour;  // Accumulated running hours (NVS persistent)
   uint8_t  prox;          // 1=pulse normal, 0=Fault/?????? pulse
 
+  // --- CTR4A01 current sensor [v16.6a] ---
+  float    current_a;     // AC current [A], valid only if current_valid
+  bool     current_valid; // true only on cycles where a fresh 500ms CT sample was taken
+
   // --- [v16.3y] Diagnostic fields for VRMS glitch forensics (steps 1-3) ---
   int16_t  raw_x;         // ค่าดิบ register VRMS X ก่อนแปลง (getResponseBuffer) — 0 = sensor คืน 0
   int16_t  raw_y;         // ค่าดิบ register VRMS Y
@@ -1149,7 +1240,90 @@ typedef struct {
   uint16_t poll_interval_ms; // ระยะห่างจริงระหว่าง poll รอบนี้กับรอบก่อน (ms, nominal 250)
   uint8_t  retry_count;   // จำนวน sub-read ที่ fail ในรอบนี้ (0 = ผ่านหมด)
   bool     crc_ok;        // true = ทุก read ผ่าน CRC (มาถึง de-glitch = true เสมอ)
+
+#ifdef VERIFY_TEST
+  uint32_t poll_seq;      // [VERIFY_TEST] producer-assigned poll sequence identity
+                          // (Checkpoint 1: field only -- no assignment/read/publish yet)
+#endif
 } VibrationData_t;
+
+#ifdef VERIFY_TEST
+// [VERIFY_TEST] Minimum causal-proof diagnostic record (Checkpoint 1: storage only,
+// no capture logic). Fields cover producer sequence identity + the deglitch decision
+// inputs/outputs needed to correlate a poll against MQTT -> Node-RED -> InfluxDB.
+typedef struct {
+  uint32_t poll_seq;        // producer sequence identity
+  float    rawRmsOverall;   // raw RMS before deglitch
+  float    rawRmsZ;         // raw Z-axis RMS before deglitch
+  float    freq_z;
+  float    lastGoodRmsPre;  // s_lastGoodRms before this decision
+  float    lastGoodRmsPost; // s_lastGoodRms after this decision
+  float    outRms;          // rms_overall after deglitch decision
+  bool     isDropGlitch;
+  uint8_t  glitchHoldPre;   // s_glitchHold before this decision
+  uint8_t  branch;          // which deglitch branch was taken
+  uint8_t  motorState;      // MotorRunState_t at time of decision
+} PollDiagRecord_t;
+
+// [VERIFY_TEST] Checkpoint 5D: compile-time proof of the 32-byte size assumption
+// used for frozen-snapshot memory sizing (Checkpoint 5C Step 2/5).
+static_assert(sizeof(PollDiagRecord_t) == 32, "PollDiagRecord_t size drift");
+
+// [VERIFY_TEST] Single 64-record ring buffer -- unused at Checkpoint 1.
+static PollDiagRecord_t g_diagBuf[64];
+static uint32_t         g_diagHead  = 0;  // next write index
+static uint32_t         g_diagCount = 0;  // number of valid records (0..64)
+
+// [VERIFY_TEST] Checkpoint 3: explicit branch codes for PollDiagRecord_t.branch.
+// Assigned directly inside the existing taskStateMachine() deglitch branches --
+// never re-derives the production gating condition (motor_state/baseline/hold).
+enum : uint8_t {
+  DIAG_BRANCH_NONE = 0,
+  DIAG_BRANCH_NORMAL_ACCEPT,
+  DIAG_BRANCH_DROP_SUPPRESS,
+  DIAG_BRANCH_SPIKE_SUPPRESS,
+  DIAG_BRANCH_DROP_PASS_AFTER_HOLD,
+  DIAG_BRANCH_SPIKE_PASS_AFTER_HOLD,
+  DIAG_BRANCH_NOT_APPLICABLE_NOT_RUNNING,
+  DIAG_BRANCH_NOT_APPLICABLE_NO_BASELINE,
+};
+
+// [VERIFY_TEST] Checkpoint 3: minimum FSM for post-trigger freeze capture.
+enum : uint8_t { DIAG_FSM_ARMED = 0, DIAG_FSM_CAPTURING_POST, DIAG_FSM_FROZEN };
+static uint8_t g_diagFsmState  = DIAG_FSM_ARMED;
+static uint8_t g_diagPostCount = 0;  // valid post-trigger samples captured so far (0..10)
+
+// [VERIFY_TEST] Checkpoint 5A: immutable trigger identity. Written exactly once,
+// only at the ARMED -> CAPTURING_POST transition (taskStateMachine()); never
+// reset, never written again for the lifetime of this boot.
+static uint32_t g_diagTriggerPollSeq = 0;
+
+// [VERIFY_TEST] Checkpoint 5D: immutable frozen-capture snapshot, handed off
+// exactly once from taskStateMachine() (Core 0) to taskAnalytics() (Core 1)
+// through queueDiagSnapshot. records[] is stored in chronological order;
+// chronological_index is intentionally NOT stored (implicit array position);
+// is_trigger is intentionally NOT stored (future consumer derives it only
+// from records[i].poll_seq == trigger_poll_seq).
+typedef struct {
+  uint8_t          fsm_state;                  // g_diagFsmState at freeze (== DIAG_FSM_FROZEN)
+  uint8_t          count;                       // g_diagCount at freeze (0..64)
+  uint8_t          head;                        // g_diagHead at freeze
+  uint32_t         trigger_poll_seq;             // == g_diagTriggerPollSeq
+  PollDiagRecord_t records[64];                  // chronological order
+  uint8_t          physical_buffer_index[64];    // original g_diagBuf index per record
+} PollDiagSnapshot_t;
+
+// [VERIFY_TEST] Checkpoint 5D: one-shot handoff state -- minimum states needed
+// to distinguish queue-unavailable / not-yet-attempted / success / failure.
+// Written only by taskStateMachine(); no consumer reads it yet (Checkpoint 5E).
+enum : uint8_t {
+  DIAG_HANDOFF_NOT_ATTEMPTED = 0,
+  DIAG_HANDOFF_QUEUE_UNAVAILABLE,
+  DIAG_HANDOFF_SENT,
+  DIAG_HANDOFF_SEND_FAILED,
+};
+static uint8_t g_diagHandoffState = DIAG_HANDOFF_NOT_ATTEMPTED;
+#endif
 
 // System state (shared between cores)
 typedef struct {
@@ -1159,6 +1333,7 @@ typedef struct {
   bool buzzerActive;
   bool blinkState;
   uint32_t stateEntryTime;
+  bool mqttConnected;  // [v16.5] Section 7 Item 4 (design v16.5 §4.2) — Network4G-only writer, dormant until Items 6-8 wire readers
 } SystemState_t;
 
 // Network status (Core 1 only) - Modified for 4G
@@ -1206,6 +1381,20 @@ typedef struct {
   uint8_t  second;
 } MaintenanceEvent_t;
 
+// [v16.5] Section 7 Item 3 — outbound MQTT queue message (design v16.5 §4.1).
+// Independent of g_telemBuf/mutexTelemBuf (Q1 decision). Producer (Analytics)
+// and consumer (Network4G) are wired in later checklist items; dormant here.
+typedef enum {
+  MQTT_OUTBOUND_TOPIC_TREND = 0,   // only topic routed through this queue (design v16.5 §3.2)
+} MqttOutboundTopic_t;
+
+typedef struct {
+  MqttOutboundTopic_t topic_id;
+  char                payload[MQTT_OUTBOUND_PAYLOAD_MAX];
+  size_t              len;
+  uint8_t             qos;
+} MqttOutboundMsg_t;
+
 // ============================================================================
 // FREERTOS HANDLES
 // ============================================================================
@@ -1224,6 +1413,10 @@ QueueHandle_t queueSensorData = NULL;
 QueueHandle_t queueButtonEvent = NULL;
 QueueHandle_t queueDisplayUpdate = NULL;
 QueueHandle_t queueMaintEvent = NULL;   // V14.4: maintenance reset (Button -> Network)
+QueueHandle_t queueMqttOutboundTrend = NULL;  // [v16.5] Section 7 Item 3: dormant, no producer/consumer wired yet
+#ifdef VERIFY_TEST
+QueueHandle_t queueDiagSnapshot = NULL;  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
+#endif
 
 // Mutex Handles
 SemaphoreHandle_t mutexVibData    = NULL;
@@ -1269,7 +1462,8 @@ static SystemState_t g_systemState = {
   .alarmAcknowledged = false,
   .buzzerActive = false,
   .blinkState = false,
-  .stateEntryTime = 0
+  .stateEntryTime = 0,
+  .mqttConnected = false
 };
 static NetworkStatus_t g_network = { 0 };
 static TimeSyncStatus_t g_timeSync = { 0 };
@@ -1341,6 +1535,7 @@ static volatile uint8_t g_telemBufCount = 0;   // slots currently occupied (0..T
 // Diagnostic counters (cumulative, never reset)
 static volatile uint32_t g_telemBufOverflowCount = 0;  // times oldest slot was overwritten
 static volatile uint32_t g_telemBufReplayedCount = 0;  // cumulative successfully replayed
+static volatile uint32_t g_trendEnqueueDropCount = 0;  // [v16.5] Section 7 Item 3: dormant — incremented only once callers exist
 static bool           g_flPrevBearing   = false;
 static bool           g_flPrevHealthLow = false;
 static MachineState_t g_flPrevState     = STATE_NORMAL;
@@ -1397,7 +1592,35 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 #define TREND_SLOPE_DOWN   -0.002f   // mm/s per sample -> "DOWN"
 #define SPIKE_RMS_FACTOR    1.5f     // peak > WARNING_RMS x 1.5 -> ??? spike
 #define FREQ_DRIFT_THRESH   0.15f    // freq_ratio drift > 0.15x -> drift detected
+
+// --- Current Trend Buffer (CTR4A01, 500ms cadence) [v16.6a] ---
+#define CURRENT_BUF_SIZE           120     // samples (60s @ 2Hz)
+#define CURRENT_WINDOW_SAMPLES      60     // samples used for regression (30s window)
+#define CURRENT_MIN_SAMPLES         10     // minimum samples before slope reported (5s)
+#define CURRENT_SAMPLE_INTERVAL_MS 500     // acquisition cadence (matches CTR4A01_SENSOR.ino SAMPLE_RATE_HZ=2)
+#define CURRENT_SAMPLE_INTERVAL_S  0.5f    // same, in seconds (for linRegSlope())
 #define TEMP_SLOPE_WARN     0.001f   //  degC per sample -> temp rising (0.004 degC/s)
+
+// --- Current-based Motor State evidence [Commit 3] -- Layer 1 config -----
+// Consumed ENTIRELY inside buildMotorStateEvidence()'s MOTOR_SRC_CURRENT
+// branch; updateMotorStateMachine() never sees any of these values.
+// No real site values known yet -- placeholders until commissioning data
+// (motor nameplate FLA, installed CT ratio/turns) is available.
+#define MOTOR_NAMEPLATE_CURRENT_A   1.0f    // motor Full-Load Amps (nameplate) -- placeholder
+#define CT_RATIO_PRIMARY_A          1.0f    // external CT ratio primary (A) -- 1:1 if no external CT
+#define CT_RATIO_SECONDARY_A        1.0f    // external CT ratio secondary (A)
+#define CT_TURNS                    1       // times the conductor loops through the CT clamp
+#define MOTOR_RUNNING_PERCENT       20.0f   // % of expected full-load reading -- single stateless threshold
+// [Commit 4A] EMA smoothing for the Current evidence path -- CTR4A01's raw
+// Modbus reading has zero existing filtering (single instantaneous sample
+// every 500ms). Alpha matches RPM_SMOOTH_ALPHA (0.25) deliberately, for two
+// reasons: (1) consistency -- both evidence paths use the same smoothing
+// idiom rather than inventing a second, arbitrarily-different one; (2) time
+// constant -- ~1/alpha = 4 samples to reach ~63% of a step change, settling
+// in roughly 1-2s, fast enough not to meaningfully compound the existing
+// 15s/30s confirmed-absence timeouts, while still absorbing single-sample
+// noise and inrush transients before the threshold comparison.
+#define CURRENT_EMA_ALPHA           0.25f
 
 // --- Trend Sample Struct (Layer 1) ---
 typedef struct {
@@ -1413,6 +1636,15 @@ typedef struct {
 static TrendSample_t     g_trendBuf[TREND_BUF_SIZE];
 static volatile uint16_t g_trendHead  = 0;
 static volatile uint16_t g_trendCount = 0;
+
+// --- Current Trend Buffer Globals (Core 0 writes / Core 1 reads) [v16.6a] ---
+// Same cross-core convention as g_trendBuf above: plain float array + volatile
+// head/count (atomic on Xtensa), no mutex -- single writer (taskStateMachine).
+static float              g_currentBuf[CURRENT_BUF_SIZE];
+static volatile uint16_t  g_currentHead  = 0;
+static volatile uint16_t  g_currentCount = 0;
+static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
+static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of last SUCCESSFUL CTR4A01 read (0=never); drives MotorStateEvidence.ageMs for MOTOR_SRC_CURRENT
 
 // ============================================================================
 // MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
@@ -1719,6 +1951,7 @@ typedef struct {
   // -- Phase 1 fields (30s single-resolution) ------------------------------
   float    rms_slope;       // mm/s per sample (+= rising, -= falling)
   float    temp_slope;      //  degC per sample
+  float    current_slope;   // [v16.6a] A per second (CTR4A01, 500ms samples, no thresholds)
   int8_t   trend_dir;       // +1=UP  0=STABLE  -1=DOWN  (from linreg slope)
   uint16_t spike_count;     // peak > WARNINGx1.5 ?? 30s window
   float    freq_drift_x;    // harmonic drift X
@@ -1823,7 +2056,21 @@ static float           g_rpmFiltered       = 0.0f;
 static uint32_t        g_rpmLastPulseCount  = 0;
 static uint32_t        g_rpmLastPulseMillis = 0;
 static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
+// [vNext] Motor State evidence source -- runtime-mutable (not #define) so a
+// future Preferences/NVS-backed config can change it without touching this
+// API again. Default RPM preserves current behavior exactly.
+// [Commit 4B] TEST_CURRENT_SOURCE -- bench-test-only build flag. Undefined
+// by default: production builds are unaffected, this branch does not exist
+// in the translation unit at all. Define via -DTEST_CURRENT_SOURCE to select
+// MOTOR_SRC_CURRENT for bench testing. No runtime branch either way -- the
+// preprocessor resolves this before compilation.
+#ifdef TEST_CURRENT_SOURCE
+static MotorStateSource g_motorStateSource  = MOTOR_SRC_CURRENT;
+#else
+static MotorStateSource g_motorStateSource  = MOTOR_SRC_RPM;
+#endif
 static uint32_t        g_runInBandSince      = 0;   // [v16.3z] millis() ที่ rpm เริ่ม in-band ต่อเนื่อง (0=ยังไม่เข้า)
+static uint32_t        g_absentSince         = 0;   // [Commit 3A] millis() when signalPresent first became continuously false (0=currently present)
 static uint32_t        g_motorStoppedSince   = 0;   // [v16.3aa] millis() ที่เข้า STOPPED (0=ไม่ได้หยุด) — วัดระยะเวลาหยุด
 static volatile AnalyticsCommand_t g_analyticsCmd = ANALYTICS_NONE; // [v16.3ac] Core0 → Core1 command (แทน boolean flag)
 static float           g_tempAtStop          = 0.0f; // [v16.3ad] อุณหภูมิตอนเข้า STOPPED — ใช้ตรวจ cold start ตอน resume
@@ -2094,7 +2341,9 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   s->vel_peak_overall  = max(data->vel_peak_x, max(data->vel_peak_y, data->vel_peak_z));
   s->temperature       = data->temperature;
   s->kurtosis_max      = data->kurtosis_max;
-  s->cf_max            = data->cf_max;
+  // [v16.5] gate เหมือน rms_overall/x/y/z ด้านบน -- ป้องกัน CF garbage
+  // ตอน STOPPED เข้าไปนอน buffer แล้วถูก replay ออก MQTT ซ้ำทีหลัง
+  s->cf_max            = isRunningBuf ? data->cf_max : 0.0f;
   s->freq_x            = data->freq_x;
   s->freq_y            = data->freq_y;
   s->freq_z            = data->freq_z;
@@ -2271,6 +2520,48 @@ static bool replayTelemBuf() {
   return true;
 }
 
+// ============================================================================
+// MQTT OUTBOUND QUEUE — producer helper (Section 7 Item 3, design v16.5 §4.1)
+// Dormant: no caller wired yet (Analytics is wired in a later checklist item;
+// this commit implements Item 3 only). Overflow policy: drop-newest with
+// counter — non-blocking xQueueSend; on a full queue the new message is
+// dropped and nothing already queued is evicted (design v16.5 §4.1).
+// ============================================================================
+static bool enqueueMqttOutbound(MqttOutboundTopic_t topicId, const char* payload, size_t len, uint8_t qos) {
+  if (queueMqttOutboundTrend == NULL || payload == NULL ||
+      len == 0 || len >= MQTT_OUTBOUND_PAYLOAD_MAX) {
+    return false;
+  }
+
+  MqttOutboundMsg_t msg;
+  msg.topic_id = topicId;
+  msg.len      = len;
+  msg.qos      = qos;
+  memcpy(msg.payload, payload, len);
+  msg.payload[len] = '\0';
+
+  if (xQueueSend(queueMqttOutboundTrend, &msg, 0) != pdTRUE) {
+    g_trendEnqueueDropCount++;
+    return false;
+  }
+  return true;
+}
+
+// ============================================================================
+// CACHED MQTT CONNECTION-STATE READER (Section 7 Item 5, design v16.5 §4.2)
+// Dormant: no caller wired yet (DisplayUpdate/Analytics/loopTask are wired in
+// later checklist items). Uses the same xSemaphoreTake(mutexSystemState, ...)
+// pattern already used elsewhere in the file for g_systemState reads.
+// ============================================================================
+static bool getMqttConnectedCached() {
+  bool cached = false;
+  if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+    cached = g_systemState.mqttConnected;
+    xSemaphoreGive(mutexSystemState);
+  }
+  return cached;
+}
+
 static void checkAndLatchFault(const VibrationData_t* data,
                                 MachineState_t         newState,
                                 int                    healthScore,
@@ -2416,6 +2707,116 @@ static float getCurrentRuntimeHour() {
   return g_runtimeHour;
 }
 
+// [Commit 3/4A] Builds the semantic evidence updateMotorStateMachine() will
+// act on, based on g_motorStateSource. Each branch translates its own raw
+// measurement into {signalPresent, ageMs} only -- no raw values, thresholds,
+// filter state, or source-specific config (RATED_RPM, nameplate/CT/percent)
+// ever leave this function; updateMotorStateMachine() remains completely
+// unaware of any of it. RPM/Proximity branches remain pure functions of
+// their current inputs with no memory of previous calls. The Current branch
+// (Commit 4A) now holds one piece of function-local filter state (the EMA
+// accumulator) -- confined entirely to this function, never exposed
+// elsewhere, still never touching the frozen MotorStateEvidence shape.
+// PROXIMITY is not implemented yet -- placeholder mirrors RPM for now.
+static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, float currentA) {
+  MotorStateEvidence ev;
+  switch (g_motorStateSource) {
+    case MOTOR_SRC_CURRENT: {
+      // Layer 1 config consumed entirely here. static const -> computed once
+      // (first call), not re-derived every cycle.
+      static const float kExpectedFullLoadA = MOTOR_NAMEPLATE_CURRENT_A * CT_TURNS *
+                                               (CT_RATIO_SECONDARY_A / CT_RATIO_PRIMARY_A);
+      static const float kThresholdA = kExpectedFullLoadA * (MOTOR_RUNNING_PERCENT / 100.0f);
+
+      // [Commit 4A] EMA filter -- see CURRENT_EMA_ALPHA for full justification.
+      // Function-local static: persists across calls, confined entirely to
+      // this branch -- not a global, not visible outside buildMotorStateEvidence().
+      static float s_currentFiltered = 0.0f;
+      s_currentFiltered = CURRENT_EMA_ALPHA * currentA + (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
+
+      // Single threshold on the FILTERED value -- no hysteresis, no latch,
+      // per Commit 4A scope.
+      ev.signalPresent = (s_currentFiltered >= kThresholdA);
+      ev.ageMs = millis() - g_lastCurrentSampleMs;
+      break;
+    }
+    case MOTOR_SRC_PROXIMITY:
+      // [placeholder] not implemented yet -- falls back to the RPM computation
+      ev.signalPresent = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
+                         (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+      ev.ageMs = timeSincePulseMs;
+      break;
+    case MOTOR_SRC_RPM:
+    default:
+      ev.signalPresent = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
+                         (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+      ev.ageMs = timeSincePulseMs;
+      break;
+  }
+  return ev;
+}
+
+// [Commit 3A] Motor State Machine -- consumes only semantic evidence
+// (signalPresent, ageMs). Knows nothing about RPM, Current, CT ratios,
+// nameplate values, or threshold percentages -- those all stay inside
+// buildMotorStateEvidence(). Responsibilities: STARTING/RUNNING debounce
+// (warmup), STOPPING/STOPPED (timeout, now via TWO independent triggers --
+// see below), and state transition. No RPM-value mutation happens here
+// (evidence carries no numeric value to mutate); the existing g_rpmFiltered
+// decay/zero on STOPPED/STOPPING lives in processRPM(), gated on the
+// resulting state -- see that function.
+//
+// Two independent, source-agnostic triggers can each drive STOPPING/STOPPED:
+//   (a) evidence itself is stale (ageMs) -- "we don't currently know"
+//   (b) evidence is fresh but has been continuously absent (signalPresent
+//       false) for a while -- "we know, and it says not-running"
+// For RPM these two conditions normally coincide (no pulses = both stale
+// and absent at once), so behavior is effectively unchanged for the typical
+// no-pulse-at-all case. They diverge only if RPM pulses keep arriving
+// (ageMs stays low) while never entering the rated band for longer than
+// ABSENT_STOPPING_MS/ABSENT_STOPPED_MS -- previously this sat in STARTING
+// indefinitely; it now eventually reaches STOPPING/STOPPED. This is an
+// intentional, accepted behavior change (see Commit 3A review) needed to
+// fix the equivalent, much more likely Current-source gap: CTR4A01 comms
+// staying healthy (ageMs low) while current genuinely reads "not running".
+static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
+  if (evidence.signalPresent) {
+    g_absentSince = 0;                    // [Commit 3A] reset absence timer
+  } else if (g_absentSince == 0) {
+    g_absentSince = millis();             // [Commit 3A] start absence timer
+  }
+  uint32_t absentMs = evidence.signalPresent ? 0 : (millis() - g_absentSince);
+
+  if (evidence.ageMs > FORCE_STOP_TIMEOUT_MS || absentMs > ABSENT_STOPPED_MS) {
+    g_motorRunState  = MOTOR_STOPPED;
+    g_runInBandSince = 0;                 // [v16.3z] reset warm-up
+  } else if (evidence.ageMs > NO_PULSE_STOPPING_MS || absentMs > ABSENT_STOPPING_MS) {
+    g_motorRunState  = MOTOR_STOPPING;
+    g_runInBandSince = 0;                 // [v16.3z] reset warm-up
+  } else {
+    if (evidence.signalPresent) {
+      // [v16.3z] Warm-up debounce: ต้อง in-band ต่อเนื่อง RUNNING_WARMUP_MS ก่อนเป็น RUNNING
+      // กัน spurious STOPPED→RUNNING จาก pulse ที่หายชั่วขณะ (ซึ่งจะ flush freq_ratio 240 slots)
+      if (g_runInBandSince == 0) g_runInBandSince = millis();
+      if ((millis() - g_runInBandSince) >= RUNNING_WARMUP_MS) {
+        if (g_motorRunState != MOTOR_RUNNING) {
+          Serial.printf("[MOTOR] Warm-up complete (in-band %.1fs) -> RUNNING\n",
+                        RUNNING_WARMUP_MS / 1000.0f);
+        }
+        g_motorRunState = MOTOR_RUNNING;
+      } else {
+        g_motorRunState = MOTOR_STARTING; // ยังนับ warm-up อยู่
+      }
+    } else {
+      g_runInBandSince = 0;               // [v16.3z] หลุด band -> reset warm-up
+      g_motorRunState  = MOTOR_STARTING;
+    }
+    if (g_prevMotorRunState == MOTOR_STOPPED) {
+      g_bearingStableCnt = 0;
+    }
+  }
+}
+
 // Process RPM -- ???? ISR vars -> ????? rpm / motor_state / prox / runtime_hour
 // ???????? taskStateMachine ??? 250 ms (Core 0, no mutex needed)
 static void processRPM(VibrationData_t* data) {
@@ -2441,38 +2842,20 @@ static void processRPM(VibrationData_t* data) {
   }
 
   // ---------- Motor State Machine ----------
-  if (timeSincePulseMs > FORCE_STOP_TIMEOUT_MS) {
-    g_motorRunState = MOTOR_STOPPED;
-    g_rpmFiltered   = 0.0f;
-    g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else if (timeSincePulseMs > NO_PULSE_STOPPING_MS) {
-    g_motorRunState  = MOTOR_STOPPING;
-    g_rpmFiltered   *= 0.80f;
+  MotorStateEvidence evidence = buildMotorStateEvidence(timeSincePulseMs, data->current_a);
+  updateMotorStateMachine(evidence);
+
+  // [Commit 3] RPM-specific signal conditioning on STOPPED/STOPPING -- lives
+  // here because MotorStateEvidence is now purely semantic (no mutable
+  // numeric value to carry this). Gated on the resulting state rather than
+  // re-checking timeSincePulseMs directly, since MOTOR_STOPPED/MOTOR_STOPPING
+  // are only ever set by updateMotorStateMachine()'s ageMs timeout checks --
+  // same net effect on g_rpmFiltered, same timing, as the original inline code.
+  if (g_motorRunState == MOTOR_STOPPED) {
+    g_rpmFiltered = 0.0f;
+  } else if (g_motorRunState == MOTOR_STOPPING) {
+    g_rpmFiltered *= 0.80f;
     if (g_rpmFiltered < MIN_RPM_VALID) g_rpmFiltered = 0.0f;
-    g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else {
-    bool inBand = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
-                  (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
-    if (inBand) {
-      // [v16.3z] Warm-up debounce: ต้อง in-band ต่อเนื่อง RUNNING_WARMUP_MS ก่อนเป็น RUNNING
-      // กัน spurious STOPPED→RUNNING จาก pulse ที่หายชั่วขณะ (ซึ่งจะ flush freq_ratio 240 slots)
-      if (g_runInBandSince == 0) g_runInBandSince = millis();
-      if ((millis() - g_runInBandSince) >= RUNNING_WARMUP_MS) {
-        if (g_motorRunState != MOTOR_RUNNING) {
-          Serial.printf("[MOTOR] Warm-up complete (in-band %.1fs) -> RUNNING\n",
-                        RUNNING_WARMUP_MS / 1000.0f);
-        }
-        g_motorRunState = MOTOR_RUNNING;
-      } else {
-        g_motorRunState = MOTOR_STARTING; // ยังนับ warm-up อยู่
-      }
-    } else {
-      g_runInBandSince = 0;               // [v16.3z] หลุด band -> reset warm-up
-      g_motorRunState  = MOTOR_STARTING;
-    }
-    if (g_prevMotorRunState == MOTOR_STOPPED) {
-      g_bearingStableCnt = 0;
-    }
   }
 
   // v15.2 Fix 18: Reset g_velPeakHold เมื่อ motor transition → STOPPED
@@ -2600,11 +2983,15 @@ static const uint32_t SENSOR_RESTART_COOLDOWN = 15000; // shared cooldown ระ
 /**
  * Re-configure WTVB02-485 หลัง reboot ผ่าน Modbus (v15.7)
  *
- * ลำดับ config ตาม log ที่กำหนด:
- *   1. Unlock#1 (0x69=0xB588) → SR=16K              (0x29=0x0001)  [1500 RPM motor]
- *   2. Unlock#2 (0x69=0xB588) → DRM=Freq domain     (0x2B=0x0002)
- *   3. Unlock#3 (0x69=0xB588) → MODE=TDLF           (0x07=0x0000)
- *   4. Unlock#4 (0x69=0xB588) → Save                (0x00=0x0000)
+ * [PD-0003] ลำดับ config จริงที่ทำงานอยู่ (DRM ยังไม่เขียน -- ดู [PATCHED v16.3] ด้านล่าง):
+ *   1. Unlock#1 (0x69=0xB588) → MODE=FreqDomain    (0x07=0x0002)
+ *   2. Unlock#2 (0x69=0xB588) → SR=SENSOR_SR_1K    (0x29=0x0005)  [SR5, 1 kHz]
+ *      → 500ms settle → one-shot read-back of REG_SAMPLE_RATE → decode via SR0-SR9 lookup (Serial only)
+ *   3. Unlock#3 (0x69=0xB588) → Save               (0x00=0x0000)
+ * ไม่มีการเขียน REG_DRM (0x2B) ในฟังก์ชันนี้ -- sensor ใช้ค่าที่ persist อยู่ใน NVM ของตัวมันเอง
+ *
+ * [PD-0003] SR5 (1 kHz) is the current write value, wired into the write path below.
+ * (Previously SR6/512Hz under PD-0002; changed to SR5/1kHz -- update again if this changes.)
  *
  * @return true  ทุก step สำเร็จ
  *         false มี step ใดล้มเหลว (log warning แต่ caller ยังนับ restart ว่า OK)
@@ -2621,26 +3008,29 @@ static bool reconfigSensorAfterRestart() {
   //      เดิม: unlock FAIL แต่ยัง write ต่อ → register อาจถูกเขียนโดยไม่ผ่าน unlock จริง
   //      ใหม่: unlock FAIL → skip write step นั้น + set allOk=false + log ชัดเจน
   //
-  //   3. ลำดับ steps ที่ถูกต้องตาม WTVB02 manual §6.2 และ §6.4.1:
-  //      Step 1: Unlock → SR=16K   (0x29=0x0001)
-  //      Step 2: Unlock → DRM=0x02 (0x2B=0x0002)  [displacement range: 600um/0.01um]
-  //      Step 3: Unlock → MODE=0x02(0x07=0x0002)  [FreqDomain: ให้ CF/VRMS/Kurtosis]
-  //      Step 4: Unlock → Save     (0x00=0x0000)
+  //   3. ลำดับ steps ตาม WTVB02 manual §6.2 และ §6.4.1 ที่ทำงานอยู่จริง (หลัง [PD-0003] เปลี่ยนเป็น SR5/1kHz):
+  //      Step 1: Unlock → MODE=0x02(0x07=0x0002)  [FreqDomain: ให้ CF/VRMS/Kurtosis]
+  //      Step 2: Unlock → SR=SENSOR_SR_1K (0x29=0x0005) → 500ms → Read-back + decode (Serial only)
+  //      Step 3: Unlock → Save     (0x00=0x0000)
+  //      (DRM=0x02 (0x2B) ไม่ได้เขียนในฟังก์ชันนี้)
 
   uint8_t result;
   bool allOk = true;
 
   Serial.println("[SENSOR-CFG] ========================================");
   Serial.println("[SENSOR-CFG] Re-configuring sensor after restart...");
-  // [PATCHED v16.3] Unlock แยกทุก step + ข้าม SR (ไม่จำเป็น)
+  // [PATCHED v16.3, superseded by PD-0002] Unlock แยกทุก step
   // -----------------------------------------------------------------------
-  // จากการทดสอบ:
+  // จากการทดสอบ (v16.3):
   //   - Single unlock: SR=OK, MODE=FAIL, Save=OK → MODE ต้องการ unlock ใหม่
   //   - DRM ถูกลบออกเพราะ FAIL ทุกครั้งและไม่เกี่ยวกับ CF/VRMS
-  //   - SR=16K เป็น default อยู่แล้ว (sensor version 10059.1.14) → ลบออก
   //
-  // Sequence ใหม่: Unlock → MODE=0x02 → Unlock → Save
-  // ทดสอบว่า MODE และ Save ผ่านทั้งคู่ไหม
+  // [PD-0003] เขียน SENSOR_SR_1K (0x0005), ไม่ใช่ SENSOR_SR_512 (SR6) หรือ SENSOR_SR_16K เดิม
+  // SR5 (1 kHz) is the current write value, wired into the write path below.
+  // Read-back placed AFTER the 500ms settle delay (ไม่ใช่ทันทีหลัง write) -- หลักฐานเดียวที่มี (v16.3b)
+  // คือ settle delay มีไว้เพื่อความน่าเชื่อถือของ transaction ถัดไป ซึ่ง read ก็นับเป็น transaction
+  //
+  // Sequence: Unlock → MODE=0x02 → Unlock → SR=0x0006 → 500ms → Read SR → Unlock → Save
   // -----------------------------------------------------------------------
   Serial.println("[SENSOR-CFG] [v16.3] Unlock-per-step: MODE then Save");
 
@@ -2668,7 +3058,61 @@ static bool reconfigSensorAfterRestart() {
   vTaskDelay(pdMS_TO_TICKS(500));  // [v16.3b] 100→500ms: sensor ต้องการเวลา settle หลัง MODE write
 
   // ------------------------------------------------------------------
-  // Step 2: Unlock + Save config to NVM
+  // Step 2: Unlock + SR = SENSOR_SR_1K (0x0005, 1 kHz)
+  // [PD-0003] SR5 (1 kHz) is the current write value, wired into the write path.
+  // (Previously SR6/512Hz under PD-0002.)
+  // Includes one-shot read-back + SR0-SR9 lookup decode, Serial only
+  // (no retry, no MQTT, no struct, no analytics).
+  // ------------------------------------------------------------------
+  Serial.printf("[SENSOR-CFG] [Unlock for SR]...");
+  result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
+  if (result != modbus.ku8MBSuccess) {
+    Serial.printf(" x FAILED (err=%d) -- SKIP SR\n", result);
+    allOk = false;
+  } else {
+    Serial.println(" + OK");
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    Serial.printf("[SENSOR-CFG] SR5 (1 kHz) (0x%02X=0x%04X)...", REG_SAMPLE_RATE, SENSOR_SR_1K);
+    result = modbus.writeSingleRegister(REG_SAMPLE_RATE, SENSOR_SR_1K);
+    if (result != modbus.ku8MBSuccess) {
+      Serial.printf(" x FAILED (err=%d)\n", result);
+      allOk = false;
+    } else {
+      Serial.println(" + OK");
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    result = modbus.readHoldingRegisters(REG_SAMPLE_RATE, 1);
+    if (result == modbus.ku8MBSuccess) {
+      uint16_t srReadback = modbus.getResponseBuffer(0);
+      const char* srLabel;
+      switch (srReadback) {
+        case 0x00: srLabel = "SR0 (32 kHz)"; break;
+        case 0x01: srLabel = "SR1 (16 kHz)"; break;
+        case 0x02: srLabel = "SR2 (8 kHz)";  break;
+        case 0x03: srLabel = "SR3 (4 kHz)";  break;
+        case 0x04: srLabel = "SR4 (2 kHz)";  break;
+        case 0x05: srLabel = "SR5 (1 kHz)";  break;
+        case 0x06: srLabel = "SR6 (512 Hz)"; break;
+        case 0x07: srLabel = "SR7 (256 Hz)"; break;
+        case 0x08: srLabel = "SR8 (128 Hz)"; break;
+        case 0x09: srLabel = "SR9 (64 Hz)";  break;
+        default:   srLabel = NULL;           break;
+      }
+      if (srLabel != NULL) {
+        Serial.printf("[SR] Readback = %s\n", srLabel);
+      } else {
+        Serial.printf("[SR] Unexpected value = 0x%04X\n", srReadback);
+      }
+    } else {
+      Serial.println("[SR] Readback FAILED");
+      allOk = false;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Step 3: Unlock + Save config to NVM
   // SENSOR_CMD_SAVE = 0x0000 ตาม WTVB02 manual §6.4.1
   // ------------------------------------------------------------------
   Serial.printf("[SENSOR-CFG] [Unlock for Save]...");
@@ -2692,7 +3136,7 @@ static bool reconfigSensorAfterRestart() {
   vTaskDelay(pdMS_TO_TICKS(300));
 
   if (allOk) {
-    Serial.println("[SENSOR-CFG] All config steps OK -- SR=16K MODE=FreqDomain(0x02) DRM=0x02 saved");
+    Serial.println("[SENSOR-CFG] All config steps OK -- MODE=FreqDomain(0x02) saved (SR/DRM not written by this function)");
   } else {
     Serial.println("[SENSOR-CFG] WARNING: Some config steps FAILED -- sensor may not output CF/VRMS");
   }
@@ -2837,6 +3281,9 @@ bool modemInit() {
   while (!modemInitialized && modemRetryCount < MAX_MODEM_RETRIES) {
     modemRetryCount++;
     Serial.printf("[Modem] Initialization attempt %d/%d\n", modemRetryCount, MAX_MODEM_RETRIES);
+    // [v16.6d] FIX-WDT: modemPowerOn()+checkModemResponse() may take ~28s/attempt;
+    // reset once per retry iteration so no single attempt runs unfed.
+    esp_task_wdt_reset();
 
     // Power on modem
     modemPowerOn();
@@ -3190,6 +3637,66 @@ void checkAndSyncTime() {
 // CORE 0 TASKS - TIME CRITICAL OPERATIONS
 // ============================================================================
 
+// [v16.6c] Diagnostic-only: symbolic name for a ModbusMaster return code, for
+// Serial logging. Does not affect control flow -- string lookup only.
+static const char* modbusRcName(uint8_t rc) {
+  switch (rc) {
+    case ModbusMaster::ku8MBSuccess:          return "ku8MBSuccess";
+    case ModbusMaster::ku8MBInvalidSlaveID:   return "ku8MBInvalidSlaveID";
+    case ModbusMaster::ku8MBInvalidFunction:  return "ku8MBInvalidFunction";
+    case ModbusMaster::ku8MBResponseTimedOut: return "ku8MBResponseTimedOut";
+    case ModbusMaster::ku8MBInvalidCRC:       return "ku8MBInvalidCRC";
+    case ModbusMaster::ku8MBIllegalFunction:      return "ku8MBIllegalFunction";
+    case ModbusMaster::ku8MBIllegalDataAddress:   return "ku8MBIllegalDataAddress";
+    case ModbusMaster::ku8MBIllegalDataValue:     return "ku8MBIllegalDataValue";
+    case ModbusMaster::ku8MBSlaveDeviceFailure:   return "ku8MBSlaveDeviceFailure";
+    default:                                  return "?";
+  }
+}
+
+// [v16.6a] CTR4A01 current sensor read -- reused verbatim (same signature/body)
+// from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino readCurrentSensor().
+// Caller must already have the bus addressed to CURRENT_SENSOR_ID -- see
+// readCTR4A01Current() below, which owns that addressing.
+static bool readCurrentSensor(uint16_t &milliAmps) {
+  // [v16.6c] diagnostic-only timing around the Modbus call -- millis() reads
+  // add no delay and do not alter the call itself or its return value.
+  uint32_t t0 = millis();
+  uint8_t r = modbus.readInputRegisters(CT_REG_AC_CURRENT, 1);
+  uint32_t elapsedMs = millis() - t0;
+  bool success = (r == modbus.ku8MBSuccess);
+  if (success) {
+    milliAmps = modbus.getResponseBuffer(0);
+    Serial.printf("[CURRENT] raw=%u mA\n", milliAmps);  // [v16.6c] diagnostic only
+  } else {
+    // [v16.6c] diagnostic only -- current_read_errors/current_valid handling
+    // is unchanged, still owned entirely by readCTR4A01Current() below.
+    Serial.printf("[CURRENT] FAIL rc=0x%02X (%s) elapsed=%lu ms\n",
+                  r, modbusRcName(r), (unsigned long)elapsedMs);
+  }
+  return success;
+}
+
+// [v16.6a] Owns the CTR4A01 slave-ID switch + read + restore sequence, so
+// taskModbusRead() only has to handle cadence gating and where to store the
+// result -- not Modbus addressing details. Assumes RS485 is already enabled
+// by the caller (shares the WTVB02 bus/rs485Enable() window, single
+// acquisition source, no new UART/task/timer). Always restores
+// MODBUS_SLAVE_ID before returning, whether the read succeeded or not.
+static bool readCTR4A01Current(float &amps) {
+  uint16_t currentMa = 0;
+  modbus.begin(CURRENT_SENSOR_ID, SerialRS485);
+  bool ok = readCurrentSensor(currentMa);
+  modbus.begin(MODBUS_SLAVE_ID, SerialRS485);  // restore WTVB02 addressing
+  vTaskDelay(pdMS_TO_TICKS(5));
+  if (ok) {
+    amps = currentMa / 1000.0f;
+    g_lastCurrentSampleMs = millis();  // [Commit 3] only updated on success -- drives evidence ageMs
+  }
+  else    g_ctReadErrors++;  // [v16.6b] remote-visible failure counter -- see /vibration current_read_errors
+  return ok;
+}
+
 /**
  * Task 1: Modbus RTU Communication (CORE 0, Priority 5)
  * Runs every 250ms
@@ -3209,13 +3716,21 @@ void taskModbusRead(void* parameter) {
   uint16_t raw_cfx = 0, raw_kx = 0;  // v15.0: CFX (0x47), KX (0x48) -- unsigned per datasheet §6.4.14
   uint16_t raw_cfy = 0, raw_ky = 0;  // v15.1: CFY (0x53), KY (0x54) -- unsigned per datasheet §6.4.15
   uint16_t raw_cfz = 0, raw_kz = 0;  // v15.1: CFZ (0x5F), KZ (0x60) -- unsigned per datasheet §6.4.16
+  int16_t  raw_peak_x = 0, raw_peak_y = 0, raw_peak_z = 0;  // [DESIGN-0004] VX/VY/VZ (0x3A-0x3C) -- signed per datasheet §6.4.6
 
   Serial.println("[CORE 0] Modbus task started");
 
   static uint32_t s_lastPollStart = 0;  // [v16.3y] วัด poll interval จริง
+  static uint32_t s_lastCurrentSampleMs = 0;  // [v16.6a] CTR4A01 500ms cadence gate
 
   while (1) {
     g_sensorReads++;
+
+#ifdef VERIFY_TEST
+    // [VERIFY_TEST] Producer-side snapshot: one currentPollSeq per acquisition attempt.
+    // Block-scoped (fresh each loop iteration) -- never reused across iterations.
+    const uint32_t currentPollSeq = g_sensorReads;
+#endif
 
     // [v16.3y] diagnostic timing
     uint32_t t_pollNow      = millis();
@@ -3295,7 +3810,29 @@ void taskModbusRead(void* parameter) {
       raw_cfz = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.16
       raw_kz  = (uint16_t)modbus.getResponseBuffer(1);
     }
-    // ทั้ง T3/T4/T5 เป็น optional -- ไม่ set success = false ถ้า fail
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    // Transaction 6: Peak Velocity X,Y,Z (3 consecutive registers 0x3A~0x3C) [DESIGN-0004]
+    // Datasheet §6.4.6 worked example: 50 03 00 3A 00 03 -- single 3-register block read
+    if (modbus.readHoldingRegisters(REG_PEAK_X, 3) == modbus.ku8MBSuccess) {
+      raw_peak_x = (int16_t)modbus.getResponseBuffer(0);
+      raw_peak_y = (int16_t)modbus.getResponseBuffer(1);
+      raw_peak_z = (int16_t)modbus.getResponseBuffer(2);
+    }
+    // ทั้ง T3/T4/T5/T6 เป็น optional -- ไม่ set success = false ถ้า fail
+
+    // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
+    // Cadence gating + result storage only -- readCTR4A01Current() owns the
+    // slave-ID switch/restore (shares this RS485-enabled window, runs before
+    // rs485Disable() below).
+    localData.current_valid = false;
+    if (millis() - s_lastCurrentSampleMs >= CURRENT_SAMPLE_INTERVAL_MS) {
+      s_lastCurrentSampleMs = millis();
+      // [PHASE2-EXPERIMENT] single controlled inter-frame delay before the only
+      // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
+      vTaskDelay(pdMS_TO_TICKS(5));
+      localData.current_valid = readCTR4A01Current(localData.current_a);
+    }
 
     rs485Disable();
 
@@ -3521,6 +4058,13 @@ void taskModbusRead(void* parameter) {
       localData.freq_y = raw_fy / 10.0f;
       localData.freq_z = raw_fz / 10.0f;
 
+      // Step 4c: Peak Velocity X/Y/Z (signed, raw/100) [DESIGN-0004]
+      // เก็บค่า signed ตรงจาก register -- ไม่ทำ abs() (Decision 4, ยืนยันจาก datasheet §6.4.6)
+      // raw = 0 ถ้า T6 fail (optional transaction, ไม่กระทบ success หลัก) -> ค่าเป็น 0.0f เอง
+      localData.peak_velocity_x = raw_peak_x / 100.0f;
+      localData.peak_velocity_y = raw_peak_y / 100.0f;
+      localData.peak_velocity_z = raw_peak_z / 100.0f;
+
       // [v16.3u] Step 4b: NaN / Inf guard — Defensive float check
       // ป้องกัน PANIC จาก Modbus corrupt value ที่ผ่าน sanity check แต่ทำให้ float exception
       // เงื่อนไขที่ trigger: raw_x อยู่ใน valid range แต่ pattern แปลก
@@ -3581,6 +4125,10 @@ void taskModbusRead(void* parameter) {
       localData.retry_count      = retryCount;
       localData.crc_ok           = success;   // มาถึงจุดนี้ = ทุก read ผ่าน CRC
 
+#ifdef VERIFY_TEST
+      localData.poll_seq = currentPollSeq;  // [VERIFY_TEST] producer sequence identity
+#endif
+
       // Send to queue (non-blocking)
       if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
         Serial.println("[CORE 0] Sensor queue full!");
@@ -3604,6 +4152,9 @@ void taskModbusRead(void* parameter) {
         memset(&localData, 0, sizeof(VibrationData_t));
         localData.valid     = false;
         localData.timestamp = millis();
+#ifdef VERIFY_TEST
+        localData.poll_seq = currentPollSeq;  // [VERIFY_TEST] producer sequence identity (offline placeholder)
+#endif
         if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
           // queue ???? -- ??? critical, ??????????
         }
@@ -3696,6 +4247,17 @@ void taskStateMachine(void* parameter) {
                                     (sensorData.rms_overall > s_lastGoodRms * SPIKE_DEGLITCH_MULT ||
                                      sensorData.rms_overall > SANITY_RMS_MAX);
 
+#ifdef VERIFY_TEST
+        // [VERIFY_TEST] Checkpoint 3: pre-decision snapshot -- taken before the
+        // production if/else below can overwrite rms_overall or mutate
+        // s_lastGoodRms / s_glitchHold.
+        const float   diagRawRmsOverall  = sensorData.rms_overall;
+        const float   diagRawRmsZ        = sensorData.rms_z;
+        const float   diagLastGoodRmsPre = s_lastGoodRms;
+        const uint8_t diagGlitchHoldPre  = s_glitchHold;
+        uint8_t       diagBranch         = DIAG_BRANCH_NORMAL_ACCEPT;
+#endif
+
         if (sensorData.motor_state == 2 &&                       // เฉพาะตอน RUNNING
             s_lastGoodRms > 0.5f &&                              // มี baseline ที่เชื่อถือได้
             (isDropGlitch || isSpikeGlitch) &&
@@ -3717,6 +4279,9 @@ void taskStateMachine(void* parameter) {
           sensorData.rms_y = s_lastGoodY;
           sensorData.rms_z = s_lastGoodZ;
           s_glitchHold = 1;
+#ifdef VERIFY_TEST
+          diagBranch = isSpikeGlitch ? DIAG_BRANCH_SPIKE_SUPPRESS : DIAG_BRANCH_DROP_SUPPRESS;
+#endif
         } else {
           // ค่าปกติ หรือ low/high ต่อเนื่อง (ของจริง) → อัปเดต baseline และ reset hold
           s_lastGoodRms = sensorData.rms_overall;
@@ -3724,7 +4289,100 @@ void taskStateMachine(void* parameter) {
           s_lastGoodY   = sensorData.rms_y;
           s_lastGoodZ   = sensorData.rms_z;
           s_glitchHold  = 0;
+#ifdef VERIFY_TEST
+          // [VERIFY_TEST] Checkpoint 3A: classify why the else-branch was reached.
+          // Checks the same 4 gates the if-condition above tested, using the
+          // pre-decision snapshot -- does not re-derive or duplicate the decision
+          // itself (that decision already happened: this branch is only reached
+          // when the if-condition was false).
+          if (!(isDropGlitch || isSpikeGlitch)) {
+            diagBranch = DIAG_BRANCH_NORMAL_ACCEPT;
+          } else if (sensorData.motor_state != 2) {
+            diagBranch = DIAG_BRANCH_NOT_APPLICABLE_NOT_RUNNING;
+          } else if (diagLastGoodRmsPre <= 0.5f) {
+            diagBranch = DIAG_BRANCH_NOT_APPLICABLE_NO_BASELINE;
+          } else if (diagGlitchHoldPre != 0) {
+            diagBranch = isSpikeGlitch ? DIAG_BRANCH_SPIKE_PASS_AFTER_HOLD : DIAG_BRANCH_DROP_PASS_AFTER_HOLD;
+          } else {
+            // Unreachable if production logic is unchanged: all 4 if-condition
+            // gates would be true here, contradicting entry into this else-branch.
+            diagBranch = DIAG_BRANCH_NONE;
+          }
+#endif
         }
+
+#ifdef VERIFY_TEST
+        // [VERIFY_TEST] Checkpoint 3B/3C: construct and store exactly one diagnostic
+        // record for this valid consumed sample, unless the FSM is already FROZEN
+        // (once FROZEN, g_diagHead/g_diagCount/g_diagBuf must not change). PRE-decision
+        // fields come from the Checkpoint 3A snapshot; POST-decision fields are read
+        // only now, after the production if/else above has completed.
+        if (g_diagFsmState != DIAG_FSM_FROZEN) {
+          PollDiagRecord_t rec;
+          rec.poll_seq        = sensorData.poll_seq;
+          rec.rawRmsOverall   = diagRawRmsOverall;
+          rec.rawRmsZ         = diagRawRmsZ;
+          rec.freq_z          = sensorData.freq_z;
+          rec.lastGoodRmsPre  = diagLastGoodRmsPre;
+          rec.lastGoodRmsPost = s_lastGoodRms;
+          rec.outRms          = sensorData.rms_overall;
+          rec.isDropGlitch    = isDropGlitch;
+          rec.glitchHoldPre   = diagGlitchHoldPre;
+          rec.branch          = diagBranch;
+          rec.motorState      = sensorData.motor_state;
+
+          g_diagBuf[g_diagHead] = rec;
+          g_diagHead = (g_diagHead + 1) % 64;
+          if (g_diagCount < 64) g_diagCount++;
+
+          // [VERIFY_TEST] Checkpoint 3C: minimum trigger / post-trigger freeze FSM.
+          // Trigger fires only on the already-approved DIAG_BRANCH_DROP_SUPPRESS
+          // classification -- no re-derivation of the production deglitch condition.
+          if (g_diagFsmState == DIAG_FSM_ARMED) {
+            if (diagBranch == DIAG_BRANCH_DROP_SUPPRESS) {
+              // Poll N (this record, already written above) is the trigger --
+              // it does not count as post-trigger sample #1.
+              g_diagTriggerPollSeq = sensorData.poll_seq;  // [VERIFY_TEST] Checkpoint 5A: immutable trigger identity
+              g_diagFsmState  = DIAG_FSM_CAPTURING_POST;
+              g_diagPostCount = 0;
+            }
+          } else if (g_diagFsmState == DIAG_FSM_CAPTURING_POST) {
+            g_diagPostCount++;
+            if (g_diagPostCount >= 10) {
+              g_diagFsmState = DIAG_FSM_FROZEN;
+
+              // [VERIFY_TEST] Checkpoint 5D: construct the immutable snapshot
+              // exactly once, at this CAPTURING_POST -> FROZEN transition, from
+              // the now-frozen g_diagBuf/g_diagCount/g_diagHead/g_diagTriggerPollSeq.
+              // Chronological traversal uses only the approved ring-buffer formula;
+              // the trigger condition is not re-derived (g_diagTriggerPollSeq was
+              // already set, once, at the ARMED -> CAPTURING_POST transition above).
+              // Static storage duration (.bss, not the call stack) per Checkpoint
+              // 5D Step 4 -- never a large automatic/local variable.
+              static PollDiagSnapshot_t s_diagSnapshotStaging;
+              s_diagSnapshotStaging.fsm_state        = g_diagFsmState;
+              s_diagSnapshotStaging.count            = (uint8_t)g_diagCount;
+              s_diagSnapshotStaging.head             = (uint8_t)g_diagHead;
+              s_diagSnapshotStaging.trigger_poll_seq = g_diagTriggerPollSeq;
+
+              const uint32_t oldestIndex = (g_diagHead + 64 - g_diagCount) % 64;
+              for (uint32_t i = 0; i < g_diagCount; i++) {
+                const uint32_t physicalIndex = (oldestIndex + i) % 64;
+                s_diagSnapshotStaging.records[i]               = g_diagBuf[physicalIndex];
+                s_diagSnapshotStaging.physical_buffer_index[i] = (uint8_t)physicalIndex;
+              }
+
+              if (queueDiagSnapshot == NULL) {
+                g_diagHandoffState = DIAG_HANDOFF_QUEUE_UNAVAILABLE;
+              } else if (xQueueSend(queueDiagSnapshot, &s_diagSnapshotStaging, 0) == pdTRUE) {
+                g_diagHandoffState = DIAG_HANDOFF_SENT;
+              } else {
+                g_diagHandoffState = DIAG_HANDOFF_SEND_FAILED;
+              }
+            }
+          }
+        }
+#endif
       }
 
       // [v16.3ab] เผยแพร่ rms (หลัง de-glitch) ให้ isAnalysisReady() อ่าน — atomic float, ไม่ต้อง mutex
@@ -3756,6 +4414,16 @@ void taskStateMachine(void* parameter) {
         };
         g_trendHead  = (g_trendHead + 1) % TREND_BUF_SIZE;
         if (g_trendCount < TREND_BUF_SIZE) g_trendCount++;
+      }
+
+      // -- Push current sample into circular buffer (Core 0 only, no mutex) [v16.6a] --
+      // sensorData.current_valid is only true on cycles where taskModbusRead actually
+      // sampled CTR4A01 (~500ms cadence); other cycles are skipped so calcTrend()'s
+      // regression sees one entry per real sample, not per 250ms task tick.
+      if (sensorData.current_valid) {
+        g_currentBuf[g_currentHead] = sensorData.current_a;
+        g_currentHead  = (g_currentHead + 1) % CURRENT_BUF_SIZE;
+        if (g_currentCount < CURRENT_BUF_SIZE) g_currentCount++;
       }
 
       // Determine new state based on RMS
@@ -3931,6 +4599,8 @@ void taskNetwork(void* parameter) {
   vTaskDelay(pdMS_TO_TICKS(5000));  // Wait for system to stabilize
 
   // Initialize modem
+  // [v16.6d] FIX-WDT: modemInit() may block up to ~85s across its internal retries.
+  esp_task_wdt_reset();
   if (!modemInit()) {
     Serial.println("[CORE 1] Modem init failed!");
     // Continue running but in error state
@@ -3938,10 +4608,14 @@ void taskNetwork(void* parameter) {
     // Enable automatic network time update on the modem
     modemEnableNetworkTime();
   }
+  esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemInit() returned
 
   // Connect to GPRS if modem is ready
   if (g_network.modemReady) {
+    // [v16.6d] FIX-WDT: modemConnectGPRS() -> waitForNetwork(30000L) may block up to 30s.
+    esp_task_wdt_reset();
     modemConnectGPRS();
+    esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemConnectGPRS() returned
 
     // Perform initial time sync after GPRS connects
     if (g_network.gprsConnected) {
@@ -4034,7 +4708,13 @@ void taskNetwork(void* parameter) {
         }
 
         // Try to connect MQTT if GPRS is up but MQTT is down
-        if (gprs && !mqttClient.connected() &&
+        bool mqttConnSnap9 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #9)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap9;
+          xSemaphoreGive(mutexSystemState);
+        }
+        if (gprs && !mqttConnSnap9 &&
             (now - lastConnectionAttempt > mqttBackoffMs)) {
 
           lastConnectionAttempt = now;
@@ -4100,7 +4780,13 @@ void taskNetwork(void* parameter) {
 
 
         // Update modem state
-        if (gprs && mqttClient.connected()) {
+        bool mqttConnSnap14 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #14)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap14;
+          xSemaphoreGive(mutexSystemState);
+        }
+        if (gprs && mqttConnSnap14) {
           g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
         } else if (gprs) {
           g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
@@ -4123,6 +4809,11 @@ void taskNetwork(void* parameter) {
 
         if (mqttClient.connected() != lastMqttState) {
           bool nowConnected = mqttClient.connected();
+          // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #15/16)
+          if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+            g_systemState.mqttConnected = nowConnected;
+            xSemaphoreGive(mutexSystemState);
+          }
           Serial.printf("[CORE 1] MQTT: %s\n", nowConnected ? "CONNECTED" : "DISCONNECTED");
 
           // เมื่อ reconnect สำเร็จ: แจ้ง Serial ว่ามี backlog รอ replay เท่าไหร่
@@ -4141,7 +4832,13 @@ void taskNetwork(void* parameter) {
 
     // -- mqttClient.loop() ??? iteration = ??? 100ms --
     // ????????????? publish ????? process ACK/PINGREQ ??????
-    if (mqttClient.connected()) {
+    bool mqttConnSnap17 = mqttClient.connected();
+    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #17)
+    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+      g_systemState.mqttConnected = mqttConnSnap17;
+      xSemaphoreGive(mutexSystemState);
+    }
+    if (mqttConnSnap17) {
       mqttClient.loop();
     }
 
@@ -4174,14 +4871,53 @@ void taskNetwork(void* parameter) {
     // หยุดทันทีถ้า MQTT หลุด กลาง burst (replayTelemBuf() returns false)
     // ล็อก mutex เฉพาะ peek + pop (ดู replayTelemBuf()) — ไม่บล็อก loop นาน
     // ────────────────────────────────────────────────────────────────────────
-    if (mqttClient.connected() && g_telemBufCount > 0) {
+    bool mqttConnSnap19 = mqttClient.connected();
+    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #19)
+    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+      g_systemState.mqttConnected = mqttConnSnap19;
+      xSemaphoreGive(mutexSystemState);
+    }
+    if (mqttConnSnap19 && g_telemBufCount > 0) {
       replayTelemBuf();
       vTaskDelay(pdMS_TO_TICKS(75));  // 75ms delay between replayed messages
                                       // 120 slots × 75ms ≈ 9s burst สูงสุด (ไม่ flood broker)
     }
 
+    // ── MQTT Outbound Queue Drain (Section 7 Item 9, design v16.5 §4.1) ──────
+    // Consumer side of the dormant queue added in Item 3. No producer is wired
+    // yet (Analytics still calls mqttClient.publish() directly, per Item 6 not
+    // being implemented in this commit) -- queueMqttOutboundTrend is therefore
+    // always empty here, xQueueReceive always returns pdFALSE immediately, and
+    // this block's body cannot execute. Rate-limited to 1 message per
+    // taskNetwork() iteration, analogous to the g_telemBuf replay above.
+    // Publishes exactly like the existing /sensor, /status, /trend logic.
+    // ──────────────────────────────────────────────────────────────────────────
+    if (mqttConnSnap19 && queueMqttOutboundTrend != NULL) {
+      MqttOutboundMsg_t outMsg;
+      if (xQueueReceive(queueMqttOutboundTrend, &outMsg, 0) == pdPASS) {
+        const char* outTopic = (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_TREND)
+                                 ? g_mqttTopicTrend : NULL;
+        if (outTopic != NULL) {
+          if (mqttClient.publish(outTopic, outMsg.payload, (int)outMsg.len, false, outMsg.qos)) {
+            g_network.publishCount++;
+            Serial.printf("[MQTT] Outbound queue published -> %s (%u B)\n", outTopic, (unsigned)outMsg.len);
+          } else {
+            g_network.publishFailures++;
+            Serial.printf("[MQTT] Outbound queue publish FAILED -> %s (err=%d)\n", outTopic, mqttClient.lastError());
+          }
+        }
+      }
+    }
+
     // -- Publish telemetry (?? FreeRTOS task ???????? ???????? ISR) --
-    if (mqttClient.connected() && (now - lastPublish >= publishInterval)) {
+    bool mqttConnSnap20 = mqttClient.connected();
+    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #20/#22 — same
+    // if/else-if evaluation, no intervening mqttClient call, so one write covers both)
+    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+      g_systemState.mqttConnected = mqttConnSnap20;
+      xSemaphoreGive(mutexSystemState);
+    }
+    if (mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
       if (localVibData.valid) {
         // -- Normal telemetry --
         if (publishTelemetry(&localVibData, localState)) {
@@ -4229,7 +4965,7 @@ void taskNetwork(void* parameter) {
           }
         }
       }
-    } else if (!mqttClient.connected() && (now - lastPublish >= publishInterval)) {
+    } else if (!mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
       // MQTT offline แต่ถึงเวลา publish -- บันทึกลง ring buffer แทน
       if (localVibData.valid) {
         pushTelemBuf(&localVibData, localState);
@@ -4242,7 +4978,13 @@ void taskNetwork(void* parameter) {
     {
       MaintenanceEvent_t mEvt;
       while (xQueueReceive(queueMaintEvent, &mEvt, 0) == pdPASS) {
-        if (mqttClient.connected()) {
+        bool mqttConnSnap23 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #23)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap23;
+          xSemaphoreGive(mutexSystemState);
+        }
+        if (mqttConnSnap23) {
           char tsBuf[32];
           if (mEvt.rtcValid) {
             snprintf(tsBuf, sizeof(tsBuf),
@@ -4312,7 +5054,13 @@ void taskNetwork(void* parameter) {
         Serial.println("[LATCH] replay snapshot mutex timeout — retry next loop");
       }
 
-      if (mqttClient.connected() && snapPending) {
+      bool mqttConnSnap25 = mqttClient.connected();
+      // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #25)
+      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+        g_systemState.mqttConnected = mqttConnSnap25;
+        xSemaphoreGive(mutexSystemState);
+      }
+      if (mqttConnSnap25 && snapPending) {
 
         char flTs[26] = {};
         const bool flTsKnown = (snapTs >= FL_TS_MIN_VALID);
@@ -4902,8 +5650,10 @@ void drawNetworkScreen() {
   }
 
   // MQTT status
+  // [v16.5] Section 7 Item 7 (design v16.5 §3.3, §4.2) — read via cache instead
+  // of touching mqttClient directly; DisplayUpdate is not the owner task.
   snprintf(buf, sizeof(buf), "MQTT: %s",
-           mqttClient.connected() ? "CONN" : "DISC");
+           getMqttConnectedCached() ? "CONN" : "DISC");
   u8g2.drawStr(5, 52, buf);
 
   // Publish stats + NTP status
@@ -4969,6 +5719,50 @@ static float computeRmsVariance(const AggSample_t* buf, uint16_t bufHead,
 }
 
 // ============================================================================
+// GENERIC LINEAR REGRESSION -- linRegSlope()  [v16.6a]
+// ============================================================================
+// Least-squares slope over the most recent `windowSamples` entries of a
+// circular buffer, addressed via an accessor callback (X = sample index
+// 0..n-1, Y = getValue(idx)) instead of a flat float array -- lets callers
+// read directly out of whatever storage they already have (a struct array's
+// field, a plain float array, ...) with no intermediate copy.
+// Generalizes the regression math that was previously inlined in calcTrend()
+// for temp_slope. Reused for:
+//   - temp_slope:    intervalSec=1.0f -- no time-scaling, preserves the
+//                    original "degC per sample" output exactly.
+//   - current_slope: intervalSec=CURRENT_SAMPLE_INTERVAL_S -- normalizes to
+//                    "per second" since current is sampled at a different,
+//                    fixed 500ms cadence.
+// Returns 0.0f if fewer than 2 samples are available.
+// ============================================================================
+static float linRegSlope(uint16_t bufHead, uint16_t bufCount, uint16_t bufSize,
+                          uint16_t windowSamples, float intervalSec,
+                          float (*getValue)(uint16_t idx)) {
+  uint16_t n = (bufCount < windowSamples) ? bufCount : windowSamples;
+  if (n < 2 || bufSize == 0) return 0.0f;
+  uint16_t startIdx = (bufHead + bufSize - n) % bufSize;
+  double sumX=0.0, sumX2=0.0, sumY=0.0, sumXY=0.0;
+  for (uint16_t i = 0; i < n; i++) {
+    uint16_t idx = (startIdx + i) % bufSize;
+    double x = (double)i;
+    double y = (double)getValue(idx);
+    sumX  += x;
+    sumX2 += x * x;
+    sumY  += y;
+    sumXY += x * y;
+  }
+  double denom = (double)n * sumX2 - sumX * sumX;
+  if (denom == 0.0) return 0.0f;
+  float slopePerSample = (float)(((double)n * sumXY - sumX * sumY) / denom);
+  return (intervalSec > 0.0f) ? (slopePerSample / intervalSec) : slopePerSample;
+}
+
+// Accessors for linRegSlope() -- trivial index->value lookups into the two
+// buffers it's used against. [v16.6a]
+static float trendBufTempAccessor(uint16_t idx) { return g_trendBuf[idx].temp; }
+static float currentBufAccessor(uint16_t idx)   { return g_currentBuf[idx]; }
+
+// ============================================================================
 // TREND ENGINE -- calcTrend()
 // ============================================================================
 // ???????? publishTelemetry() (Core 1) ???? build JSON
@@ -5000,7 +5794,6 @@ static void calcTrend() {
 
     double sumX=0, sumX2=0;
     double sumRms=0, sumXRms=0;
-    double sumTemp=0, sumXTemp=0;
     double sumFrX=0, sumFrY=0, sumFrZ=0;
     uint16_t spike_count = 0;
 
@@ -5011,8 +5804,6 @@ static void calcTrend() {
       sumX2    += (double)i * i;
       sumRms   += s->rms;
       sumXRms  += (double)i * s->rms;
-      sumTemp  += s->temp;
-      sumXTemp += (double)i * s->temp;
       sumFrX   += s->freq_ratio_x;
       sumFrY   += s->freq_ratio_y;
       sumFrZ   += s->freq_ratio_z;
@@ -5021,7 +5812,14 @@ static void calcTrend() {
 
     double denom = (double)n * sumX2 - sumX * sumX;
     float rmsSlope  = (denom != 0.0) ? (float)((n * sumXRms  - sumX * sumRms)  / denom) : 0.0f;
-    float tempSlope = (denom != 0.0) ? (float)((n * sumXTemp - sumX * sumTemp) / denom) : 0.0f;
+    // [v16.6a] temp_slope goes through the generic linRegSlope() utility, reading
+    // g_trendBuf directly via trendBufTempAccessor() -- no scratch array/copy.
+    // Called with the SAME snapHead/snapCount/TREND_BUF_SIZE/TREND_WINDOW_SAMPLES
+    // that produced startIdx/n above, so it recomputes the identical n and the
+    // identical idx=(startIdx+i)%TREND_BUF_SIZE sequence -- same values, same
+    // order, same formula as the inline computation it replaces -- output unchanged.
+    float tempSlope = linRegSlope(snapHead, snapCount, TREND_BUF_SIZE,
+                                   TREND_WINDOW_SAMPLES, 1.0f, trendBufTempAccessor);
 
     float driftX = 0.0f, driftY = 0.0f, driftZ = 0.0f;
     if (n >= 20) {
@@ -5098,6 +5896,19 @@ static void calcTrend() {
     g_trendResult.freq_alert     = false;
     g_trendResult.ttw_hours      = 0.0f;
     g_trendResult.window_samples = snapCount;
+  }
+
+  // -- Current Trend (CTR4A01, 500ms cadence) [v16.6a] ---------------------
+  // Independent buffer/readiness from the vibration trend buffer above
+  // (different source, different sample rate) -- reuses the same
+  // linRegSlope() utility. No thresholds/direction classification (Phase 1
+  // scope is the trend engine only -- Motor State logic is untouched).
+  if (g_currentCount >= CURRENT_MIN_SAMPLES) {
+    g_trendResult.current_slope = linRegSlope(g_currentHead, g_currentCount, CURRENT_BUF_SIZE,
+                                               CURRENT_WINDOW_SAMPLES, CURRENT_SAMPLE_INTERVAL_S,
+                                               currentBufAccessor);
+  } else {
+    g_trendResult.current_slope = 0.0f;
   }
 
   // -- Phase 2: Multi-Resolution Slopes ------------------------------------
@@ -5241,7 +6052,10 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
   // v15.1: ใช้ cf_max (max ของทั้ง 3 แกน) แทน cf_x เพียงแกนเดียว
   // sensor คำนวณจาก raw 16KHz FIFO ภายใน chip:  CF = Peak_acc / RMS_acc
-  float crestFactor = (data->cf_max > 0.0f)
+  // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน RMS/peak/kurtosis ด้านบน --
+  // ขณะ STOPPED/STARTING/STOPPING ค่า CF จาก sensor เป็น noise-floor/garbage
+  // ที่ไม่ผ่าน deglitch (deglitch ทำงานเฉพาะ motor_state==2) -> ต้อง gate เป็น 0
+  float crestFactor = (data->motor_state == 2 && data->cf_max > 0.0f)
                       ? roundf(data->cf_max * 100.0f) / 100.0f
                       : 0.0f;
 
@@ -5350,6 +6164,12 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     s["peak"]       = round(currentPeak            * 100) / 100.0f;
     // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
 
+    // [DESIGN-0004] Peak Velocity X/Y/Z -- signed (no abs(), Decision 4), gated by
+    // MOTOR_RUNNING at publish time only (Decision 5, mirrors cf_x/y/z pattern below)
+    s["peak_velocity_x"] = (data->motor_state == 2) ? round(data->peak_velocity_x * 100) / 100.0f : 0.0f;
+    s["peak_velocity_y"] = (data->motor_state == 2) ? round(data->peak_velocity_y * 100) / 100.0f : 0.0f;
+    s["peak_velocity_z"] = (data->motor_state == 2) ? round(data->peak_velocity_z * 100) / 100.0f : 0.0f;
+
     s["temp"]  = round(data->temperature *  10) /  10.0f;
     s["rpm"]   = data->rpm;
 
@@ -5363,9 +6183,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
     // v15.1: CF ครบ 3 แกน + max
     s["crest_factor"]   = crestFactor;                           // = cf_max
-    s["cf_x"]           = round(data->cf_x * 100) / 100.0f;
-    s["cf_y"]           = round(data->cf_y * 100) / 100.0f;
-    s["cf_z"]           = round(data->cf_z * 100) / 100.0f;
+    // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน crestFactor/rms/peak/kurtosis --
+    // ป้องกัน per-axis CF garbage ตอน STOPPED/STARTING/STOPPING
+    s["cf_x"]           = (data->motor_state == 2) ? round(data->cf_x * 100) / 100.0f : 0.0f;
+    s["cf_y"]           = (data->motor_state == 2) ? round(data->cf_y * 100) / 100.0f : 0.0f;
+    s["cf_z"]           = (data->motor_state == 2) ? round(data->cf_z * 100) / 100.0f : 0.0f;
 
     // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING (ส่ง 0 เมื่อไม่ใช่ RUNNING)
     s["kurtosis_x"]     = kx;
@@ -5389,6 +6211,26 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     s["time_synced"] = g_timeSync.synced;
 
     char buf[1000];
+
+    // [DESIGN-0004] Requirement 6: measure actual size via ArduinoJson measureJson(),
+    // not an estimate -- reports the true serialized size even if serializeJson() below
+    // truncates against the fixed char buf[] below.
+    // NOTE: library is ArduinoJson v7.4.3 -- StaticJsonDocument<960> here is a deprecated
+    // compatibility shim; its .capacity() would only echo the literal "960", not a real
+    // pool limit (v7's JsonDocument allocates dynamically), so it is not logged here.
+    // memoryUsage() reports the JsonDocument's actual current allocation instead.
+    // [Code review fix] Compiled out entirely in production -- zero runtime cost
+    // when undefined, since neither the measureJson() call nor the printf exist
+    // in the compiled binary at all.
+    // Enable for diagnostic builds using: -DDEBUG_JSON_SIZE
+    // No source modification is required.
+#ifdef DEBUG_JSON_SIZE
+    size_t measuredSensorSize = measureJson(s);
+    Serial.printf("[DESIGN-0004] /sensor measureJson()=%u B (doc memoryUsage=%u B, buf cap=%u B)\n",
+                  (unsigned)measuredSensorSize, (unsigned)s.memoryUsage(),
+                  (unsigned)sizeof(buf));
+#endif
+
     size_t szSensor = serializeJson(s, buf, sizeof(buf));
     if (szSensor == 0 || szSensor >= sizeof(buf) - 1) {
       Serial.printf("[WARN] /sensor JSON truncated! sz=%u buf=%u\n",
@@ -5501,9 +6343,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     doc["health_score"]        = healthScore;
     // v15.1: CF และ Kurtosis ครบ 3 แกน + derived
     doc["crest_factor"]     = crestFactor;                           // = cf_max
-    doc["cf_x"]             = round(data->cf_x * 100) / 100.0f;
-    doc["cf_y"]             = round(data->cf_y * 100) / 100.0f;
-    doc["cf_z"]             = round(data->cf_z * 100) / 100.0f;
+    // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน crestFactor/rms/peak/kurtosis --
+    // ป้องกัน per-axis CF garbage ตอน STOPPED/STARTING/STOPPING
+    doc["cf_x"]             = (data->motor_state == 2) ? round(data->cf_x * 100) / 100.0f : 0.0f;
+    doc["cf_y"]             = (data->motor_state == 2) ? round(data->cf_y * 100) / 100.0f : 0.0f;
+    doc["cf_z"]             = (data->motor_state == 2) ? round(data->cf_z * 100) / 100.0f : 0.0f;
     // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING
     doc["kurtosis_x"]       = kx;
     doc["kurtosis_y"]       = ky;
@@ -5520,6 +6364,12 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
     doc["rms_slope"]      = g_trendResult.rms_slope;
     doc["temp_slope"]     = g_trendResult.temp_slope;
+    doc["current_slope"]  = g_trendResult.current_slope;  // [v16.6a] CTR4A01, A/s
+    // [v16.6b] Remote diagnostics for current_slope=0 ambiguity -- if current_buf_count
+    // stays 0 while current_read_errors keeps climbing, CTR4A01 Modbus reads are failing
+    // (check slave address/wiring/baud); if both stay 0, the 500ms cadence itself never fired.
+    doc["current_buf_count"]    = g_currentCount;   // 0..CURRENT_BUF_SIZE, buffer fill level
+    doc["current_read_errors"]  = g_ctReadErrors;    // cumulative CTR4A01 Modbus failures since boot
     doc["trend_dir"]      = trendDirStr;
     doc["spike_count"]    = g_trendResult.spike_count;
     // v15.2 Fix 17: suppress freq fields เมื่อ RPM < RPM_FREQ_GATE
@@ -5557,11 +6407,13 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     success = mqttClient.publish(g_mqttTopic, jsonBuffer, (int)jsonSize, false, MQTT_QOS);
 
     if (success) {
+      // [v16.5] ใช้ reportedRms (ค่าที่ gate แล้ว) แทน data->rms_overall (raw)
+      // เพื่อให้ debug log ตรงกับค่าที่ publish จริงใน doc["rms"]
       Serial.printf("[MQTT] /vibration %d B | %s rms=%.2f peak=%.2f rpm=%.1f "
                     "state=%d | health=%d%% | frx=%.2f fry=%.2f frz=%.2f | "
                     "cf=%.2f kurt_max=%.3f(%s) bear=%s\n",
                     jsonSize, alarmLevel,
-                    data->rms_overall, currentPeak, data->rpm,
+                    reportedRms, currentPeak, data->rpm,
                     data->motor_state,
                     healthScore, freqRatioX, freqRatioY, freqRatioZ,
                     crestFactor, kmax, kaxis, bearingAlert);
@@ -5629,6 +6481,44 @@ void taskAnalytics(void* parameter) {
 
   while (1) {
     vTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+#ifdef VERIFY_TEST
+    // [VERIFY_TEST] Checkpoint 5E: one-shot, non-blocking consumption of the
+    // Checkpoint 5D frozen diagnostic snapshot. Queue capacity is 1 and
+    // taskStateMachine() sends exactly once per boot (at the CAPTURING_POST
+    // -> FROZEN transition), so this receive drains it exactly once -- no
+    // retry/poll loop, no second one-shot flag needed.
+    if (queueDiagSnapshot != NULL) {
+      static PollDiagSnapshot_t s_diagSnapshotRx;
+      if (xQueueReceive(queueDiagSnapshot, &s_diagSnapshotRx, 0) == pdTRUE) {
+        // Defensive cap only -- BEGIN/END still print the actual received
+        // count; count is never rewritten.
+        const uint8_t safeCount = (s_diagSnapshotRx.count <= 64) ? s_diagSnapshotRx.count : 64;
+
+        Serial.printf("[DIAG_SNAPSHOT_BEGIN] fsm_state=%u count=%u head=%u trigger_poll_seq=%lu\n",
+                      s_diagSnapshotRx.fsm_state, s_diagSnapshotRx.count, s_diagSnapshotRx.head,
+                      (unsigned long)s_diagSnapshotRx.trigger_poll_seq);
+
+        for (uint8_t i = 0; i < safeCount; i++) {
+          const PollDiagRecord_t& rec = s_diagSnapshotRx.records[i];
+          // Trigger identity derived only this way -- never re-derived from RMS/frequency.
+          const bool isTrigger = (rec.poll_seq == s_diagSnapshotRx.trigger_poll_seq);
+          Serial.printf("[DIAG_RECORD] chronological_index=%u physical_buffer_index=%u poll_seq=%lu "
+                        "is_trigger=%u rawRmsOverall=%.3f rawRmsZ=%.3f freq_z=%.3f "
+                        "lastGoodRmsPre=%.3f lastGoodRmsPost=%.3f outRms=%.3f "
+                        "isDropGlitch=%u glitchHoldPre=%u branch=%u motorState=%u\n",
+                        (unsigned)i, s_diagSnapshotRx.physical_buffer_index[i], (unsigned long)rec.poll_seq,
+                        (unsigned)isTrigger, rec.rawRmsOverall, rec.rawRmsZ, rec.freq_z,
+                        rec.lastGoodRmsPre, rec.lastGoodRmsPost, rec.outRms,
+                        (unsigned)rec.isDropGlitch, (unsigned)rec.glitchHoldPre,
+                        (unsigned)rec.branch, (unsigned)rec.motorState);
+        }
+
+        Serial.printf("[DIAG_SNAPSHOT_END] count=%u trigger_poll_seq=%lu\n",
+                      s_diagSnapshotRx.count, (unsigned long)s_diagSnapshotRx.trigger_poll_seq);
+      }
+    }
+#endif
 
     // ── Patent Claim 2: update slot duration from current RPM ────────────
     // Read RPM (written atomically by Core 0 processRPM).
@@ -5940,7 +6830,9 @@ analytics_publish:
     if (analyticsPublishCnt < 60) continue;
     analyticsPublishCnt = 0;
 
-    if (!mqttClient.connected()) continue;
+    // [v16.5] Section 7 Item 6 (design v16.5 §3.3, §4.2) — read via cache
+    // instead of touching mqttClient directly; Analytics is not the owner task.
+    if (!getMqttConnectedCached()) continue;
     if (g_buf1sCount < 4)        continue;
 
     // Shared timestamp for this publish round (all 7 topics use same value)
@@ -6061,10 +6953,14 @@ analytics_publish:
       if (sz == 0 || sz >= sizeof(buf) - 1)
         Serial.printf("[WARN] /trend JSON truncated! sz=%u buf=%u\n",
                       (unsigned)sz, (unsigned)sizeof(buf));
-      if (mqttClient.publish(g_mqttTopicTrend, buf, (int)sz, false, MQTT_QOS))
-        Serial.printf("[TREND] /trend %u B\n", (unsigned)sz);
+      // [v16.5] Section 7 Item 6 (design v16.5 §3.2) — enqueue for Network4G to
+      // publish instead of calling mqttClient.publish() directly; Analytics is
+      // not the owner task. Non-blocking; drop-newest + g_trendEnqueueDropCount
+      // on a full queue are handled inside enqueueMqttOutbound() (Item 3), unchanged here.
+      if (enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_TREND, buf, sz, MQTT_QOS))
+        Serial.printf("[TREND] /trend %u B queued\n", (unsigned)sz);
       else
-        Serial.printf("[TREND] FAILED -> %s\n", g_mqttTopicTrend);
+        Serial.printf("[TREND] FAILED to queue -> %s\n", g_mqttTopicTrend);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -6201,7 +7097,7 @@ void setup() {
 
   Serial.println("\n\n");
   Serial.println("+========================================================+");
-  Serial.println("|  ESP32-S3 VIBRATION MONITOR v12.0 (Phase 5 Fusion AI)  |");
+  Serial.println("|  ESP32-S3 VIBRATION MONITOR v16.5 (Phase 5 Fusion AI)  |");
   Serial.println("|        LilyGO T-Vending S3 + SIMCom A7670             |");
   Serial.println("+========================================================+\n");
 
@@ -6322,12 +7218,13 @@ void setup() {
   // reconfigSensorAfterRestart() เดิมถูกเรียกแค่ตอน stuck-auto-restart
   // ทำให้ทุก power cycle sensor กลับ default (MODE=0x00 → CF/VRMS = 0)
   // แก้โดยเรียก config ทุกครั้งที่ boot ก่อนสร้าง FreeRTOS tasks
-  // ลำดับ: Unlock → SR=16K → DRM=0x02 → MODE=0x02(FreqDomain) → Save
+  // ลำดับที่ทำงานอยู่จริง: Unlock → MODE=0x02(FreqDomain) → Unlock → Save
+  // (ไม่มีการเขียน SR หรือ DRM -- ถูกถอดออกใน [PATCHED v16.3], ดู reconfigSensorAfterRestart())
   //
   // Retry 3 รอบ: sensor บางตัวใช้เวลา settle หลัง power-on นานกว่า 200ms
   // รอ 500ms ก่อน attempt แรก และ 300ms ระหว่าง retry
   // -----------------------------------------------------------------------
-  Serial.println("[Init] Configuring WTVB02 sensor (SR=16K, MODE=FreqDomain)...");
+  Serial.println("[Init] Configuring WTVB02 sensor (MODE=FreqDomain)...");
   delay(500);  // [v16.2] เพิ่มจาก 200ms → 500ms ให้ sensor fully ready ก่อน config
 
   bool cfgOk = false;
@@ -6386,6 +7283,28 @@ void setup() {
   }
 
   Serial.println("[Init] Queues created");
+
+  // [v16.5] Section 7 Item 3 — dormant outbound MQTT queue.
+  // No producer/consumer wired yet (later checklist items); creation failure
+  // here does not affect current runtime behavior, since enqueueMqttOutbound()
+  // null-checks the handle and nothing calls it yet.
+  queueMqttOutboundTrend = xQueueCreate(QUEUE_SIZE_MQTT_OUTBOUND, sizeof(MqttOutboundMsg_t));
+  if (queueMqttOutboundTrend == NULL) {
+    Serial.println("[WARN] Failed to create queueMqttOutboundTrend (dormant, no current consumer)");
+  } else {
+    Serial.println("[Init] MQTT outbound queue created (dormant)");
+  }
+
+#ifdef VERIFY_TEST
+  // [VERIFY_TEST] Checkpoint 5D: one-shot diagnostic snapshot queue. Creation
+  // failure must not restart the DUT or alter production behavior -- recorded
+  // in g_diagHandoffState only; taskStateMachine() null-checks the handle
+  // before its one-shot send attempt.
+  queueDiagSnapshot = xQueueCreate(QUEUE_SIZE_DIAG_SNAPSHOT, sizeof(PollDiagSnapshot_t));
+  if (queueDiagSnapshot == NULL) {
+    g_diagHandoffState = DIAG_HANDOFF_QUEUE_UNAVAILABLE;
+  }
+#endif
 
   delay(2000);
 
@@ -6541,7 +7460,9 @@ void loop() {
   // OFF = no signal, slow blink = connecting, fast blink = GPRS up but MQTT down, solid = MQTT connected
   static uint32_t lastCloudBlink = 0;
   {
-    bool mqttUp = mqttClient.connected();
+    // [v16.5] Section 7 Item 8 (design v16.5 §3.3, §4.2) — read via cache
+    // instead of touching mqttClient directly; loopTask is not the owner task.
+    bool mqttUp = getMqttConnectedCached();
     bool gprsUp = g_network.gprsConnected;
     uint32_t cloudBlinkInterval = 0;
 
@@ -6598,7 +7519,9 @@ void loop() {
     Serial.println("+========================================================+");
     Serial.printf("| Modem:   %-45s |\n", g_network.modemReady ? "READY" : "NOT READY");
     Serial.printf("| GPRS:    %-45s |\n", g_network.gprsConnected ? "CONNECTED" : "DISCONNECTED");
-    Serial.printf("| MQTT:    %-45s |\n", mqttClient.connected() ? "CONNECTED (mTLS)" : "DISCONNECTED");
+    // [v16.5] Section 7 Item 8 (design v16.5 §3.3, §4.2) — read via cache
+    // instead of touching mqttClient directly; loopTask is not the owner task.
+    Serial.printf("| MQTT:    %-45s |\n", getMqttConnectedCached() ? "CONNECTED (mTLS)" : "DISCONNECTED");
     Serial.printf("| Signal:  %d%% (CSQ: %d)                                |\n",
                   g_network.signalPercent, g_network.signalQuality);
     Serial.printf("| Operator: %-44s |\n", g_network.operatorName);

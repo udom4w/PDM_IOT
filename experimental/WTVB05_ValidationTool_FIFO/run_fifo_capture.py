@@ -2,20 +2,21 @@
 """
 run_fifo_capture.py
 
-Opens COM5 @ 115200, sends "SETPOINT 25" (metadata log only -- no Modbus,
-does not drive the motor), then "SR 6", waits 1s, then sends "FIFO test2"
-and listens until the "FIFO_CAPTURE_END" sentinel line (or ~25s timeout).
-Everything received is appended to serial_log.txt.
+Opens COM5 @ 115200, sends "SETPOINT 30" (metadata log only -- no Modbus,
+does not drive the motor), then "SR 5" (1000 Hz per firmware
+SAMPLE_RATE_HZ table), waits 1s, then sends "FIFO test1" and "FIFO test2"
+in turn, listening after each until the "FIFO_CAPTURE_END" sentinel line
+(or ~25s timeout). Everything received is appended to serial_log.txt.
 
 If a "CRC MISMATCH" or "FIFO capture FAILED" line is seen before the next
 CSV header ("FIFOIndex,Tag,SR,...") in the capture window, automatically
-retries "FIFO test2" (up to 5 attempts total). Failure markers left over
-from a stale/overlapping prior attempt are discarded once a fresh header
-line appears, so they don't poison the verdict for the capture that
-actually follows it.
+retries the same "FIFO test<N>" command (up to 5 attempts per tag).
+Failure markers left over from a stale/overlapping prior attempt are
+discarded once a fresh header line appears, so they don't poison the
+verdict for the capture that actually follows it.
 
-On completion (success or exhausted retries), runs:
-    analyze_fifo_capture.py serial_log.txt --sr-hz 512
+On completion (success or exhausted retries for both tags), runs:
+    analyze_fifo_capture.py serial_log.txt --sr-hz 1000
 """
 
 import subprocess
@@ -75,6 +76,33 @@ def listen_until_end(ser, log, timeout_s):
     return completed, failed
 
 
+def capture_tag(ser, log, tag):
+    """Send 'FIFO <tag>' and retry up to MAX_ATTEMPTS times until a clean
+    capture completes. Returns True on success."""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        print(f"[INFO] FIFO {tag} capture attempt {attempt}/{MAX_ATTEMPTS}")
+        log.write(f"[INFO] FIFO {tag} capture attempt {attempt}/{MAX_ATTEMPTS}\n")
+        log.flush()
+
+        ser.reset_input_buffer()
+        send_command(ser, log, f"FIFO {tag}")
+        completed, failed = listen_until_end(ser, log, CAPTURE_TIMEOUT_S)
+
+        if completed and not failed:
+            return True
+
+        print(f"[WARN] FIFO {tag} attempt {attempt} did not complete cleanly "
+              f"(completed={completed}, failed={failed}). Retrying...")
+        log.write(f"[WARN] FIFO {tag} attempt {attempt} did not complete cleanly "
+                  f"(completed={completed}, failed={failed}). Retrying...\n")
+        log.flush()
+
+    print(f"[ERROR] FIFO {tag} capture did not succeed after {MAX_ATTEMPTS} attempts.")
+    log.write(f"[ERROR] FIFO {tag} capture did not succeed after {MAX_ATTEMPTS} attempts.\n")
+    log.flush()
+    return False
+
+
 def main():
     try:
         ser = serial.Serial(PORT, BAUD, timeout=1)
@@ -87,39 +115,20 @@ def main():
         time.sleep(2)
         ser.reset_input_buffer()
 
-        send_command(ser, log, "SETPOINT 25")
+        send_command(ser, log, "SETPOINT 30")
         time.sleep(0.5)
-        send_command(ser, log, "SR 6")
+        send_command(ser, log, "SR 5")
         time.sleep(1)
 
-        success = False
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            print(f"[INFO] FIFO capture attempt {attempt}/{MAX_ATTEMPTS}")
-            log.write(f"[INFO] FIFO capture attempt {attempt}/{MAX_ATTEMPTS}\n")
-            log.flush()
+        success_test1 = capture_tag(ser, log, "test1")
+        success_test2 = capture_tag(ser, log, "test2")
 
-            ser.reset_input_buffer()
-            send_command(ser, log, "FIFO test2")
-            completed, failed = listen_until_end(ser, log, CAPTURE_TIMEOUT_S)
-
-            if completed and not failed:
-                success = True
-                break
-
-            print(f"[WARN] Attempt {attempt} did not complete cleanly "
-                  f"(completed={completed}, failed={failed}). Retrying...")
-            log.write(f"[WARN] Attempt {attempt} did not complete cleanly "
-                      f"(completed={completed}, failed={failed}). Retrying...\n")
-            log.flush()
-
-        if not success:
-            print(f"[ERROR] FIFO capture did not succeed after {MAX_ATTEMPTS} attempts.")
-            log.write(f"[ERROR] FIFO capture did not succeed after {MAX_ATTEMPTS} attempts.\n")
-            log.flush()
+    if not (success_test1 and success_test2):
+        print(f"[ERROR] Not all captures succeeded (test1={success_test1}, test2={success_test2}).")
 
     print("[INFO] Running analyze_fifo_capture.py...")
     result = subprocess.run(
-        [sys.executable, "analyze_fifo_capture.py", LOG_FILE, "--sr-hz", "512"]
+        [sys.executable, "analyze_fifo_capture.py", LOG_FILE, "--sr-hz", "1000"]
     )
     sys.exit(result.returncode)
 

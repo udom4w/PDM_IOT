@@ -6,7 +6,39 @@
  * Modem: SIMCom A7670 (SIM7600 Compatible) - 4G LTE
  * RTC: DS3231
  *
- * Version: 16.5 (condition_monitoring_v1) [patched v16.5 -- CF motor_state gate]
+ * Version: 16.5.4 (condition_monitoring_v1) [patched v16.5 -- CF motor_state gate]
+ *
+ * ============================================================================
+ * v16.5.4 -- Architectural hardening (3 surgical improvements, no new features)
+ * ============================================================================
+ * 1. RPM EMA invalidation after long idle (MAX_EMA_INTERVAL_US): g_rpmFiltered
+ *    is no longer a never-reset EMA -- a pulse gap (or no-pulse idle) longer
+ *    than MAX_EMA_INTERVAL_US invalidates the EMA and zeroes g_rpmFiltered;
+ *    the first valid pulse afterwards reseeds the EMA from its raw RPM
+ *    (clean restart, no blending with the stale value).
+ * 2. Atomic telemetry snapshot (TelemetrySnapshot / g_telemSnapshot): captured
+ *    exactly once per state-machine cycle on Core 0, after
+ *    updateMotorStateMachine() and the alarm/health evaluation have completely
+ *    finished. All downstream consumers (MQTT publish, telemetry ring buffer,
+ *    fault-latch replay, OLED, Analytics, 30s status log) read this one
+ *    mutex-guarded struct instead of assembling their own view from
+ *    g_vibData + g_systemState in separate mutex takes.
+ * 3. Explicit RPM evidence freshness (RPMEvidence): rpm/valid/ageMs tracked at
+ *    the EMA update site; buildMotorStateEvidence() derives signalPresent from
+ *    it, so a stale EMA can never report signalPresent=true. FSM thresholds
+ *    and STOPPING/STOPPED timing (evidence.ageMs = timeSincePulseMs) unchanged.
+ * ============================================================================
+ *
+ * ============================================================================
+ * v16.5.3-rpmdiag1 -- DIAGNOSTIC BUILD ONLY
+ * ============================================================================
+ * Adds read-only Serial logging ([MOTOR-DIAG]/[MOTOR-TRANSITION]/[SIGNAL]/
+ * [PULSE]) around the RPM-sourced motor state machine, to investigate why
+ * the state machine reaches STOPPING/STOPPED while current stays ~1.6A and
+ * the motor is physically running. No thresholds, timing, control flow, or
+ * any existing computation were changed -- logging only. Safe to flash for
+ * diagnosis and revert afterward.
+ * ============================================================================
  *
  * v16.5 Changes (CF garbage-while-stopped fix):
  * +--------------------------------------------------------------------+
@@ -87,6 +119,20 @@
 #include <ArduinoJson.h>
 #include <RTClib.h>
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
+
+// ============================================================================
+// [BUILD FINGERPRINT] Firmware identity -- printed once at boot in setup(),
+// zero runtime cost afterward. See BUILD_FINGERPRINT.md for the full design
+// and the companion generate_build_info.ps1 script that refreshes
+// GIT_COMMIT_HASH before each compile.
+// ============================================================================
+#include "build_info.h"   // provides GIT_COMMIT_HASH; safe default "UNKNOWN" if never regenerated
+
+#ifndef GIT_COMMIT_HASH
+#define GIT_COMMIT_HASH "UNKNOWN"   // build_info.h missing/didn't define it -- never fabricate a hash
+#endif
+
+#define FW_VERSION "16.5.4"   // single source of truth for the firmware version string
 
 // ============================================================================
 // VERIFICATION INSTRUMENTATION (Checkpoint 1 -- disabled by default)
@@ -200,13 +246,23 @@ static constexpr const char* GPRS_PASS = "";
 #define SPIKE_REJECT_FACTOR   1.1f    // Reject pulses > MAX_RPM x factor
 #define NO_PULSE_STOPPING_MS  400     // No pulse > 400 ms -> STOPPING
 #define FORCE_STOP_TIMEOUT_MS 2000    // No pulse > 2 s   -> STOPPED
-// [Motor State Machine review] PROXIMITY is not implemented yet (buildMotorStateEvidence()
-// falls back to the RPM computation, same timeSincePulseMs-based ageMs) -- mirrors
-// NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS in value for now. Kept as separate named
-// constants (not aliases) so PROXIMITY can be tuned independently once implemented,
-// without perturbing RPM.
-#define NO_PROXIMITY_STOPPING_MS  400     // mirrors NO_PULSE_STOPPING_MS until PROXIMITY is implemented
-#define FORCE_PROXIMITY_STOPPED_MS 2000   // mirrors FORCE_STOP_TIMEOUT_MS until PROXIMITY is implemented
+// [v16.5.4] Maximum credible pulse gap for RPM EMA continuity. A measured
+// pulse interval above this (or an equally long no-pulse idle) invalidates
+// the EMA: g_rpmFiltered is reset to 0 and the next valid pulse reseeds it
+// from raw RPM instead of blending with the stale value. Normal running
+// (interval << 2 s) is unaffected.
+// Intentionally an INDEPENDENT literal, not derived from FORCE_STOP_TIMEOUT_MS
+// -- mirrors this file's existing convention (see the historical
+// NO_PROXIMITY_STOPPING_MS/FORCE_PROXIMITY_STOPPED_MS constants, which
+// "mirror" NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS in value but are kept
+// as separate named constants "so [it] can be tuned independently ... without
+// perturbing RPM"). Coupling EMA signal-processing timing to an FSM-tuning
+// constant would mean a future change to FORCE_STOP_TIMEOUT_MS silently
+// changes EMA invalidation too, and vice versa -- two different concerns
+// (signal freshness vs. business-state timeout) sharing one knob. Value
+// matches FORCE_STOP_TIMEOUT_MS's 2 s horizon today by deliberate choice, not
+// by algebraic coupling.
+#define MAX_EMA_INTERVAL_US   2000000UL   // 2.0 s, in microseconds
 #define FAULT_WINDOW_MS       3000    // RUNNING but no pulse > 3 s -> prox=0 (Fault)
 #define RUNNING_WARMUP_MS     2500    // [v16.3z] ต้อง in-band ต่อเนื่อง 2.5s ก่อนเป็น RUNNING (กัน bounce/spurious)
 // [Commit 3A] Confirmed-absence timeouts -- deliberately separate from
@@ -391,15 +447,6 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define BASELINE_RMS 2.8f
 #define WARNING_RMS 4.5f
 #define CRITICAL_RMS 11.2f
-// [v16.5.2 Commit 1] WARNING hysteresis exit threshold: rms must drop below this
-// (not just below WARNING_RMS) to leave STATE_WARNING -- eliminates NORMAL<->WARNING
-// chatter when rms hovers near WARNING_RMS. Entry still uses WARNING_RMS unchanged.
-#define WARNING_RMS_EXIT 4.2f
-// [v16.5.2 Commit 3A] Minimum time rms must stay continuously >= WARNING_RMS
-// before a fresh NORMAL/CRITICAL -> WARNING entry is accepted -- filters out
-// short RMS spikes that would otherwise trip WARNING for one or two 250ms
-// samples. Tune as needed; not tied to any other timing constant.
-#define WARNING_DWELL_MS 3000UL
 
 // --- FreeRTOS Configuration ---
 #define STACK_SIZE_MODBUS    4096   // Modbus task stack
@@ -1164,25 +1211,36 @@ enum MotorStateSource {
 
 // [Commit 3] Semantic evidence the state machine acts on -- decouples
 // updateMotorStateMachine() from any specific sensor. Each source translates
-// its own raw measurement into these facts:
+// its own raw measurement into these two facts:
 //   signalPresent -- does this source currently observe "motor active"
 //                    conditions (RPM: in-band; Current: above threshold)?
 //   ageMs         -- time since this source last had a fresh/valid reading.
-//   ageStoppingMs -- [Motor State Machine review] source-specific: evidence.ageMs
-//                    above this means "no fresh reading long enough" -> STOPPING.
-//   ageStoppedMs  -- same, for -> STOPPED.
-// ageStoppingMs/ageStoppedMs are still resolved entirely from per-source config
-// (NO_PULSE_STOPPING_MS/NO_CURRENT_STOPPING_MS/NO_PROXIMITY_STOPPING_MS etc.)
-// inside buildMotorStateEvidence() -- updateMotorStateMachine() only ever reads
-// them off the evidence struct, so it remains unaware of which source produced
-// them or what the underlying named constants are. No other raw values or
-// config leave buildMotorStateEvidence().
+// Deliberately minimal: no raw values, no thresholds, no source-specific
+// config -- those stay entirely inside buildMotorStateEvidence().
 struct MotorStateEvidence {
   bool     signalPresent;
   uint32_t ageMs;
-  uint32_t ageStoppingMs;
-  uint32_t ageStoppedMs;
 };
+
+// [v16.5.4] Improvement 3: explicit freshness for the RPM EMA evidence.
+// Written only by processRPM() (Core 0) at the EMA update site; read by
+// buildMotorStateEvidence()'s RPM/PROXIMITY branches. Guarantees a stale
+// EMA can never produce signalPresent=true:
+//   rpm   -- current g_rpmFiltered value (0.0 while invalid)
+//   valid -- false until the EMA has been seeded by a valid pulse, and false
+//            again once no pulse has been seen for MAX_EMA_INTERVAL_US
+//            (long idle / invalidation, Improvement 1)
+//   ageMs -- same value as timeSincePulseMs (ms since the last detected
+//            pulse, accepted or rejected) -- deliberately the same clock the
+//            FSM itself uses, not a second independent one.
+// NOTE: evidence.ageMs fed to updateMotorStateMachine() remains
+// timeSincePulseMs exactly as before -- RPMEvidence.ageMs is freshness
+// bookkeeping only, so STOPPING/STOPPED timing is untouched.
+typedef struct {
+  float    rpm;
+  bool     valid;
+  uint32_t ageMs;
+} RPMEvidence;
 
 // [v16.3ab] Analysis freeze reason (derived state) — วางไว้ต้นไฟล์เพราะ .ino auto-prototype
 // ต้องเห็น type ก่อน function ที่ return มัน (analysisReason)
@@ -1361,6 +1419,34 @@ typedef struct {
   bool mqttConnected;  // [v16.5] Section 7 Item 4 (design v16.5 §4.2) — Network4G-only writer, dormant until Items 6-8 wire readers
 } SystemState_t;
 
+// [v16.5.4] Improvement 2: atomic telemetry snapshot.
+// Captured EXACTLY ONCE per state-machine cycle by captureTelemetrySnapshot()
+// (Core 0, taskStateMachine) after updateMotorStateMachine() and the
+// alarm/health evaluation have completely finished. Guarded by the existing
+// mutexVibData. Downstream consumers (MQTT publish, telemetry ring buffer,
+// fault-latch replay, OLED, Analytics, 30s status log) copy this ONE struct
+// under ONE mutex take instead of assembling their own view from g_vibData +
+// g_systemState in separate takes -- eliminating the window where vibration
+// data and system state could come from different cycles.
+// Top-level named fields are limited to values that (a) have no equivalent
+// inside VibrationData_t (health_score, alarm_level -- genuine Business
+// Decision outputs, not raw measurements) or (b) have real direct consumers
+// that read the scalar rather than vib.<field> (rpm, motor_state -- read by
+// taskAnalytics). Every other measurement (vrms x/y/z, crest factor,
+// kurtosis, temperature, current, timestamp, valid, ...) is reachable via
+// vib.<field> and is deliberately NOT duplicated at the top level -- doing so
+// would just be a second copy of the same data with no reader, the same
+// write-only-dead-weight problem this patch removes from g_vibData itself.
+// Values are byte-for-byte the same data previously read from g_vibData /
+// g_systemState -- no field changed meaning, no MQTT schema change.
+typedef struct {
+  float           rpm;           // == vib.rpm (presentation RPM) -- read directly by taskAnalytics
+  uint8_t         motor_state;   // == vib.motor_state (MotorRunState_t) -- read directly by taskAnalytics
+  int             health_score;  // Business Decision -- computed by computeHealthScore(), not present in VibrationData_t
+  MachineState_t  alarm_level;   // effective g_systemState.state at capture (incl. MAINTENANCE) -- not present in VibrationData_t
+  VibrationData_t vib;           // full measurement record -- all other fields (rms_x/y/z, cf_max, kurtosis_max, temperature, current_a, timestamp, valid, ...) read from here
+} TelemetrySnapshot;
+
 // Network status (Core 1 only) - Modified for 4G
 typedef struct {
   bool modemReady;
@@ -1480,7 +1566,14 @@ SemaphoreHandle_t mutexTelemBuf   = NULL;  // guards g_telemBuf + g_telemBuf* co
 // SHARED VARIABLES (protected by mutex)
 // ============================================================================
 
-static VibrationData_t g_vibData = { 0 };
+// [v16.5.4] g_vibData removed: every consumer that used to read it now reads
+// g_telemSnapshot (verified via full-file search -- no remaining readers),
+// so keeping a second, separately-mutex-guarded copy of the same data would
+// be dead-weight duplication (an extra memcpy + mutex acquisition per Core 0
+// cycle for a value nothing consumes).
+// [v16.5.4] Improvement 2: the one atomic snapshot all consumers read.
+// Written only by captureTelemetrySnapshot() (Core 0); guarded by mutexVibData.
+static TelemetrySnapshot g_telemSnapshot = { 0 };
 static SystemState_t g_systemState = {
   .state = STATE_NORMAL,
   .currentPage = PAGE_MACHINE,
@@ -1646,18 +1739,6 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 // 15s/30s confirmed-absence timeouts, while still absorbing single-sample
 // noise and inrush transients before the threshold comparison.
 #define CURRENT_EMA_ALPHA           0.25f
-// [Motor State Machine review] evidence-staleness timeouts for MOTOR_SRC_CURRENT.
-// ROOT CAUSE this fixes: updateMotorStateMachine() previously compared every
-// source's evidence.ageMs against the RPM-calibrated NO_PULSE_STOPPING_MS (400ms).
-// CTR4A01 only samples every CURRENT_SAMPLE_INTERVAL_MS (500ms), so ageMs
-// legitimately reaches up to just under 500ms once per sampling cycle on a
-// perfectly healthy reading -- routinely tripping the 400ms RPM threshold and
-// forcing a false RUNNING -> STOPPING transition. These constants are sized
-// against the 500ms CTR4A01 cadence instead (3x/10x margin for jitter and
-// occasional missed Modbus reads) -- placeholders pending field validation
-// against real CTR4A01 read-latency data, same status as MOTOR_NAMEPLATE_CURRENT_A above.
-#define NO_CURRENT_STOPPING_MS      1500   // evidence.ageMs > this (no successful CT read) -> STOPPING
-#define FORCE_CURRENT_STOPPED_MS    5000   // evidence.ageMs > this -> STOPPED
 
 // --- Trend Sample Struct (Layer 1) ---
 typedef struct {
@@ -2089,7 +2170,15 @@ volatile uint32_t g_rpmPulseInterval  = 0;
 volatile uint32_t g_rpmTotalPulses    = 0;
 
 // RPM processing state (Core 0 only -- no mutex needed)
-static float           g_rpmFiltered       = 0.0f;
+static float           g_rpmFiltered       = 0.0f;  // EMA evidence signal -- state-machine input only; [v16.5.4] reset (with g_rpmEvidence.valid=false) after a pulse gap/idle > MAX_EMA_INTERVAL_US, otherwise never reset by state
+static float           g_rpmReported       = 0.0f;  // presentation value derived from g_rpmFiltered + g_motorRunState -- telemetry/data->rpm source only
+// [v16.5.4] Improvements 1+3: RPM EMA freshness state (Core 0 only -- no
+// mutex needed). Refreshed every processRPM() cycle from timeSincePulseMs
+// (the SAME clock the FSM itself uses for FORCE_STOP_TIMEOUT_MS) rather than
+// a second, independently-tracked "time since last accepted EMA update"
+// clock -- so EMA freshness and FSM staleness can never diverge. Consumed by
+// buildMotorStateEvidence().
+static RPMEvidence     g_rpmEvidence        = { 0.0f, false, 0 };
 static uint32_t        g_rpmLastPulseCount  = 0;
 static uint32_t        g_rpmLastPulseMillis = 0;
 static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
@@ -2116,6 +2205,19 @@ static volatile uint32_t g_lastResumeGapS    = 0;    // [v16.3ab] ระยะ�
 static volatile bool   g_resumeReinit        = false; // [v16.3ab] Core0 ขอให้ Core1 reinit time-dependent stats หลัง resume
 static uint8_t         g_slopeSuppress       = 0;    // [v16.3ab] suppress slope N calcTrend cycles หลัง resume (time discontinuity)
 
+// ============================================================================
+// [v16.5.3-rpmdiag1] DIAGNOSTIC-ONLY mirrors -- NEVER read by any control-flow
+// or decision logic anywhere in the firmware. Written by processRPM() purely
+// so updateMotorStateMachine()'s diagnostic prints (added in this build only)
+// can report pulseCount/rpmRaw/timeSincePulseMs without changing that
+// function's signature. Removing this block removes logging only.
+// ============================================================================
+static uint32_t g_diagPulseCount       = 0;
+static float    g_diagRpmRaw           = 0.0f;
+static uint32_t g_diagTimeSincePulseMs = 0;
+static bool     g_diagPrevSignalPresent = false;  // for [SIGNAL] edge detection
+static bool     g_diagSignalPresentInit = false;  // suppress the very first (boot) edge print
+
 // [v16.3ab/ac] Point 1: readiness เป็น derived state ที่ประกอบจาก predicate แยกโดเมน
 //   แต่ละโดเมนไม่รู้เรื่องกัน (RPM ไม่รู้เรื่อง sensor, sensor ไม่รู้เรื่อง vrms) — เพิ่มโดเมนใหม่
 //   (current/temp/power) = เพิ่ม predicate 1 ตัว + 1 บรรทัดใน analysisReason() ไม่ต้องแก้ที่อื่น
@@ -2125,13 +2227,14 @@ static inline bool anaVrmsHealthy()   { return g_lastRmsOverall <= SANITY_RMS_MA
 // future: static inline bool anaCurrentHealthy() {...}  anaTempHealthy() {...}
 
 static AnalysisReason_t analysisReason() {
-  // [v17.0c] Motor State → metadata: STOPPED/STARTING/STOPPING no longer
-  // freeze analysis (Processing Gate removed -- see architecture review,
-  // Analytics Buffer must always execute). Only genuine data-quality
-  // freezes remain below: sensor offline, post-reconfig warmup, VRMS
-  // sanity-cap violation.
   if (g_sensorOffline)            return ANA_FRZ_SENSOR_OFFLINE;
   if (g_sensorWarmupReads > 0)    return ANA_FRZ_RECONFIG;
+  switch (g_motorRunState) {
+    case MOTOR_STOPPED:  return ANA_FRZ_STOPPED;
+    case MOTOR_STARTING: return ANA_FRZ_STARTING;
+    case MOTOR_STOPPING: return ANA_FRZ_STOPPING;
+    default: break;  // RUNNING
+  }
   if (!anaVrmsHealthy())          return ANA_FRZ_VRMS_INVALID;
   // future: if (!anaCurrentHealthy()) return ANA_FRZ_CURRENT; ...
   return ANA_READY;
@@ -2364,23 +2467,22 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   } else {
     s->buffered_ts = 0u;
   }
-  // [v17.0a] Motor State → metadata: offline-replay buffer now stores the
-  // real measured values unconditionally (was gated to MOTOR_RUNNING, which
-  // permanently destroyed real RMS/CF readings acquired during a network
-  // outage while not RUNNING -- see architecture review, Finding 1: this was
-  // the only Processing Gate causing irreversible data loss, since there is
-  // no other copy of these values once this function returns).
-  s->rms_overall       = data->rms_overall;
-  s->rms_x             = data->rms_x;
-  s->rms_y             = data->rms_y;
-  s->rms_z             = data->rms_z;
+  // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
+  // noise-floor/garbage ที่ยังไม่ได้ deglitch -> เก็บ 0 กัน replay ส่ง garbage ออก MQTT ทีหลัง
+  bool isRunningBuf   = (data->motor_state == 2);
+  s->rms_overall       = isRunningBuf ? data->rms_overall : 0.0f;
+  s->rms_x             = isRunningBuf ? data->rms_x       : 0.0f;
+  s->rms_y             = isRunningBuf ? data->rms_y       : 0.0f;
+  s->rms_z             = isRunningBuf ? data->rms_z       : 0.0f;
   s->vel_peak_x        = data->vel_peak_x;
   s->vel_peak_y        = data->vel_peak_y;
   s->vel_peak_z        = data->vel_peak_z;
   s->vel_peak_overall  = max(data->vel_peak_x, max(data->vel_peak_y, data->vel_peak_z));
   s->temperature       = data->temperature;
   s->kurtosis_max      = data->kurtosis_max;
-  s->cf_max            = data->cf_max;
+  // [v16.5] gate เหมือน rms_overall/x/y/z ด้านบน -- ป้องกัน CF garbage
+  // ตอน STOPPED เข้าไปนอน buffer แล้วถูก replay ออก MQTT ซ้ำทีหลัง
+  s->cf_max            = isRunningBuf ? data->cf_max : 0.0f;
   s->freq_x            = data->freq_x;
   s->freq_y            = data->freq_y;
   s->freq_z            = data->freq_z;
@@ -2746,22 +2848,15 @@ static float getCurrentRuntimeHour() {
 
 // [Commit 3/4A] Builds the semantic evidence updateMotorStateMachine() will
 // act on, based on g_motorStateSource. Each branch translates its own raw
-// measurement into {signalPresent, ageMs, ageStoppingMs, ageStoppedMs} only --
-// no raw values, filter state, or source-specific config (RATED_RPM,
-// nameplate/CT/percent) ever leave this function; updateMotorStateMachine()
-// remains completely unaware of any of it -- including which named timeout
-// constants (NO_PULSE_STOPPING_MS vs. NO_CURRENT_STOPPING_MS vs.
-// NO_PROXIMITY_STOPPING_MS) were used to resolve ageStoppingMs/ageStoppedMs.
-// RPM/Proximity branches remain pure functions of their current inputs with
-// no memory of previous calls. The Current branch (Commit 4A) now holds one
-// piece of function-local filter state (the EMA accumulator) -- confined
-// entirely to this function, never exposed elsewhere.
+// measurement into {signalPresent, ageMs} only -- no raw values, thresholds,
+// filter state, or source-specific config (RATED_RPM, nameplate/CT/percent)
+// ever leave this function; updateMotorStateMachine() remains completely
+// unaware of any of it. RPM/Proximity branches remain pure functions of
+// their current inputs with no memory of previous calls. The Current branch
+// (Commit 4A) now holds one piece of function-local filter state (the EMA
+// accumulator) -- confined entirely to this function, never exposed
+// elsewhere, still never touching the frozen MotorStateEvidence shape.
 // PROXIMITY is not implemented yet -- placeholder mirrors RPM for now.
-// [Motor State Machine review] ageStoppingMs/ageStoppedMs added: previously
-// updateMotorStateMachine() compared every source's ageMs against the
-// RPM-calibrated NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS directly, which is
-// too tight for MOTOR_SRC_CURRENT's 500ms CTR4A01 cadence and caused false
-// RUNNING -> STOPPING transitions on perfectly healthy current readings.
 static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, float currentA) {
   MotorStateEvidence ev;
   switch (g_motorStateSource) {
@@ -2782,44 +2877,43 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       // per Commit 4A scope.
       ev.signalPresent = (s_currentFiltered >= kThresholdA);
       ev.ageMs = millis() - g_lastCurrentSampleMs;
-      ev.ageStoppingMs = NO_CURRENT_STOPPING_MS;
-      ev.ageStoppedMs  = FORCE_CURRENT_STOPPED_MS;
       break;
     }
     case MOTOR_SRC_PROXIMITY:
       // [placeholder] not implemented yet -- falls back to the RPM computation
-      ev.signalPresent = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
-                         (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+      // [v16.5.4] freshness-gated like MOTOR_SRC_RPM below
+      ev.signalPresent = g_rpmEvidence.valid &&
+                         (g_rpmEvidence.rpm >= (RATED_RPM - RATED_RPM_TOL)) &&
+                         (g_rpmEvidence.rpm <= (RATED_RPM + RATED_RPM_TOL));
       ev.ageMs = timeSincePulseMs;
-      ev.ageStoppingMs = NO_PROXIMITY_STOPPING_MS;
-      ev.ageStoppedMs  = FORCE_PROXIMITY_STOPPED_MS;
       break;
     case MOTOR_SRC_RPM:
     default:
-      ev.signalPresent = (g_rpmFiltered >= (RATED_RPM - RATED_RPM_TOL)) &&
-                         (g_rpmFiltered <= (RATED_RPM + RATED_RPM_TOL));
+      // [v16.5.4] Improvement 3: signalPresent now requires FRESH evidence --
+      // g_rpmEvidence.valid is false after long idle (MAX_EMA_INTERVAL_US), so
+      // a stale EMA that happens to still sit in the rated band can never
+      // report signalPresent=true. In-band thresholds unchanged; ev.ageMs
+      // stays timeSincePulseMs exactly as before, so the FSM's
+      // STOPPING/STOPPED timing is untouched. (g_rpmEvidence.rpm ==
+      // g_rpmFiltered -- same value, read through the freshness struct.)
+      ev.signalPresent = g_rpmEvidence.valid &&
+                         (g_rpmEvidence.rpm >= (RATED_RPM - RATED_RPM_TOL)) &&
+                         (g_rpmEvidence.rpm <= (RATED_RPM + RATED_RPM_TOL));
       ev.ageMs = timeSincePulseMs;
-      ev.ageStoppingMs = NO_PULSE_STOPPING_MS;
-      ev.ageStoppedMs  = FORCE_STOP_TIMEOUT_MS;
       break;
   }
   return ev;
 }
 
 // [Commit 3A] Motor State Machine -- consumes only semantic evidence
-// (signalPresent, ageMs, ageStoppingMs, ageStoppedMs). Knows nothing about
-// RPM, Current, CT ratios, nameplate values, or threshold percentages -- those
-// all stay inside buildMotorStateEvidence(). [Motor State Machine review] The
-// ageMs staleness comparisons below read their thresholds from the evidence
-// struct rather than referencing NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS
-// directly, so this function stays entirely source-agnostic even though the
-// resolved threshold values now differ per g_motorStateSource -- it has no
-// branch and no knowledge of which source (or which named constant) supplied
-// them. Responsibilities: STARTING/RUNNING debounce (warmup), STOPPING/STOPPED
-// (timeout, now via TWO independent triggers -- see below), and state
-// transition. No RPM-value mutation happens here (evidence carries no numeric
-// value to mutate); the existing g_rpmFiltered decay/zero on STOPPED/STOPPING
-// lives in processRPM(), gated on the resulting state -- see that function.
+// (signalPresent, ageMs). Knows nothing about RPM, Current, CT ratios,
+// nameplate values, or threshold percentages -- those all stay inside
+// buildMotorStateEvidence(). Responsibilities: STARTING/RUNNING debounce
+// (warmup), STOPPING/STOPPED (timeout, now via TWO independent triggers --
+// see below), and state transition. No RPM-value mutation happens here
+// (evidence carries no numeric value to mutate); the existing g_rpmFiltered
+// decay/zero on STOPPED/STOPPING lives in processRPM(), gated on the
+// resulting state -- see that function.
 //
 // Two independent, source-agnostic triggers can each drive STOPPING/STOPPED:
 //   (a) evidence itself is stale (ageMs) -- "we don't currently know"
@@ -2842,10 +2936,47 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
   }
   uint32_t absentMs = evidence.signalPresent ? 0 : (millis() - g_absentSince);
 
-  if (evidence.ageMs > evidence.ageStoppedMs || absentMs > ABSENT_STOPPED_MS) {
+  // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- read-only. Reports every time
+  // signalPresent flips, using diagnostic mirrors set by processRPM(); never
+  // consulted by any branch below.
+  if (g_diagSignalPresentInit && evidence.signalPresent != g_diagPrevSignalPresent) {
+    Serial.printf("[SIGNAL]\n%d->%d\npulseCount=%lu rpmRaw=%.1f rpmFiltered=%.1f timeSincePulseMs=%lu\n",
+                  (int)g_diagPrevSignalPresent, (int)evidence.signalPresent,
+                  (unsigned long)g_diagPulseCount, g_diagRpmRaw, g_rpmFiltered,
+                  (unsigned long)g_diagTimeSincePulseMs);
+  }
+  g_diagPrevSignalPresent  = evidence.signalPresent;
+  g_diagSignalPresentInit  = true;
+
+  // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- captures the state as it stands
+  // before this call's branches may overwrite it, purely so the
+  // [MOTOR-TRANSITION] prints below can report old/new. Read-only.
+  MotorRunState_t diagOldState = g_motorRunState;
+
+  if (evidence.ageMs > FORCE_STOP_TIMEOUT_MS || absentMs > ABSENT_STOPPED_MS) {
+    if (diagOldState != MOTOR_STOPPED) {
+      Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
+                    "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
+                    "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                    (int)diagOldState, (int)MOTOR_STOPPED,
+                    (evidence.ageMs > FORCE_STOP_TIMEOUT_MS) ? "ageMs>FORCE_STOP_TIMEOUT_MS" : "absentMs>ABSENT_STOPPED_MS",
+                    (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
+                    (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                    (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+    }
     g_motorRunState  = MOTOR_STOPPED;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else if (evidence.ageMs > evidence.ageStoppingMs || absentMs > ABSENT_STOPPING_MS) {
+  } else if (evidence.ageMs > NO_PULSE_STOPPING_MS || absentMs > ABSENT_STOPPING_MS) {
+    if (diagOldState != MOTOR_STOPPING) {
+      Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
+                    "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
+                    "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                    (int)diagOldState, (int)MOTOR_STOPPING,
+                    (evidence.ageMs > NO_PULSE_STOPPING_MS) ? "ageMs>NO_PULSE_STOPPING_MS" : "absentMs>ABSENT_STOPPING_MS",
+                    (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
+                    (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                    (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+    }
     g_motorRunState  = MOTOR_STOPPING;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
   } else {
@@ -2857,12 +2988,37 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
         if (g_motorRunState != MOTOR_RUNNING) {
           Serial.printf("[MOTOR] Warm-up complete (in-band %.1fs) -> RUNNING\n",
                         RUNNING_WARMUP_MS / 1000.0f);
+          Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
+                        "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
+                        "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                        (int)diagOldState, (int)MOTOR_RUNNING, "warmup_complete",
+                        (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
+                        (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                        (unsigned long)evidence.ageMs, (unsigned long)absentMs);
         }
         g_motorRunState = MOTOR_RUNNING;
       } else {
+        if (diagOldState != MOTOR_STARTING) {
+          Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
+                        "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
+                        "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                        (int)diagOldState, (int)MOTOR_STARTING, "warmup_in_progress",
+                        (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
+                        (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                        (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+        }
         g_motorRunState = MOTOR_STARTING; // ยังนับ warm-up อยู่
       }
     } else {
+      if (diagOldState != MOTOR_STARTING) {
+        Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
+                      "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
+                      "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                      (int)diagOldState, (int)MOTOR_STARTING, "signal_absent_fresh",
+                      (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
+                      (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                      (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+      }
       g_runInBandSince = 0;               // [v16.3z] หลุด band -> reset warm-up
       g_motorRunState  = MOTOR_STARTING;
     }
@@ -2888,52 +3044,116 @@ static void processRPM(VibrationData_t* data) {
   uint32_t timeSincePulseMs = millis() - g_rpmLastPulseMillis;
 
   // ---------- RPM Calculation (EMA filtered) ----------
-  if (newPulse && interval >= RPM_MIN_INTERVAL_US) {
+  // [v16.5.4] Improvement 1: EMA invalidation after long idle.
+  // A pulse whose measured interval spans a gap > MAX_EMA_INTERVAL_US is a
+  // restart-after-idle artifact (its rpmRaw is meaningless -- it averages the
+  // whole idle period), so instead of feeding it into the EMA (which
+  // previously dragged the stale value around), it invalidates the EMA
+  // outright. The FIRST valid pulse after that reseeds g_rpmFiltered from its
+  // raw RPM -- tracking restarts from a clean state, no blending with stale
+  // history. Normal running (interval << MAX_EMA_INTERVAL_US) takes the
+  // original EMA path unchanged.
+  if (newPulse && interval > MAX_EMA_INTERVAL_US) {
+    if (g_rpmEvidence.valid) {
+      Serial.printf("[RPM-EMA] Invalidated -- pulse gap %.1fs > %.1fs (stale EMA %.1f discarded)\n",
+                    interval / 1000000.0f, MAX_EMA_INTERVAL_US / 1000000.0f, g_rpmFiltered);
+    }
+    g_rpmEvidence.valid = false;
+    g_rpmFiltered       = 0.0f;
+  } else if (newPulse && interval >= RPM_MIN_INTERVAL_US) {
     float rpmRaw = (60000000.0f / interval) / PULSE_PER_REV;
     if (rpmRaw <= MAX_RPM * SPIKE_REJECT_FACTOR) {
-      g_rpmFiltered = RPM_SMOOTH_ALPHA * rpmRaw
-                    + (1.0f - RPM_SMOOTH_ALPHA) * g_rpmFiltered;
+      if (!g_rpmEvidence.valid) {
+        // [v16.5.4] clean restart: seed EMA from the first valid pulse
+        g_rpmFiltered       = rpmRaw;
+        g_rpmEvidence.valid = true;
+        Serial.printf("[RPM-EMA] Reseeded from first valid pulse -- rpm=%.1f\n", rpmRaw);
+      } else {
+        g_rpmFiltered = RPM_SMOOTH_ALPHA * rpmRaw
+                      + (1.0f - RPM_SMOOTH_ALPHA) * g_rpmFiltered;
+      }
     }
+  }
+
+  // [v16.5.4] Improvements 1+3: idle invalidation without pulses + freshness
+  // bookkeeping. Reuses timeSincePulseMs -- the SAME clock the FSM itself
+  // uses for FORCE_STOP_TIMEOUT_MS -- instead of a second, independent
+  // "time since last accepted EMA update" clock, so EMA freshness and FSM
+  // staleness can never diverge (e.g. under a stream of spike-rejected
+  // pulses that keep timeSincePulseMs low without ever updating the EMA).
+  // If no pulse at all has been seen for longer than MAX_EMA_INTERVAL_US,
+  // invalidate the EMA here as well -- evidence must not survive
+  // indefinitely across a motor stop. This fires at the same horizon as
+  // FORCE_STOP_TIMEOUT_MS today (see MAX_EMA_INTERVAL_US), i.e. at/after the
+  // moment the FSM already force-stops on evidence age, so no
+  // RUNNING/STOPPING/STOPPED timing changes.
+  {
+    if (g_rpmEvidence.valid && timeSincePulseMs > (uint32_t)(MAX_EMA_INTERVAL_US / 1000UL)) {
+      Serial.printf("[RPM-EMA] Invalidated -- no pulse for %lums (stale EMA %.1f discarded)\n",
+                    (unsigned long)timeSincePulseMs, g_rpmFiltered);
+      g_rpmEvidence.valid = false;
+      g_rpmFiltered       = 0.0f;
+    }
+    g_rpmEvidence.rpm   = g_rpmFiltered;
+    g_rpmEvidence.ageMs = timeSincePulseMs;
+  }
+
+  // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- read-only recomputation of the same
+  // rpmRaw expression above (or 0 when the existing gate condition is false),
+  // purely so it can be logged here and inside updateMotorStateMachine()
+  // without changing that function's signature or touching the real
+  // g_rpmFiltered EMA update above. Also mirrors pulseCount/timeSincePulseMs
+  // for the same reason. None of this feeds back into g_rpmFiltered or any
+  // decision.
+  g_diagRpmRaw = (newPulse && interval >= RPM_MIN_INTERVAL_US)
+                   ? ((60000000.0f / interval) / PULSE_PER_REV)
+                   : 0.0f;
+  g_diagPulseCount       = pulseCopy;
+  g_diagTimeSincePulseMs = timeSincePulseMs;
+
+  // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- [PULSE] fires once per detected new
+  // pulse (naturally bounded to processRPM()'s own ~250ms/4Hz call rate, so
+  // never exceeds 5 prints/sec). Printed here, not inside rpmISR() itself --
+  // Serial I/O from an IRAM ISR is unsafe and would itself alter timing,
+  // which this diagnostic build must not do.
+  if (newPulse) {
+    Serial.printf("[PULSE]\nintervalUs=%lu rpmRaw=%.1f pulseCount=%lu\n",
+                  (unsigned long)interval, g_diagRpmRaw, (unsigned long)pulseCopy);
   }
 
   // ---------- Motor State Machine ----------
   MotorStateEvidence evidence = buildMotorStateEvidence(timeSincePulseMs, data->current_a);
   updateMotorStateMachine(evidence);
 
-  // [DIAG-RPM] TEMPORARY diagnostic-only instrumentation -- read-only, prints
-  // every 5s. Does not alter any variable, branch, threshold, or timing.
-  // absentMs/stopByAge/stopByAbsent below are the *exact* expressions
-  // updateMotorStateMachine() (lines 2843/2845) already evaluated on this same
-  // call -- reusing `evidence` and the now-updated g_absentSince, not a
-  // separate derivation. Remove after the STOPPED root-cause question is answered.
-  static uint32_t s_lastRpmDiagMs = 0;
-  if (millis() - s_lastRpmDiagMs >= 5000) {
-    s_lastRpmDiagMs = millis();
-    uint32_t absentMs    = evidence.signalPresent ? 0 : (millis() - g_absentSince);
-    bool     stopByAge    = (evidence.ageMs > evidence.ageStoppedMs);
-    bool     stopByAbsent = (absentMs > ABSENT_STOPPED_MS);
-    Serial.printf("[RPM-DIAG] pulseCount=%lu newPulse=%d intervalUs=%lu g_rpmPulseInterval=%lu "
-                  "rpmFiltered=%.2f timeSincePulseMs=%lu lastPulseMs=%lu signalPresent=%d "
-                  "ageMs=%lu absentSince=%lu stopByAge=%d stopByAbsent=%d motorState=%d\n",
-                  (unsigned long)pulseCopy, (int)newPulse, (unsigned long)interval,
-                  (unsigned long)g_rpmPulseInterval, g_rpmFiltered,
-                  (unsigned long)timeSincePulseMs, (unsigned long)g_rpmLastPulseMillis,
-                  (int)evidence.signalPresent, (unsigned long)evidence.ageMs,
-                  (unsigned long)g_absentSince, (int)stopByAge, (int)stopByAbsent,
-                  (int)g_motorRunState);
-  }
+  // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- unconditional per-cycle snapshot.
+  // processRPM() is invoked once per dequeued sample at the existing ~250ms
+  // sensor-read cadence, so this naturally prints every ~250ms without adding
+  // a separate timer. Read-only; state/evidence were already fully decided
+  // above by the untouched logic.
+  Serial.printf("[MOTOR-DIAG]\nstate=%d signalPresent=%d pulseCount=%lu rpmRaw=%.1f "
+                "rpmFiltered=%.1f timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                (int)g_motorRunState, (int)evidence.signalPresent,
+                (unsigned long)g_diagPulseCount, g_diagRpmRaw, g_rpmFiltered,
+                (unsigned long)g_diagTimeSincePulseMs, (unsigned long)evidence.ageMs,
+                (unsigned long)(evidence.signalPresent ? 0 : (millis() - g_absentSince)));
 
   // [Commit 3] RPM-specific signal conditioning on STOPPED/STOPPING -- lives
   // here because MotorStateEvidence is now purely semantic (no mutable
   // numeric value to carry this). Gated on the resulting state rather than
   // re-checking timeSincePulseMs directly, since MOTOR_STOPPED/MOTOR_STOPPING
   // are only ever set by updateMotorStateMachine()'s ageMs timeout checks --
-  // same net effect on g_rpmFiltered, same timing, as the original inline code.
+  // same net effect on g_rpmReported, same timing, as the original inline code.
+  // [Recommendation B] Presentation-only: applies to g_rpmReported, never to
+  // g_rpmFiltered. g_rpmFiltered stays a pure, never-reset EMA of pulse
+  // timing (buildMotorStateEvidence()'s only input); g_rpmReported is the
+  // telemetry/data->rpm source only.
   if (g_motorRunState == MOTOR_STOPPED) {
-    g_rpmFiltered = 0.0f;
+    g_rpmReported = 0.0f;
   } else if (g_motorRunState == MOTOR_STOPPING) {
-    g_rpmFiltered *= 0.80f;
-    if (g_rpmFiltered < MIN_RPM_VALID) g_rpmFiltered = 0.0f;
+    g_rpmReported *= 0.80f;
+    if (g_rpmReported < MIN_RPM_VALID) g_rpmReported = 0.0f;
+  } else {
+    g_rpmReported = g_rpmFiltered;
   }
 
   // v15.2 Fix 18: Reset g_velPeakHold เมื่อ motor transition → STOPPED
@@ -3002,10 +3222,56 @@ static void processRPM(VibrationData_t* data) {
   updateRuntimeHour();
 
   // ---------- Write to shared VibrationData_t ----------
-  data->rpm          = roundf(g_rpmFiltered * 10.0f) / 10.0f;
+  data->rpm          = roundf(g_rpmReported * 10.0f) / 10.0f;
   data->motor_state  = (uint8_t)g_motorRunState;
   data->runtime_hour = roundf(getCurrentRuntimeHour() * 10000.0f) / 10000.0f;
   data->prox         = prox;
+}
+
+// [v16.5.4] Business Decision computation -- single owner of this formula,
+// called only from captureTelemetrySnapshot() below. Previously this exact
+// formula was duplicated inline in TWO places (publishTelemetry() and the
+// fault-latch replay block in taskNetwork()); both now read the precomputed
+// snap->health_score instead of recomputing it, which is what eliminates the
+// duplication. Formula and MOTOR_RUNNING gate are unchanged from v16.0 --
+// only given a name and a single call site. Kept as its own function (not
+// inlined into captureTelemetrySnapshot()) so the capture function stays a
+// pure data-movement layer: it invokes an already-named decision, it does
+// not itself contain the decision's arithmetic.
+static int computeHealthScore(const VibrationData_t* data) {
+  if (data->motor_state != 2) {  // ไม่ประเมิน health ขณะ STOPPED/STARTING/STOPPING
+    return 100;
+  }
+  float normalized = (data->rms_overall - BASELINE_RMS) /
+                     (CRITICAL_RMS - BASELINE_RMS) * 100.0f;
+  return (int)max(0.0f, min(100.0f, roundf(100.0f - normalized)));
+}
+
+// ============================================================================
+// [v16.5.4] Improvement 2: captureTelemetrySnapshot() -- Core 0 only
+// ============================================================================
+// The ONE capture point for g_telemSnapshot. Called exactly once per
+// state-machine cycle from taskStateMachine(), after updateMotorStateMachine()
+// (inside processRPM()) and the alarm evaluation have completely finished, so
+// every field in the snapshot belongs to the same sensor sample and the same
+// decision cycle. Pure data movement: every field here is either a straight
+// copy of an already-known value or a call to a separately-named decision
+// function (computeHealthScore()) -- no business arithmetic is inlined here.
+// effectiveState is the post-update g_systemState.state (so MAINTENANCE is
+// preserved), i.e. the same value consumers previously read from
+// g_systemState in their own mutex take.
+static void captureTelemetrySnapshot(const VibrationData_t* data, MachineState_t effectiveState) {
+  TelemetrySnapshot snap;
+  snap.rpm          = data->rpm;
+  snap.motor_state  = data->motor_state;
+  snap.alarm_level  = effectiveState;
+  snap.health_score = computeHealthScore(data);
+  memcpy(&snap.vib, data, sizeof(VibrationData_t));
+
+  if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(10)) == pdTRUE) {
+    memcpy(&g_telemSnapshot, &snap, sizeof(TelemetrySnapshot));
+    xSemaphoreGive(mutexVibData);
+  }
 }
 
 
@@ -3219,22 +3485,6 @@ static bool reconfigSensorAfterRestart() {
     Serial.println("[SENSOR-CFG] WARNING: Some config steps FAILED -- sensor may not output CF/VRMS");
   }
   Serial.println("[SENSOR-CFG] ========================================");
-
-  // [v16.6e] DIAGNOSTIC ONLY -- one read-only REG_MODE read-back right
-  // before returning, regardless of allOk. Covers all three call sites
-  // (setup(), taskModbusRead()'s recovery path, and restartSensorViaModbus(),
-  // which discards allOk entirely) from this single location. Does not
-  // affect allOk or any persisted config. Printed every call, unconditionally.
-  if (modbus.readHoldingRegisters(REG_MODE, 1) == modbus.ku8MBSuccess) {
-    uint16_t modeVal = modbus.getResponseBuffer(0);
-    const char* srcLabel = (g_motorStateSource == MOTOR_SRC_RPM)     ? "RPM"     :
-                           (g_motorStateSource == MOTOR_SRC_CURRENT) ? "CURRENT" :
-                                                                        "PROXIMITY";
-    Serial.printf("[MODE-CHECK] t=%lu REG_MODE=0x%04X (%u) g_motorStateSource=%s\n",
-                  (unsigned long)millis(), modeVal, modeVal, srcLabel);
-  } else {
-    Serial.printf("[MODE-CHECK] t=%lu REG_MODE read FAILED\n", (unsigned long)millis());
-  }
 
   return allOk;
 }
@@ -3816,7 +4066,6 @@ void taskModbusRead(void* parameter) {
 
   static uint32_t s_lastPollStart = 0;  // [v16.3y] วัด poll interval จริง
   static uint32_t s_lastCurrentSampleMs = 0;  // [v16.6a] CTR4A01 500ms cadence gate
-  static uint32_t s_lastModeCheckMs = 0;  // [v16.6e] DIAGNOSTIC: REG_MODE read-back cadence gate (5s)
 
   while (1) {
     g_sensorReads++;
@@ -3927,23 +4176,6 @@ void taskModbusRead(void* parameter) {
       // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
       vTaskDelay(pdMS_TO_TICKS(5));
       localData.current_valid = readCTR4A01Current(localData.current_a);
-    }
-
-    // [v16.6e] DIAGNOSTIC ONLY -- read-only REG_MODE read-back every 5s.
-    // No register writes, no new vTaskDelay, no RS485 timing change, no
-    // effect on state-machine / success / localData / queueSensorData.
-    if (millis() - s_lastModeCheckMs >= 5000) {
-      s_lastModeCheckMs = millis();
-      if (modbus.readHoldingRegisters(REG_MODE, 1) == modbus.ku8MBSuccess) {
-        uint16_t modeVal = modbus.getResponseBuffer(0);
-        const char* srcLabel = (g_motorStateSource == MOTOR_SRC_RPM)     ? "RPM"     :
-                               (g_motorStateSource == MOTOR_SRC_CURRENT) ? "CURRENT" :
-                                                                            "PROXIMITY";
-        Serial.printf("[MODE-CHECK] t=%lu REG_MODE=0x%04X (%u) g_motorStateSource=%s\n",
-                      (unsigned long)millis(), modeVal, modeVal, srcLabel);
-      } else {
-        Serial.printf("[MODE-CHECK] t=%lu REG_MODE read FAILED\n", (unsigned long)millis());
-      }
     }
 
     rs485Disable();
@@ -4207,16 +4439,15 @@ void taskModbusRead(void* parameter) {
         continue;
       }
 
-      // Step 5: Velocity Peak Hold
-      // [v17.0a] Motor State → metadata: peak hold now accumulates in EVERY
-      // motor state (previously gated to MOTOR_RUNNING only, which discarded
-      // real peak amplitude measured during STARTING/STOPPING -- see
-      // architecture review, "Peak" Processing Gate). Only genuine
-      // data-quality guards remain:
+      // Step 5: Velocity Peak Hold -- v16.0: gate ด้วย MOTOR_RUNNING
+      // STARTING/STOPPING: transient spike ไม่มีความหมาย mechanical → ไม่ update hold
+      // RUNNING เท่านั้น: สะสมค่าสูงสุดตลอด publish interval
+      // Core 0 เขียน / Core 1 อ่าน+reset -- atomic float write (ESP32 4-byte aligned)
+      // [v16.3m] เพิ่ม 2 guards:
       //   1. g_sensorWarmupReads > 0 → suppress หลัง reconfig fail
       //   2. rms > SANITY_RMS_MAX → garbage value จาก sensor ไม่ update peak
-      // Core 0 เขียน / Core 1 อ่าน+reset -- atomic float write (ESP32 4-byte aligned)
-      if (g_sensorWarmupReads == 0 &&
+      if (g_motorRunState == MOTOR_RUNNING &&
+          g_sensorWarmupReads == 0 &&
           localData.vel_peak_overall <= SANITY_RMS_MAX &&
           localData.vel_peak_overall > g_velPeakHold) {
         g_velPeakHold = localData.vel_peak_overall;  // [mm/s] true peak hold
@@ -4261,7 +4492,7 @@ void taskModbusRead(void* parameter) {
         }
 
         // ??? invalid packet ????? queue ??? cycle ??? offline
-        // ???????? taskStateMachine ??????? g_vibData ???????????? ERROR ?? display
+        // ???????? taskStateMachine ??????? snapshot ???????????? ERROR ?? display [v16.5.4: was g_vibData]
         memset(&localData, 0, sizeof(VibrationData_t));
         localData.valid     = false;
         localData.timestamp = millis();
@@ -4299,20 +4530,20 @@ void taskStateMachine(void* parameter) {
 
       // -- ???????: sensor offline (valid = false) --
       if (!sensorData.valid) {
-        // ???? g_vibData ??????? 0 ??? mark invalid
-        // ????????????????????????????? display / MQTT
-        if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(10)) == pdTRUE) {
-          memset(&g_vibData, 0, sizeof(VibrationData_t));
-          g_vibData.valid     = false;
-          g_vibData.timestamp = sensorData.timestamp;
-          xSemaphoreGive(mutexVibData);
-        }
+        // [v16.5.4] g_vibData removed (see declaration comment) -- the
+        // zeroed/invalid offline view is now built directly into the
+        // snapshot capture below instead of a separate g_vibData write.
 
         // Reset peak hold เมื่อ sensor offline
         // ป้องกัน peak ค้างข้ามช่วง offline -> online [v15.0: hold = true peak]
         g_velPeakHold = 0.0f;
 
         // ?????? state ???? NORMAL -- ???? trigger alarm ??? sensor ???????
+        // [v16.5.4] offlineState captured in this SAME critical section
+        // (rather than a second mutexSystemState take below) -- one lock
+        // acquisition instead of two, and it is exactly the post-update
+        // value (MAINTENANCE preserved if that's what it was).
+        MachineState_t offlineState = STATE_NORMAL;
         if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(10)) == pdTRUE) {
           if (g_systemState.state != STATE_MAINTENANCE) {
             if (g_systemState.state != STATE_NORMAL) {
@@ -4321,7 +4552,20 @@ void taskStateMachine(void* parameter) {
             g_systemState.state       = STATE_NORMAL;
             g_systemState.buzzerActive = false;
           }
+          offlineState = g_systemState.state;
           xSemaphoreGive(mutexSystemState);
+        }
+
+        // [v16.5.4] Improvement 2: keep the atomic snapshot coherent with the
+        // offline view consumers previously saw in g_vibData (zeroed struct,
+        // valid=false, timestamp preserved). alarm_level mirrors the actual
+        // post-update g_systemState.state so MAINTENANCE is not misreported.
+        {
+          VibrationData_t offlineVib;
+          memset(&offlineVib, 0, sizeof(VibrationData_t));
+          offlineVib.valid     = false;
+          offlineVib.timestamp = sensorData.timestamp;
+          captureTelemetrySnapshot(&offlineVib, offlineState);
         }
         continue;  // ??????????????? RPM / state machine ?????????
       }
@@ -4501,22 +4745,17 @@ void taskStateMachine(void* parameter) {
       // [v16.3ab] เผยแพร่ rms (หลัง de-glitch) ให้ isAnalysisReady() อ่าน — atomic float, ไม่ต้อง mutex
       g_lastRmsOverall = sensorData.rms_overall;
 
-      // Update shared vibration data (with mutex)
-      if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(10)) == pdTRUE) {
-        memcpy(&g_vibData, &sensorData, sizeof(VibrationData_t));
-        xSemaphoreGive(mutexVibData);
-      }
+      // [v16.5.4] g_vibData removed (see declaration comment) -- sensorData
+      // reaches consumers via captureTelemetrySnapshot() at the end of this
+      // block instead of a separate g_vibData memcpy here.
 
       // -- Push sample ???? Trend Buffer (Core 0 only, no mutex needed) --
       // ????? freq_ratio ? ???????????????? drift detection
       {
-        // [v17.0b] Motor State → metadata: freq_ratio no longer gated on
-        // MOTOR_RUNNING (Processing Gate removed -- see architecture review).
-        // The rpm>=100 floor is RPM-dependent math (kept): the ratio divides
-        // by rotational frequency, so it is undefined/meaningless without a
-        // usable RPM denominator, regardless of what motor_state says.
+        // v16.0: gate freq_ratio ด้วย MOTOR_RUNNING
+        // STARTING/STOPPING: ratio ไม่ stable → เขียน 0 ลง trendBuf
         float ratX = 0.0f, ratY = 0.0f, ratZ = 0.0f;
-        if (sensorData.rpm >= 100.0f) {
+        if (g_motorRunState == MOTOR_RUNNING && sensorData.rpm >= 100.0f) {
           float rf = sensorData.rpm / 60.0f;
           ratX = sensorData.freq_x / rf;
           ratY = sensorData.freq_y / rf;
@@ -4554,69 +4793,23 @@ void taskStateMachine(void* parameter) {
         g_sensorWarmupReads--;
       }
 
-      // [v16.5.2 Commit 1 rev2] WARNING hysteresis (NORMAL<->WARNING chatter fix):
-      // Hysteresis input is a mutex-protected snapshot of the canonical alarm
-      // state (g_systemState.state) itself -- no shadow/duplicate state. This
-      // means every existing forced-state path (sensor offline -> NORMAL,
-      // MAINTENANCE, WARMUP) is automatically respected with zero extra code
-      // here, since they all write g_systemState.state directly.
-      // Enter WARNING only at rms >= WARNING_RMS (unchanged threshold/value).
-      // Once WARNING, stay WARNING until rms < WARNING_RMS_EXIT (4.2f).
-      // CRITICAL_RMS comparison/threshold is untouched (Commit 1 does not
-      // redesign CRITICAL hysteresis).
-      MachineState_t currentAlarmState = STATE_NORMAL;
-      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(10)) == pdTRUE) {
-        currentAlarmState = g_systemState.state;
-        xSemaphoreGive(mutexSystemState);
-      }
-
-      // [v16.5.2 Commit 3A] WARNING dwell time -- s_warningCandidateSinceMs is a
-      // timer, not a second copy of alarm state: it tracks how long rms has been
-      // continuously >= WARNING_RMS (0 = not currently above threshold), the one
-      // piece of information g_systemState.state cannot represent on its own.
-      // Same function-local-static, single-writer/single-reader pattern already
-      // used by the deglitch block above (s_lastGoodRms/s_glitchHold) and by
-      // g_runInBandSince elsewhere in this file for the analogous RPM warm-up
-      // debounce -- reused here rather than inventing a new mechanism.
-      // Tracked independent of which branch below fires, gated only on
-      // "motor running, not in warmup, rms >= WARNING_RMS": this way a CRITICAL
-      // excursion (rms >= CRITICAL_RMS > WARNING_RMS) keeps the timer running
-      // instead of resetting it, so CRITICAL -> WARNING keeps its existing
-      // immediate-transition behavior (Requirement 4) -- only a *fresh* crossing
-      // of WARNING_RMS from below is subject to the new dwell requirement.
-      // [v17.0d] Motor State → metadata: alarm engine no longer suppressed by
-      // g_motorRunState != MOTOR_RUNNING (Processing Gate removed -- see
-      // architecture review). Alarms are now always evaluated against the
-      // real RMS in every motor state; motor_state is published alongside
-      // the alarm as context only, never used to silently force NORMAL.
-      // g_sensorWarmupReads remains a genuine data-quality guard (kept).
-      static uint32_t s_warningCandidateSinceMs = 0;
-      if (g_sensorWarmupReads == 0 && rms >= WARNING_RMS) {
-        if (s_warningCandidateSinceMs == 0) s_warningCandidateSinceMs = millis();
-      } else {
-        s_warningCandidateSinceMs = 0;
-      }
-      const bool warningDwellMet = (s_warningCandidateSinceMs != 0) &&
-                                    (millis() - s_warningCandidateSinceMs >= WARNING_DWELL_MS);
-
-      if (g_sensorWarmupReads > 0) {
+      if (g_motorRunState != MOTOR_RUNNING) {
+        newState = STATE_NORMAL;  // STOPPED/STARTING/STOPPING → ไม่ประเมิน alarm
+      } else if (g_sensorWarmupReads > 0) {
         newState = STATE_NORMAL;  // warmup reads หลัง sensor online → suppress spike
-      } else if (rms >= CRITICAL_RMS) {
-        newState = STATE_CRITICAL;
-      } else if (currentAlarmState == STATE_WARNING) {
-        newState = (rms < WARNING_RMS_EXIT) ? STATE_NORMAL : STATE_WARNING;
-      } else if (currentAlarmState == STATE_CRITICAL) {
-        // [Commit 3A revision] CRITICAL -> WARNING stays immediate, matching
-        // pre-Commit-3A behavior -- dwell applies only to fresh NORMAL -> WARNING
-        // entries (next branch), not to a drop out of CRITICAL.
-        newState = (rms >= WARNING_RMS) ? STATE_WARNING : STATE_NORMAL;
+      } else if (rms < WARNING_RMS) {
+        newState = STATE_NORMAL;
+      } else if (rms < CRITICAL_RMS) {
+        newState = STATE_WARNING;
       } else {
-        // [Commit 3A] Fresh entry into WARNING from NORMAL now additionally
-        // requires WARNING_DWELL_MS of continuous rms >= WARNING_RMS.
-        newState = (rms >= WARNING_RMS && warningDwellMet) ? STATE_WARNING : STATE_NORMAL;
+        newState = STATE_CRITICAL;
       }
 
       // Update system state (with mutex)
+      // [v16.5.4] effectiveState = post-update g_systemState.state for the
+      // snapshot capture below (preserves MAINTENANCE, which newState never
+      // carries). Falls back to newState if the mutex times out.
+      MachineState_t effectiveState = newState;
       if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(10)) == pdTRUE) {
         MachineState_t oldState = g_systemState.state;
 
@@ -4639,6 +4832,7 @@ void taskStateMachine(void* parameter) {
           }
         }
 
+        effectiveState = g_systemState.state;  // [v16.5.4] actual state after update
         xSemaphoreGive(mutexSystemState);
       }
 
@@ -4647,11 +4841,9 @@ void taskStateMachine(void* parameter) {
         int latchHealth = 100;
         // [v16.3m] sanity check: ถ้า rms > SANITY_RMS_MAX = garbage จาก reconfig fail
         // ไม่คำนวณ health score จากค่านี้ → ไม่ trigger HEALTH_LOW latch ผิดพลาด
-        // [v17.0d] Motor State → metadata: health latch no longer requires
-        // motor_state==RUNNING (Processing Gate removed -- see architecture
-        // review). rmsValid remains a genuine data-quality guard (kept).
         const bool rmsValid = (sensorData.rms_overall <= SANITY_RMS_MAX);
-        if (rmsValid && sensorData.rms_overall > BASELINE_RMS) {
+        if (rmsValid && sensorData.motor_state == 2 &&
+            sensorData.rms_overall > BASELINE_RMS) {
           float norm = (sensorData.rms_overall - BASELINE_RMS) /
                        (CRITICAL_RMS - BASELINE_RMS) * 100.0f;
           latchHealth = (int)max(0.0f, min(100.0f, roundf(100.0f - norm)));
@@ -4668,6 +4860,13 @@ void taskStateMachine(void* parameter) {
                            latchBearing, suppressLatch);
       }
       // ── End Fault Latch ───────────────────────────────────────────────────
+
+      // [v16.5.4] Improvement 2: THE single snapshot capture for this cycle --
+      // after updateMotorStateMachine() (inside processRPM() above) and the
+      // alarm/health evaluation have completely finished. sensorData is not
+      // modified after the de-glitch block, so every field captured here
+      // belongs to this exact sensor sample and this exact decision cycle.
+      captureTelemetrySnapshot(&sensorData, effectiveState);
     }
   }
 }
@@ -4704,8 +4903,13 @@ void taskDisplayUpdate(void* parameter) {
     }
 
     // Get current data (with mutex)
+    // [v16.5.4] Improvement 2: read the atomic snapshot's measurement record
+    // instead of g_vibData (identical content, single capture point).
+    // localState/localPage intentionally stay on g_systemState below: they are
+    // UI state (page selection, button-driven MAINTENANCE entry/exit) that
+    // must react immediately, not telemetry.
     if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(5)) == pdTRUE) {
-      memcpy(&localVibData, &g_vibData, sizeof(VibrationData_t));
+      memcpy(&localVibData, &g_telemSnapshot.vib, sizeof(VibrationData_t));
       xSemaphoreGive(mutexVibData);
     }
 
@@ -4826,8 +5030,10 @@ void taskNetwork(void* parameter) {
   const uint32_t BACKOFF_MAX = 300000; // max 5 นาที
   uint8_t  mqttFailCount   = 0;       // นับ fail ต่อเนื่อง
 
-  VibrationData_t localVibData;
-  MachineState_t localState;
+  // [v16.5.4] Improvement 2: one atomic snapshot replaces the separate
+  // localVibData (g_vibData) + localState (g_systemState) copies -- vibration
+  // data and system state can no longer come from different cycles.
+  TelemetrySnapshot localSnap = {};
 
   while (1) {
     uint32_t now = millis();
@@ -5016,19 +5222,16 @@ void taskNetwork(void* parameter) {
     }
 
     // Get current sensor data
+    // [v16.5.4] Improvement 2: single atomic snapshot copy (ONE mutex take)
+    // replaces the previous g_vibData + g_systemState pair of copies.
     if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(5)) == pdTRUE) {
-      memcpy(&localVibData, &g_vibData, sizeof(VibrationData_t));
+      memcpy(&localSnap, &g_telemSnapshot, sizeof(TelemetrySnapshot));
       xSemaphoreGive(mutexVibData);
-    }
-
-    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-      localState = g_systemState.state;
-      xSemaphoreGive(mutexSystemState);
     }
 
     // state-change boost, and minimum floor (3 s).
     uint32_t publishInterval;
-    switch (localState) {
+    switch (localSnap.alarm_level) {
       case STATE_WARNING:  publishInterval = 10000; break;
       case STATE_CRITICAL: publishInterval =  5000; break;
       default:             publishInterval = 30000; break;
@@ -5086,9 +5289,10 @@ void taskNetwork(void* parameter) {
       xSemaphoreGive(mutexSystemState);
     }
     if (mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
-      if (localVibData.valid) {
+      if (localSnap.vib.valid) {
         // -- Normal telemetry --
-        if (publishTelemetry(&localVibData, localState)) {
+        // [v16.5.4] publish from the atomic snapshot
+        if (publishTelemetry(&localSnap)) {
           lastPublish = now;
           g_network.publishCount++;
           g_network.lastPublishTime = now;
@@ -5135,8 +5339,9 @@ void taskNetwork(void* parameter) {
       }
     } else if (!mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
       // MQTT offline แต่ถึงเวลา publish -- บันทึกลง ring buffer แทน
-      if (localVibData.valid) {
-        pushTelemBuf(&localVibData, localState);
+      // [v16.5.4] buffer from the atomic snapshot (same fields as before)
+      if (localSnap.vib.valid) {
+        pushTelemBuf(&localSnap.vib, localSnap.alarm_level);
         lastPublish = now;  // advance timer เพื่อ push ทุก publishInterval (ไม่ push ซ้ำ)
       }
     }
@@ -5243,26 +5448,22 @@ void taskNetwork(void* parameter) {
         const char* snapAlarmLevel = "NORMAL";
         int         snapHealth     = 100;
         {
-          VibrationData_t snapVib = {};
-          MachineState_t  snapState = STATE_NORMAL;
+          // [v16.5.4] Improvement 2: read the atomic snapshot (ONE mutex take)
+          // instead of separate g_vibData + g_systemState copies, and use its
+          // health_score instead of re-deriving it here (formula now has a
+          // single owner: captureTelemetrySnapshot()). Same values, same gates.
+          TelemetrySnapshot flSnap = {};
           if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(5)) == pdTRUE) {
-            memcpy(&snapVib, &g_vibData, sizeof(VibrationData_t));
+            memcpy(&flSnap, &g_telemSnapshot, sizeof(TelemetrySnapshot));
             xSemaphoreGive(mutexVibData);
           }
-          if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-            snapState = g_systemState.state;
-            xSemaphoreGive(mutexSystemState);
+          if (flSnap.motor_state == 2) {
+            snapAlarmCode  = (flSnap.alarm_level == STATE_CRITICAL) ? 2 :
+                             (flSnap.alarm_level == STATE_WARNING)  ? 1 : 0;
+            snapAlarmLevel = (snapAlarmCode == 2) ? "CRITICAL" :
+                             (snapAlarmCode == 1) ? "WARNING"  : "NORMAL";
+            snapHealth     = flSnap.health_score;
           }
-          // [v17.0d] Motor State → metadata: always evaluated from the real
-          // alarm state / RMS (Processing Gate removed -- see architecture
-          // review; this mirrors the same fix in publishTelemetry()).
-          snapAlarmCode  = (snapState == STATE_CRITICAL) ? 2 :
-                           (snapState == STATE_WARNING)  ? 1 : 0;
-          snapAlarmLevel = (snapAlarmCode == 2) ? "CRITICAL" :
-                           (snapAlarmCode == 1) ? "WARNING"  : "NORMAL";
-          float flNorm = (snapVib.rms_overall - BASELINE_RMS) /
-                         (CRITICAL_RMS - BASELINE_RMS) * 100.0f;
-          snapHealth = (int)max(0.0f, min(100.0f, roundf(100.0f - flNorm)));
         }
 
         char flNowTs[26] = "not_available";
@@ -6161,85 +6362,113 @@ static void calcTrend() {
 // MQTT PUBLISHING (CORE 1)
 // ============================================================================
 
-bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
+// [v16.5.4] Improvement 2: consumes the atomic TelemetrySnapshot instead of a
+// separately-copied (VibrationData_t, MachineState_t) pair -- all published
+// fields now belong to one capture. data/state below alias the snapshot's
+// members so the rest of this function is textually unchanged.
+bool publishTelemetry(const TelemetrySnapshot* snap) {
   if (!mqttClient.connected()) return false;
 
+  const VibrationData_t* data  = &snap->vib;
+  const MachineState_t   state = snap->alarm_level;
+
   // ── Shared pre-computes ───────────────────────────────────────────────────
-  // [v17.0d] Motor State → metadata: alarm + health always evaluated from the
-  // real alarm state / RMS (Processing Gate removed -- see architecture
-  // review). `state` already reflects a real, unconditional evaluation
-  // (taskStateMachine no longer force-clamps to STATE_NORMAL by motor_state).
-  // motor_state is published alongside alarm/health as context only.
+  // v16.0: gate alarm + health ด้วย MOTOR_RUNNING
+  // STARTING/STOPPING: RMS transient สูง → ไม่ประเมิน alarm/health
+  // ส่ง alarmCode=0 / alarmLevel="NORMAL" / healthScore=100 แทน
+  // [v16.5.4] healthScore is now read from the snapshot (computed once, at
+  // capture time, on Core 0, by computeHealthScore() -- same formula/gate as
+  // before). alarmCode/alarmLevel logic below is untouched.
   int alarmCode;
   const char* alarmLevel;
-  int healthScore;
+  int healthScore = snap->health_score;
 
-  alarmCode   = (state == STATE_CRITICAL) ? 2 :
-                (state == STATE_WARNING)  ? 1 : 0;
-  // [v16.3l] ปิด bearing escalation — kurtosis ไม่เสถียรพอสำหรับ V1
-  // alarmCode ใช้ RMS state machine อย่างเดียว
-  alarmLevel  = (alarmCode == 2) ? "CRITICAL" :
-                (alarmCode == 1) ? "WARNING"  : "NORMAL";
-  float normalized = (data->rms_overall - BASELINE_RMS) /
-                     (CRITICAL_RMS - BASELINE_RMS) * 100.0f;
-  healthScore = (int)max(0.0f, min(100.0f, roundf(100.0f - normalized)));
-  // [v16.3l] ปิด bearing health penalty — ใช้ RMS-based health อย่างเดียว
+  if (data->motor_state == 2) {  // MOTOR_RUNNING เท่านั้น
+    alarmCode   = (state == STATE_CRITICAL) ? 2 :
+                  (state == STATE_WARNING)  ? 1 : 0;
+    // [v16.3l] ปิด bearing escalation — kurtosis ไม่เสถียรพอสำหรับ V1
+    // alarmCode ใช้ RMS state machine อย่างเดียว
+    alarmLevel  = (alarmCode == 2) ? "CRITICAL" :
+                  (alarmCode == 1) ? "WARNING"  : "NORMAL";
+    // [v16.3l] ปิด bearing health penalty — ใช้ RMS-based health อย่างเดียว
+  } else {
+    alarmCode   = 0;
+    alarmLevel  = "NORMAL";
+  }
 
-  // [v17.0a] Motor State → metadata: peak always reported real (was a
-  // Processing Gate -- see architecture review). Hold window still resets
-  // every publish cycle regardless of state (Runtime bookkeeping -- kept).
-  float currentPeak = g_velPeakHold;
-  g_velPeakHold      = 0.0f;            // reset for next window
+  // v16.0: Peak gated by MOTOR_RUNNING
+  // ถ้าไม่ใช่ RUNNING → peak = 0 (transient ไม่นับ)
+  // reset hold เฉพาะตอน RUNNING เพื่อไม่ให้ค่าค้างข้าม state
+  float currentPeak;
+  if (data->motor_state == 2) {         // MOTOR_RUNNING
+    currentPeak   = g_velPeakHold;
+    g_velPeakHold = 0.0f;               // reset สำหรับ window ถัดไป
+  } else {
+    currentPeak   = 0.0f;               // STOPPED/STARTING/STOPPING → ไม่รายงาน peak
+    g_velPeakHold = 0.0f;               // reset ทิ้งเพื่อไม่ค้างเข้า RUNNING ถัดไป
+  }
 
-  // [v17.0a] Motor State → metadata: RMS always reported real (was a
-  // Processing Gate -- see architecture review). De-glitch (v16.3x) still
-  // only suppresses spikes using a RUNNING baseline; outside RUNNING the
-  // raw sensor value is reported as-is, annotated by motor_state on the wire.
-  float reportedRms = data->rms_overall;
-  float reportedVx  = data->rms_x;
-  float reportedVy  = data->rms_y;
-  float reportedVz  = data->rms_z;
+  // [v16.3ae] RMS garbage gate for non-RUNNING states
+  // อาการ: sensor VRMS register ส่ง noise-floor / glitch ค่าสูงผิดปกติขณะ STOPPED
+  // เพราะ de-glitch filter (v16.3x, taskStateMachine) ทำงานเฉพาะ motor_state==2 (RUNNING)
+  // เท่านั้น → ค่า garbage วิ่งตรงเข้า MQTT rms/vx/vy/vz โดยไม่มีการกรอง
+  // Fix: gate เหมือน peak/kurtosis/freq_ratio ด้านบน — ไม่ใช่ RUNNING → รายงาน 0
+  float reportedRms, reportedVx, reportedVy, reportedVz;
+  if (data->motor_state == 2) {         // MOTOR_RUNNING
+    reportedRms = data->rms_overall;
+    reportedVx  = data->rms_x;
+    reportedVy  = data->rms_y;
+    reportedVz  = data->rms_z;
+  } else {
+    reportedRms = 0.0f;                 // STOPPED/STARTING/STOPPING → ไม่รายงาน rms
+    reportedVx  = 0.0f;
+    reportedVy  = 0.0f;
+    reportedVz  = 0.0f;
+  }
 
   // v15.1: ใช้ cf_max (max ของทั้ง 3 แกน) แทน cf_x เพียงแกนเดียว
   // sensor คำนวณจาก raw 16KHz FIFO ภายใน chip:  CF = Peak_acc / RMS_acc
-  // [v17.0a] Motor State → metadata: crest factor always reported real
-  // (was a Processing Gate added in v16.5 -- see architecture review).
-  float crestFactor = (data->cf_max > 0.0f)
+  // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน RMS/peak/kurtosis ด้านบน --
+  // ขณะ STOPPED/STARTING/STOPPING ค่า CF จาก sensor เป็น noise-floor/garbage
+  // ที่ไม่ผ่าน deglitch (deglitch ทำงานเฉพาะ motor_state==2) -> ต้อง gate เป็น 0
+  float crestFactor = (data->motor_state == 2 && data->cf_max > 0.0f)
                       ? roundf(data->cf_max * 100.0f) / 100.0f
                       : 0.0f;
 
-  // [v17.0a] Motor State → metadata: bearing alert always evaluated from real
-  // kurtosis (was a Processing Gate that replaced the whole evaluation with a
-  // state-name string when not RUNNING -- see architecture review, Bearing
-  // analysis). Stabilization window (WARMING_UP) still only counts up while
-  // RUNNING -- legitimate startup-transient debounce, kept as Interpretation
-  // gate; it no longer blocks CONFIRMED/EARLY_WARNING/NORMAL evaluation in
-  // other states.
+  // v16.0: Bearing alert -- state-aware + stabilization gate
+  // STOPPED/STARTING/STOPPING → ชื่อ state จริง (ไม่ใช่ INVALID_STATE)
+  // RUNNING < BEARING_STABLE_CYCLES → WARMING_UP (หลีกเลี่ยง startup transient)
+  // RUNNING ≥ BEARING_STABLE_CYCLES → ประเมิน kurtosis จริง
   const char* bearingAlert;
-  if (data->motor_state == 2 && g_bearingStableCnt < BEARING_STABLE_CYCLES) {
-    g_bearingStableCnt++;
-    bearingAlert = "WARMING_UP";
-  } else if (data->kurtosis_max >= KURTOSIS_CONFIRMED) {
-    bearingAlert = "CONFIRMED";
-  } else if (data->kurtosis_max >= KURTOSIS_EARLY_WARNING) {
-    bearingAlert = "EARLY_WARNING";
+  if (data->motor_state == 2) {
+    if (g_bearingStableCnt < BEARING_STABLE_CYCLES) {
+      g_bearingStableCnt++;
+      bearingAlert = "WARMING_UP";
+    } else if (data->kurtosis_max >= KURTOSIS_CONFIRMED) {
+      bearingAlert = "CONFIRMED";
+    } else if (data->kurtosis_max >= KURTOSIS_EARLY_WARNING) {
+      bearingAlert = "EARLY_WARNING";
+    } else {
+      bearingAlert = "NORMAL";
+    }
+  } else if (data->motor_state == 1) {
+    bearingAlert = "STARTING";
+  } else if (data->motor_state == 3) {
+    bearingAlert = "STOPPING";
   } else {
-    bearingAlert = "NORMAL";
+    bearingAlert = "STOPPED";
   }
   const char* dominantAxis = (data->kurtosis_dominant_axis == 0) ? "X" :
                              (data->kurtosis_dominant_axis == 1) ? "Y" : "Z";
 
-  // [v17.0a] Motor State → metadata: kurtosis always reported real (was gated
-  // to MOTOR_RUNNING -- see architecture review). kurtosisValid now reflects
-  // only genuine data-quality; publishTelemetry() is only ever called with a
-  // known-valid sensor read (taskNetwork gates on localVibData.valid before
-  // calling, ~line 5079), so it is unconditionally true here.
-  bool kurtosisValid = true;
-  float kx   = round(data->kurtosis_x   * 1000) / 1000.0f;
-  float ky   = round(data->kurtosis_y   * 1000) / 1000.0f;
-  float kz   = round(data->kurtosis_z   * 1000) / 1000.0f;
-  float kmax = round(data->kurtosis_max * 1000) / 1000.0f;
-  const char* kaxis = dominantAxis;
+  // v16.0: kurtosis valid เฉพาะ MOTOR_RUNNING
+  // ขณะ STOPPED/STARTING/STOPPING: noise floor → kurtosis สูงผิดปกติ (ไม่มีความหมาย)
+  bool kurtosisValid = (data->motor_state == 2);  // MOTOR_RUNNING เท่านั้น
+  float kx  = kurtosisValid ? round(data->kurtosis_x   * 1000) / 1000.0f : 0.0f;
+  float ky  = kurtosisValid ? round(data->kurtosis_y   * 1000) / 1000.0f : 0.0f;
+  float kz  = kurtosisValid ? round(data->kurtosis_z   * 1000) / 1000.0f : 0.0f;
+  float kmax = kurtosisValid ? round(data->kurtosis_max * 1000) / 1000.0f : 0.0f;
+  const char* kaxis = kurtosisValid ? dominantAxis : "-";
 
   // dominant_vibration_axis: แกนที่มี velocity RMS สูงสุด (ไม่เกี่ยวกับ kurtosis)
   // ใช้ rms_x/y/z (True RMS velocity จาก VRMS register)
@@ -6252,16 +6481,14 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     domVibAxis = "Z";
   }
 
-  // [v17.0b] Motor State → metadata: freq_ratio/freq_alert gate no longer
-  // includes MOTOR_RUNNING (Processing Gate removed -- see architecture
-  // review). RPM_FREQ_GATE floor is RPM-dependent math (kept): the ratio
-  // needs a usable rotational-frequency denominator, independent of what
-  // motor_state says.
+  // v16.0: Gate freq_ratio/freq_alert ด้วย MOTOR_RUNNING + RPM_FREQ_GATE
+  // STARTING/STOPPING: RPM ไม่ stable → ratio ไม่มีความหมาย → suppressed
   float freqX = roundf(data->freq_x * 10.0f) / 10.0f;
   float freqY = roundf(data->freq_y * 10.0f) / 10.0f;
   float freqZ = roundf(data->freq_z * 10.0f) / 10.0f;
   float freqRatioX = 0.0f, freqRatioY = 0.0f, freqRatioZ = 0.0f;
-  bool  freqGateOpen = (data->rpm >= (float)RPM_FREQ_GATE);
+  bool  freqGateOpen = (data->motor_state == 2 &&
+                        data->rpm >= (float)RPM_FREQ_GATE);
   if (freqGateOpen) {
     float rotFreq  = data->rpm / 60.0f;
     freqRatioX = roundf((freqX / rotFreq) * 100.0f) / 100.0f;
@@ -6313,12 +6540,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     s["peak"]       = round(currentPeak            * 100) / 100.0f;
     // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
 
-    // [DESIGN-0004] Peak Velocity X/Y/Z -- signed (no abs(), Decision 4).
-    // [v17.0a] Motor State → metadata: always reported real (was gated to
-    // MOTOR_RUNNING -- see architecture review).
-    s["peak_velocity_x"] = round(data->peak_velocity_x * 100) / 100.0f;
-    s["peak_velocity_y"] = round(data->peak_velocity_y * 100) / 100.0f;
-    s["peak_velocity_z"] = round(data->peak_velocity_z * 100) / 100.0f;
+    // [DESIGN-0004] Peak Velocity X/Y/Z -- signed (no abs(), Decision 4), gated by
+    // MOTOR_RUNNING at publish time only (Decision 5, mirrors cf_x/y/z pattern below)
+    s["peak_velocity_x"] = (data->motor_state == 2) ? round(data->peak_velocity_x * 100) / 100.0f : 0.0f;
+    s["peak_velocity_y"] = (data->motor_state == 2) ? round(data->peak_velocity_y * 100) / 100.0f : 0.0f;
+    s["peak_velocity_z"] = (data->motor_state == 2) ? round(data->peak_velocity_z * 100) / 100.0f : 0.0f;
 
     s["temp"]  = round(data->temperature *  10) /  10.0f;
     s["rpm"]   = data->rpm;
@@ -6333,11 +6559,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
     // v15.1: CF ครบ 3 แกน + max
     s["crest_factor"]   = crestFactor;                           // = cf_max
-    // [v17.0a] Motor State → metadata: always reported real (was gated to
-    // MOTOR_RUNNING in v16.5 -- see architecture review).
-    s["cf_x"]           = round(data->cf_x * 100) / 100.0f;
-    s["cf_y"]           = round(data->cf_y * 100) / 100.0f;
-    s["cf_z"]           = round(data->cf_z * 100) / 100.0f;
+    // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน crestFactor/rms/peak/kurtosis --
+    // ป้องกัน per-axis CF garbage ตอน STOPPED/STARTING/STOPPING
+    s["cf_x"]           = (data->motor_state == 2) ? round(data->cf_x * 100) / 100.0f : 0.0f;
+    s["cf_y"]           = (data->motor_state == 2) ? round(data->cf_y * 100) / 100.0f : 0.0f;
+    s["cf_z"]           = (data->motor_state == 2) ? round(data->cf_z * 100) / 100.0f : 0.0f;
 
     // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING (ส่ง 0 เมื่อไม่ใช่ RUNNING)
     s["kurtosis_x"]     = kx;
@@ -6493,11 +6719,11 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
     doc["health_score"]        = healthScore;
     // v15.1: CF และ Kurtosis ครบ 3 แกน + derived
     doc["crest_factor"]     = crestFactor;                           // = cf_max
-    // [v17.0a] Motor State → metadata: always reported real (was gated to
-    // MOTOR_RUNNING in v16.5 -- see architecture review).
-    doc["cf_x"]             = round(data->cf_x * 100) / 100.0f;
-    doc["cf_y"]             = round(data->cf_y * 100) / 100.0f;
-    doc["cf_z"]             = round(data->cf_z * 100) / 100.0f;
+    // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน crestFactor/rms/peak/kurtosis --
+    // ป้องกัน per-axis CF garbage ตอน STOPPED/STARTING/STOPPING
+    doc["cf_x"]             = (data->motor_state == 2) ? round(data->cf_x * 100) / 100.0f : 0.0f;
+    doc["cf_y"]             = (data->motor_state == 2) ? round(data->cf_y * 100) / 100.0f : 0.0f;
+    doc["cf_z"]             = (data->motor_state == 2) ? round(data->cf_z * 100) / 100.0f : 0.0f;
     // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING
     doc["kurtosis_x"]       = kx;
     doc["kurtosis_y"]       = ky;
@@ -6514,12 +6740,6 @@ bool publishTelemetry(VibrationData_t* data, MachineState_t state) {
 
     doc["rms_slope"]      = g_trendResult.rms_slope;
     doc["temp_slope"]     = g_trendResult.temp_slope;
-    // [v16.6d / Commit 2] Instantaneous current -- same data->current_a field already
-    // pushed into g_currentBuf[] (source of current_slope below) and gated by
-    // current_valid at the push site; held at its last-sampled value between the
-    // ~500ms CTR4A01 cadence ticks, same as current_slope/current_buf_count already are.
-    // No new measurement, no new gating -- exposes the existing value as-is.
-    doc["current_a"]      = roundf(data->current_a * 1000.0f) / 1000.0f;  // CTR4A01, amperes
     doc["current_slope"]  = g_trendResult.current_slope;  // [v16.6a] CTR4A01, A/s
     // [v16.6b] Remote diagnostics for current_slope=0 ambiguity -- if current_buf_count
     // stays 0 while current_read_errors keeps climbing, CTR4A01 Modbus reads are failing
@@ -6682,7 +6902,7 @@ void taskAnalytics(void* parameter) {
     {
       float latestRpm = 0.0f;
       if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(3)) == pdTRUE) {
-        latestRpm = g_vibData.rpm;
+        latestRpm = g_telemSnapshot.rpm;  // [v16.5.4] read the atomic snapshot
         xSemaphoreGive(mutexVibData);
       }
       g_slotDur1sMs = computeSlotDurMs(latestRpm);
@@ -6788,6 +7008,13 @@ void taskAnalytics(void* parameter) {
       uint8_t& sl_spikes   = (uint8_t&)g_sl_spikes;
       uint8_t& sl_n        = (uint8_t&)g_sl_n;
 
+      // snapshot motor_state ก่อน loop — ป้องกัน race condition
+      uint8_t snapMotorStateAnalytics = 0;
+      if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(2)) == pdTRUE) {
+          snapMotorStateAnalytics = g_telemSnapshot.motor_state;  // [v16.5.4] read the atomic snapshot
+          xSemaphoreGive(mutexVibData);
+      }
+
       for (uint16_t i = 0; i < newSamples; i++) {
         uint16_t idx = (lastHead + i) % TREND_BUF_SIZE;
         const TrendSample_t* s = &g_trendBuf[idx];
@@ -6798,10 +7025,9 @@ void taskAnalytics(void* parameter) {
 
         sl_sumRms   += rms;
         sl_sumSqRms += rms * rms;
-        // [v17.0c] Motor State → metadata: maxRms no longer gated on
-        // MOTOR_RUNNING (Processing Gate removed -- see architecture
-        // review, Analytics Buffer).
-        if (rms > sl_maxRms)
+        // v16.1: gate maxRms ด้วย MOTOR_RUNNING เท่านั้น
+        // STARTING/STOPPING มี transient spike สูงที่ไม่มีความหมาย mechanical
+        if (rms > sl_maxRms && snapMotorStateAnalytics == (uint8_t)MOTOR_RUNNING)
             sl_maxRms = rms;
         sl_sumTemp  += temp;
         if (temp > sl_maxTemp) sl_maxTemp = temp;
@@ -7073,19 +7299,20 @@ analytics_publish:
       t["spike_count"]  = g_trendResult.spike_count;
       t["trend_gap_s"]  = (uint32_t)g_lastResumeGapS;  // [v16.3ab] gap ครั้งล่าสุด (วินาที) — consumer รู้ว่า time-series ไม่ต่อเนื่องช่วงไหน
 
-      // v16.1 FIX: snapshot g_vibData ผ่าน mutex ก่อน access
+      // v16.1 FIX: snapshot ผ่าน mutex ก่อน access [v16.5.4: g_telemSnapshot, was g_vibData]
       // เพื่อป้องกัน race condition กับ taskStateMachine (Core 0)
       // ที่เป็นสาเหตุของ PANIC LoadProhibited EXCVADDR:0x00000009
+      uint8_t snapMotorState = 0;
       float   snapRpm        = 0.0f;
       if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(5)) == pdTRUE) {
-          snapRpm        = g_vibData.rpm;
+          snapMotorState = g_telemSnapshot.motor_state;  // [v16.5.4] read the atomic snapshot --
+          snapRpm        = g_telemSnapshot.rpm;          // motor_state + rpm now from the same cycle
           xSemaphoreGive(mutexVibData);
       }
-      // [v17.0b] Motor State → metadata: freq fields no longer suppressed by
-      // motor_state (Processing Gate removed -- see architecture review).
-      // RPM_FREQ_GATE floor is RPM-dependent math (kept).
+      // v16.0: suppress freq fields เมื่อ motor ไม่ใช่ RUNNING หรือ RPM < gate
       {
-        bool trendFreqGate = (snapRpm >= (float)RPM_FREQ_GATE);
+        bool trendFreqGate = (snapMotorState == (uint8_t)MOTOR_RUNNING &&
+                              snapRpm >= (float)RPM_FREQ_GATE);
         t["freq_alert"]   = trendFreqGate && g_trendResult.freq_alert;
         t["freq_drift_x"] = trendFreqGate ? g_trendResult.freq_drift_x : 0.0f;
         t["freq_drift_y"] = trendFreqGate ? g_trendResult.freq_drift_y : 0.0f;
@@ -7201,6 +7428,71 @@ void logResetReason() {
   }
 }
 
+// ============================================================================
+// [BUILD FINGERPRINT] Four separate, immutable-after-boot fields, each with
+// its own accessor, so future MQTT/REST diagnostics can reuse any individual
+// value directly -- without ever parsing BUILD_ID apart to get one piece
+// back out of it. BUILD_ID itself is a pure composition of these four (see
+// buildBuildId() below): it is built BY concatenating getFwVersion() /
+// getGitCommitHash() / getBuildDate() / getBuildTime(), never the other way
+// around, so BUILD_ID and the individual fields can never disagree with
+// each other.
+//
+// FW_VERSION / GIT_COMMIT_HASH are already single-literal #define constants
+// (see the top-of-file include block); g_buildDate/g_buildTime are the
+// runtime-normalized counterparts of __DATE__/__TIME__ (YYYYMMDD / HHMM),
+// computed ONCE by buildBuildId() (called from setup()) and never written
+// again afterward.
+//
+// Format:  <FW_VERSION>-<GIT_COMMIT_HASH>-<BUILD_DATE>-<BUILD_TIME>
+// Example: 16.5.4-8208b95-20260723-1342
+// Example (dirty tree):   16.5.4-8208b95-dirty-20260723-1342
+// Example (no git info):  16.5.4-UNKNOWN-20260723-1342
+//
+// GIT_COMMIT_HASH is never fabricated -- see build_info.h / generate_build_info.ps1.
+// ============================================================================
+static char g_buildDate[9]  = {0};  // "YYYYMMDD" + NUL
+static char g_buildTime[5]  = {0};  // "HHMM" + NUL
+static char g_buildId[56]   = {0};  // composition of the four fields below
+
+static const char* getFwVersion()     { return FW_VERSION; }
+static const char* getGitCommitHash() { return GIT_COMMIT_HASH; }
+static const char* getBuildDate()     { return g_buildDate; }
+static const char* getBuildTime()     { return g_buildTime; }
+
+// [BUILD FINGERPRINT] Accessor for future MQTT/diagnostic use -- read-only,
+// zero cost (returns the buffer computed once at boot).
+static const char* getBuildId() {
+  return g_buildId;
+}
+
+static void buildBuildId() {
+  // __DATE__ format: "Mmm dd yyyy" (day may be space-padded, e.g. "Jul  5 2026")
+  // __TIME__ format: "hh:mm:ss"
+  static const char* months[] = { "Jan","Feb","Mar","Apr","May","Jun",
+                                   "Jul","Aug","Sep","Oct","Nov","Dec" };
+  char monStr[4] = {0};
+  int  day = 0, year = 0;
+  sscanf(__DATE__, "%3s %d %d", monStr, &day, &year);
+  int mon = 1;
+  for (int i = 0; i < 12; i++) {
+    if (strncmp(monStr, months[i], 3) == 0) { mon = i + 1; break; }
+  }
+  int hh = 0, mm = 0, ss = 0;
+  sscanf(__TIME__, "%d:%d:%d", &hh, &mm, &ss);
+
+  // Populate the two normalized fields FIRST -- these are the immutable
+  // source data BUILD_ID is composed from below, not a byproduct of it.
+  snprintf(g_buildDate, sizeof(g_buildDate), "%04d%02d%02d", year, mon, day);
+  snprintf(g_buildTime, sizeof(g_buildTime), "%02d%02d", hh, mm);
+
+  // BUILD_ID: pure composition of the four fields via their own getters --
+  // cannot diverge from them, since it is built directly from the same
+  // values a future caller would get by calling those getters itself.
+  snprintf(g_buildId, sizeof(g_buildId), "%s-%s-%s-%s",
+           getFwVersion(), getGitCommitHash(), getBuildDate(), getBuildTime());
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -7246,9 +7538,35 @@ void setup() {
 
   Serial.println("\n\n");
   Serial.println("+========================================================+");
-  Serial.println("|  ESP32-S3 VIBRATION MONITOR v16.5 (Phase 5 Fusion AI)  |");
+  // [BUILD FINGERPRINT] Version number removed from this line -- FW_VERSION
+  // is now the ONLY firmware-version string literal in the file (see the
+  // banner printed a few lines below, and BUILD_FINGERPRINT.md).
+  Serial.println("|  ESP32-S3 VIBRATION MONITOR (DIAG)                     |");
   Serial.println("|        LilyGO T-Vending S3 + SIMCom A7670             |");
   Serial.println("+========================================================+\n");
+
+  // ==========================================================================
+  // [BUILD FINGERPRINT] Printed once, here, at boot -- zero runtime cost
+  // afterward. buildBuildId() runs exactly once; g_buildId is then held for
+  // the rest of runtime as the single source of truth (see getBuildId()).
+  // Does not replace or alter the banner above -- purely additive.
+  // ==========================================================================
+  buildBuildId();
+  {
+    const char* motorSrcStr =
+      (g_motorStateSource == MOTOR_SRC_CURRENT)   ? "MOTOR_SRC_CURRENT"   :
+      (g_motorStateSource == MOTOR_SRC_PROXIMITY) ? "MOTOR_SRC_PROXIMITY" :
+                                                      "MOTOR_SRC_RPM";
+    Serial.println("================================================");
+    Serial.println("PROMLOGIX PDM IIOT");
+    Serial.printf ("Firmware      : v%s\n", getFwVersion());
+    Serial.printf ("Git Commit    : %s\n", getGitCommitHash());
+    Serial.printf ("Build Date    : %s\n", __DATE__);   // human-readable form; getBuildDate() holds the normalized YYYYMMDD form BUILD_ID is composed from
+    Serial.printf ("Build Time    : %s\n", __TIME__);   // human-readable form; getBuildTime() holds the normalized HHMM form BUILD_ID is composed from
+    Serial.printf ("Motor Source  : %s\n", motorSrcStr);
+    Serial.println("================================================");
+    Serial.printf ("BUILD_ID: %s\n\n", getBuildId());
+  }
 
   // Print CPU info
   Serial.printf("CPU Frequency: %d MHz\n", ESP.getCpuFreqMHz());
@@ -7640,18 +7958,17 @@ void loop() {
     Serial.println("+========================================================+");
 
     // Get current data
-    VibrationData_t localVib;
-    MachineState_t localState;
-
+    // [v16.5.4] Improvement 2: one atomic snapshot copy (ONE mutex take)
+    // replaces the previous g_vibData + g_systemState pair -- the reported
+    // state and measurements now belong to the same cycle. Log format below
+    // is unchanged.
+    TelemetrySnapshot localSnap = {};
     if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(10)) == pdTRUE) {
-      memcpy(&localVib, &g_vibData, sizeof(VibrationData_t));
+      memcpy(&localSnap, &g_telemSnapshot, sizeof(TelemetrySnapshot));
       xSemaphoreGive(mutexVibData);
     }
-
-    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(10)) == pdTRUE) {
-      localState = g_systemState.state;
-      xSemaphoreGive(mutexSystemState);
-    }
+    const VibrationData_t& localVib   = localSnap.vib;
+    const MachineState_t   localState = localSnap.alarm_level;
 
     Serial.printf("| Machine: %-45s |\n", MACHINE_NAME);
 
