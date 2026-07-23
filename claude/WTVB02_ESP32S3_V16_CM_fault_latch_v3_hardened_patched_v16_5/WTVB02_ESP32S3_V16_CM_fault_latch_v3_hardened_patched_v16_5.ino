@@ -132,7 +132,7 @@
 #define GIT_COMMIT_HASH "UNKNOWN"   // build_info.h missing/didn't define it -- never fabricate a hash
 #endif
 
-#define FW_VERSION "16.5.4"   // single source of truth for the firmware version string
+#define FW_VERSION "16.5"   // single source of truth for the firmware version string
 
 // ============================================================================
 // VERIFICATION INSTRUMENTATION (Checkpoint 1 -- disabled by default)
@@ -7445,9 +7445,9 @@ void logResetReason() {
 // again afterward.
 //
 // Format:  <FW_VERSION>-<GIT_COMMIT_HASH>-<BUILD_DATE>-<BUILD_TIME>
-// Example: 16.5.4-8208b95-20260723-1342
-// Example (dirty tree):   16.5.4-8208b95-dirty-20260723-1342
-// Example (no git info):  16.5.4-UNKNOWN-20260723-1342
+// Example: 16.5-8208b95-20260723-1342
+// Example (dirty tree):   16.5-8208b95-dirty-20260723-1342
+// Example (no git info):  16.5-UNKNOWN-20260723-1342
 //
 // GIT_COMMIT_HASH is never fabricated -- see build_info.h / generate_build_info.ps1.
 // ============================================================================
@@ -7541,7 +7541,7 @@ void setup() {
   // [BUILD FINGERPRINT] Version number removed from this line -- FW_VERSION
   // is now the ONLY firmware-version string literal in the file (see the
   // banner printed a few lines below, and BUILD_FINGERPRINT.md).
-  Serial.println("|  ESP32-S3 VIBRATION MONITOR (DIAG)                     |");
+  Serial.println("|  ESP32-S3 VIBRATION MONITOR (Phase 5 Fusion AI)        |");
   Serial.println("|        LilyGO T-Vending S3 + SIMCom A7670             |");
   Serial.println("+========================================================+\n");
 
