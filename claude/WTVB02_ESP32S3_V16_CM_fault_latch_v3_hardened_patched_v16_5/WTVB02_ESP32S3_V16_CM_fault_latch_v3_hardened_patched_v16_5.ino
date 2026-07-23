@@ -89,6 +89,20 @@
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
 
 // ============================================================================
+// [BUILD FINGERPRINT] Firmware identity -- printed once at boot in setup(),
+// zero runtime cost afterward. See BUILD_FINGERPRINT.md for the full design
+// and the companion generate_build_info.ps1 script that refreshes
+// GIT_COMMIT_HASH before each compile.
+// ============================================================================
+#include "build_info.h"   // provides GIT_COMMIT_HASH; safe default "UNKNOWN" if never regenerated
+
+#ifndef GIT_COMMIT_HASH
+#define GIT_COMMIT_HASH "UNKNOWN"   // build_info.h missing/didn't define it -- never fabricate a hash
+#endif
+
+#define FW_VERSION "16.5"   // single source of truth for the firmware version string
+
+// ============================================================================
 // VERIFICATION INSTRUMENTATION (Checkpoint 1 -- disabled by default)
 // ============================================================================
 // [VERIFY_TEST] RAM-only causal-proof capture for poll_seq / deglitch forensics.
@@ -7201,6 +7215,71 @@ void logResetReason() {
   }
 }
 
+// ============================================================================
+// [BUILD FINGERPRINT] Four separate, immutable-after-boot fields, each with
+// its own accessor, so future MQTT/REST diagnostics can reuse any individual
+// value directly -- without ever parsing BUILD_ID apart to get one piece
+// back out of it. BUILD_ID itself is a pure composition of these four (see
+// buildBuildId() below): it is built BY concatenating getFwVersion() /
+// getGitCommitHash() / getBuildDate() / getBuildTime(), never the other way
+// around, so BUILD_ID and the individual fields can never disagree with
+// each other.
+//
+// FW_VERSION / GIT_COMMIT_HASH are already single-literal #define constants
+// (see the top-of-file include block); g_buildDate/g_buildTime are the
+// runtime-normalized counterparts of __DATE__/__TIME__ (YYYYMMDD / HHMM),
+// computed ONCE by buildBuildId() (called from setup()) and never written
+// again afterward.
+//
+// Format:  <FW_VERSION>-<GIT_COMMIT_HASH>-<BUILD_DATE>-<BUILD_TIME>
+// Example: 16.5-8208b95-20260723-1342
+// Example (dirty tree):   16.5-8208b95-dirty-20260723-1342
+// Example (no git info):  16.5-UNKNOWN-20260723-1342
+//
+// GIT_COMMIT_HASH is never fabricated -- see build_info.h / generate_build_info.ps1.
+// ============================================================================
+static char g_buildDate[9]  = {0};  // "YYYYMMDD" + NUL
+static char g_buildTime[5]  = {0};  // "HHMM" + NUL
+static char g_buildId[56]   = {0};  // composition of the four fields below
+
+static const char* getFwVersion()     { return FW_VERSION; }
+static const char* getGitCommitHash() { return GIT_COMMIT_HASH; }
+static const char* getBuildDate()     { return g_buildDate; }
+static const char* getBuildTime()     { return g_buildTime; }
+
+// [BUILD FINGERPRINT] Accessor for future MQTT/diagnostic use -- read-only,
+// zero cost (returns the buffer computed once at boot).
+static const char* getBuildId() {
+  return g_buildId;
+}
+
+static void buildBuildId() {
+  // __DATE__ format: "Mmm dd yyyy" (day may be space-padded, e.g. "Jul  5 2026")
+  // __TIME__ format: "hh:mm:ss"
+  static const char* months[] = { "Jan","Feb","Mar","Apr","May","Jun",
+                                   "Jul","Aug","Sep","Oct","Nov","Dec" };
+  char monStr[4] = {0};
+  int  day = 0, year = 0;
+  sscanf(__DATE__, "%3s %d %d", monStr, &day, &year);
+  int mon = 1;
+  for (int i = 0; i < 12; i++) {
+    if (strncmp(monStr, months[i], 3) == 0) { mon = i + 1; break; }
+  }
+  int hh = 0, mm = 0, ss = 0;
+  sscanf(__TIME__, "%d:%d:%d", &hh, &mm, &ss);
+
+  // Populate the two normalized fields FIRST -- these are the immutable
+  // source data BUILD_ID is composed from below, not a byproduct of it.
+  snprintf(g_buildDate, sizeof(g_buildDate), "%04d%02d%02d", year, mon, day);
+  snprintf(g_buildTime, sizeof(g_buildTime), "%02d%02d", hh, mm);
+
+  // BUILD_ID: pure composition of the four fields via their own getters --
+  // cannot diverge from them, since it is built directly from the same
+  // values a future caller would get by calling those getters itself.
+  snprintf(g_buildId, sizeof(g_buildId), "%s-%s-%s-%s",
+           getFwVersion(), getGitCommitHash(), getBuildDate(), getBuildTime());
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -7246,9 +7325,35 @@ void setup() {
 
   Serial.println("\n\n");
   Serial.println("+========================================================+");
-  Serial.println("|  ESP32-S3 VIBRATION MONITOR v16.5 (Phase 5 Fusion AI)  |");
+  // [BUILD FINGERPRINT] Version number removed from this line -- FW_VERSION
+  // is now the ONLY firmware-version string literal in the file (see the
+  // banner printed a few lines below, and BUILD_FINGERPRINT.md).
+  Serial.println("|  ESP32-S3 VIBRATION MONITOR (Phase 5 Fusion AI)        |");
   Serial.println("|        LilyGO T-Vending S3 + SIMCom A7670             |");
   Serial.println("+========================================================+\n");
+
+  // ==========================================================================
+  // [BUILD FINGERPRINT] Printed once, here, at boot -- zero runtime cost
+  // afterward. buildBuildId() runs exactly once; g_buildId is then held for
+  // the rest of runtime as the single source of truth (see getBuildId()).
+  // Does not replace or alter the banner above -- purely additive.
+  // ==========================================================================
+  buildBuildId();
+  {
+    const char* motorSrcStr =
+      (g_motorStateSource == MOTOR_SRC_CURRENT)   ? "MOTOR_SRC_CURRENT"   :
+      (g_motorStateSource == MOTOR_SRC_PROXIMITY) ? "MOTOR_SRC_PROXIMITY" :
+                                                      "MOTOR_SRC_RPM";
+    Serial.println("================================================");
+    Serial.println("PROMLOGIX PDM IIOT");
+    Serial.printf ("Firmware      : v%s\n", getFwVersion());
+    Serial.printf ("Git Commit    : %s\n", getGitCommitHash());
+    Serial.printf ("Build Date    : %s\n", __DATE__);   // human-readable form; getBuildDate() holds the normalized YYYYMMDD form BUILD_ID is composed from
+    Serial.printf ("Build Time    : %s\n", __TIME__);   // human-readable form; getBuildTime() holds the normalized HHMM form BUILD_ID is composed from
+    Serial.printf ("Motor Source  : %s\n", motorSrcStr);
+    Serial.println("================================================");
+    Serial.printf ("BUILD_ID: %s\n\n", getBuildId());
+  }
 
   // Print CPU info
   Serial.printf("CPU Frequency: %d MHz\n", ESP.getCpuFreqMHz());
