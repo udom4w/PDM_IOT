@@ -2190,6 +2190,7 @@ static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
 // in the translation unit at all. Define via -DTEST_CURRENT_SOURCE to select
 // MOTOR_SRC_CURRENT for bench testing. No runtime branch either way -- the
 // preprocessor resolves this before compilation.
+#define TEST_CURRENT_SOURCE   // โหมดกรแส
 #ifdef TEST_CURRENT_SOURCE
 static MotorStateSource g_motorStateSource  = MOTOR_SRC_CURRENT;
 #else
