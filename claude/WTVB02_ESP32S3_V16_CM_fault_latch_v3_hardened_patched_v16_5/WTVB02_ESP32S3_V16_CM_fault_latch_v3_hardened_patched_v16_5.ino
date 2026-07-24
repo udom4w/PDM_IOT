@@ -120,6 +120,76 @@
 #include <RTClib.h>
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
 
+///////////////////////////////////////////////////////////////////////////////
+// COMMISSIONING CONFIGURATION
+// Site-specific parameters.
+// These are expected to change during installation and commissioning.
+///////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////
+// Site Identity
+///////////////////////////////////////////////////////////////////////////////
+#define PLANT_ID "plant01"   // Plant / Site identity
+#define MACHINE_ID "pump01"  // Machine identity (tag-level)
+#define SENSOR_ID "vb01"     // Sensor identity
+
+///////////////////////////////////////////////////////////////////////////////
+// Motor Configuration
+///////////////////////////////////////////////////////////////////////////////
+#define NAMEPLATE_RPM 1800   // Motor nameplate RPM (used as RATED_RPM reference)
+
+// Consumed ENTIRELY inside buildMotorStateEvidence()'s MOTOR_SRC_CURRENT
+// branch; updateMotorStateMachine() never sees any of these values.
+// No real site values known yet -- placeholders until commissioning data
+// (motor nameplate FLA, installed CT ratio/turns) is available.
+//
+// [P2] MOTOR_NAMEPLATE_CURRENT_A is a COMMISSIONING PARAMETER, not a
+// validated engineering value. 2.0f is the pre-existing placeholder carried
+// forward unchanged -- it must be replaced with this specific motor's real
+// nameplate Full-Load Amps before MOTOR_SRC_CURRENT is trusted beyond bench
+// testing. CURRENT_ON_THRESHOLD_A / CURRENT_OFF_THRESHOLD_A are derived from
+// it, so commissioning this one constant recalibrates both automatically.
+constexpr float MOTOR_NAMEPLATE_CURRENT_A = 2.0f;   // [A] nameplate FLA -- PLACEHOLDER, commission before use
+
+// [P2] Hysteresis pair on the EMA-filtered engineering current (s_currentFiltered
+// in buildMotorStateEvidence()'s MOTOR_SRC_CURRENT branch): signalPresent
+// latches true at/above ON and stays true until current drops below OFF --
+// the 8-point-of-FLA gap is the dead band that stops a single threshold from
+// chattering the state machine near one static value.
+constexpr float CURRENT_ON_THRESHOLD_A  = MOTOR_NAMEPLATE_CURRENT_A * 0.20f;   // [A] 20% FLA -- signal "on"
+constexpr float CURRENT_OFF_THRESHOLD_A = MOTOR_NAMEPLATE_CURRENT_A * 0.12f;   // [A] 12% FLA -- signal "off"
+
+// [P2] Source-specific STOPPING/STOPPED absence timing for MOTOR_SRC_CURRENT,
+// carried into updateMotorStateMachine() via MotorStateEvidence.absentStoppingMs/
+// absentStoppedMs (see buildMotorStateEvidence()). Deliberately separate from
+// ABSENT_STOPPING_MS/ABSENT_STOPPED_MS below, which remain RPM's values.
+constexpr uint32_t NO_CURRENT_STOPPING_MS   = 1500;   // [ms] continuous below-OFF before RUNNING->STOPPING
+constexpr uint32_t FORCE_CURRENT_STOPPED_MS = 5000;   // [ms] continuous below-OFF before STOPPING->STOPPED
+
+///////////////////////////////////////////////////////////////////////////////
+// Current Sensor Configuration
+///////////////////////////////////////////////////////////////////////////////
+#define CT_RATIO_PRIMARY_A          1.0f    // [A] external CT ratio primary -- 1:1 if no external CT
+#define CT_RATIO_SECONDARY_A        1.0f    // [A] external CT ratio secondary
+#define CT_TURNS                    2       // [turns] times the conductor loops through the CT clamp
+
+///////////////////////////////////////////////////////////////////////////////
+// Debug / Test Configuration
+///////////////////////////////////////////////////////////////////////////////
+// [Commit 4B] TEST_CURRENT_SOURCE -- bench-test-only build flag. Undefined
+// by default: production builds are unaffected, this branch does not exist
+// in the translation unit at all. Define via -DTEST_CURRENT_SOURCE to select
+// MOTOR_SRC_CURRENT for bench testing. No runtime branch either way -- the
+// preprocessor resolves this before compilation.
+#define TEST_CURRENT_SOURCE   // โหมดกระแส
+
+// [v16.6f] Diagnostic-only, bench-test build flag -- proves empirically
+// whether CTR4A01's raw reading is already True Line Current, before any
+// Phase-2 compensation is implemented. Prints once/second, gated entirely by
+// this #ifdef -- zero cost and no behavior change when undefined. Undefine
+// for production builds.
+#define DEBUG_CURRENT_PATH 
+
 // ============================================================================
 // [BUILD FINGERPRINT] Firmware identity -- printed once at boot in setup(),
 // zero runtime cost afterward. See BUILD_FINGERPRINT.md for the full design
@@ -227,13 +297,6 @@ static constexpr const char* APN = "internet";
 
 static constexpr const char* GPRS_USER = "";
 static constexpr const char* GPRS_PASS = "";
-
-// --- Identity Configuration (Phase 1) ---
-// *** ??? 4 ???????????????? -- ?????????????????? ***
-#define PLANT_ID "plant01"   // Plant / Site identity
-#define MACHINE_ID "pump01"  // Machine identity (tag-level)
-#define SENSOR_ID "vb01"     // Sensor identity
-#define NAMEPLATE_RPM 1800   // Motor nameplate RPM (used as RATED_RPM reference)
 
 // --- Proximity / RPM Sensor Configuration ---
 #define PIN_RPM               17      // Proximity sensor pulse input (PC817 or NPN)
@@ -1220,6 +1283,13 @@ enum MotorStateSource {
 struct MotorStateEvidence {
   bool     signalPresent;
   uint32_t ageMs;
+  // [P2] Source-specific STOPPING/STOPPED absence thresholds. Each branch of
+  // buildMotorStateEvidence() fills these with its own values -- RPM/PROXIMITY
+  // set them to ABSENT_STOPPING_MS/ABSENT_STOPPED_MS (unchanged), CURRENT sets
+  // them to NO_CURRENT_STOPPING_MS/FORCE_CURRENT_STOPPED_MS. Keeps
+  // updateMotorStateMachine() unaware of which source produced the evidence.
+  uint32_t absentStoppingMs;
+  uint32_t absentStoppedMs;
 };
 
 // [v16.5.4] Improvement 3: explicit freshness for the RPM EMA evidence.
@@ -1719,16 +1789,6 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 #define CURRENT_SAMPLE_INTERVAL_S  0.5f    // same, in seconds (for linRegSlope())
 #define TEMP_SLOPE_WARN     0.001f   //  degC per sample -> temp rising (0.004 degC/s)
 
-// --- Current-based Motor State evidence [Commit 3] -- Layer 1 config -----
-// Consumed ENTIRELY inside buildMotorStateEvidence()'s MOTOR_SRC_CURRENT
-// branch; updateMotorStateMachine() never sees any of these values.
-// No real site values known yet -- placeholders until commissioning data
-// (motor nameplate FLA, installed CT ratio/turns) is available.
-#define MOTOR_NAMEPLATE_CURRENT_A   1.0f    // motor Full-Load Amps (nameplate) -- placeholder
-#define CT_RATIO_PRIMARY_A          1.0f    // external CT ratio primary (A) -- 1:1 if no external CT
-#define CT_RATIO_SECONDARY_A        1.0f    // external CT ratio secondary (A)
-#define CT_TURNS                    1       // times the conductor loops through the CT clamp
-#define MOTOR_RUNNING_PERCENT       20.0f   // % of expected full-load reading -- single stateless threshold
 // [Commit 4A] EMA smoothing for the Current evidence path -- CTR4A01's raw
 // Modbus reading has zero existing filtering (single instantaneous sample
 // every 500ms). Alpha matches RPM_SMOOTH_ALPHA (0.25) deliberately, for two
@@ -2185,12 +2245,8 @@ static MotorRunState_t g_motorRunState      = MOTOR_STOPPED;
 // [vNext] Motor State evidence source -- runtime-mutable (not #define) so a
 // future Preferences/NVS-backed config can change it without touching this
 // API again. Default RPM preserves current behavior exactly.
-// [Commit 4B] TEST_CURRENT_SOURCE -- bench-test-only build flag. Undefined
-// by default: production builds are unaffected, this branch does not exist
-// in the translation unit at all. Define via -DTEST_CURRENT_SOURCE to select
-// MOTOR_SRC_CURRENT for bench testing. No runtime branch either way -- the
-// preprocessor resolves this before compilation.
-#define TEST_CURRENT_SOURCE   // โหมดกรแส
+// TEST_CURRENT_SOURCE is now defined in the COMMISSIONING CONFIGURATION
+// section near the top of the file (Debug / Test Configuration).
 #ifdef TEST_CURRENT_SOURCE
 static MotorStateSource g_motorStateSource  = MOTOR_SRC_CURRENT;
 #else
@@ -2847,6 +2903,22 @@ static float getCurrentRuntimeHour() {
   return g_runtimeHour;
 }
 
+// [v16.6g] Phase-2: Measurement Layer's sole calibration function. Bench
+// diagnostics (CURRENT_DIAG, previous phase) confirmed CTR4A01's raw reading
+// scales with CT_TURNS -- i.e. rawCurrentA is NOT engineering current -- so
+// this is no longer an identity passthrough. Called exactly once, inside
+// readCTR4A01Current() immediately after the raw mA->A conversion; every
+// other consumer in the firmware (EMA, motor-state threshold, MQTT current
+// field, trend buffer, analytics slope) reads the result of this call
+// (current_a) and never references CT_TURNS/CT_RATIO_PRIMARY_A/
+// CT_RATIO_SECONDARY_A directly.
+static float compensateCurrent(float rawCurrentA)
+{
+    return rawCurrentA *
+           (CT_RATIO_PRIMARY_A / CT_RATIO_SECONDARY_A)
+           / CT_TURNS;
+}
+
 // [Commit 3/4A] Builds the semantic evidence updateMotorStateMachine() will
 // act on, based on g_motorStateSource. Each branch translates its own raw
 // measurement into {signalPresent, ageMs} only -- no raw values, thresholds,
@@ -2859,25 +2931,69 @@ static float getCurrentRuntimeHour() {
 // elsewhere, still never touching the frozen MotorStateEvidence shape.
 // PROXIMITY is not implemented yet -- placeholder mirrors RPM for now.
 static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, float currentA) {
-  MotorStateEvidence ev;
+  MotorStateEvidence ev{};   // [P2] value-initialize -- new fields can never be left
+                             // uninitialized if a future source forgets to set them
   switch (g_motorStateSource) {
     case MOTOR_SRC_CURRENT: {
-      // Layer 1 config consumed entirely here. static const -> computed once
-      // (first call), not re-derived every cycle.
-      static const float kExpectedFullLoadA = MOTOR_NAMEPLATE_CURRENT_A * CT_TURNS *
-                                               (CT_RATIO_SECONDARY_A / CT_RATIO_PRIMARY_A);
-      static const float kThresholdA = kExpectedFullLoadA * (MOTOR_RUNNING_PERCENT / 100.0f);
+      // [v16.6g] Phase-2: currentA arrives already compensated -- readCTR4A01Current()
+      // is now the single call site for compensateCurrent(), so Business
+      // Logic here never touches CT_TURNS/CT_RATIO_PRIMARY_A/CT_RATIO_SECONDARY_A.
+      // This is just a clarity alias, not a second compensation step.
+      float engineeringCurrentA = currentA;
 
       // [Commit 4A] EMA filter -- see CURRENT_EMA_ALPHA for full justification.
       // Function-local static: persists across calls, confined entirely to
       // this branch -- not a global, not visible outside buildMotorStateEvidence().
       static float s_currentFiltered = 0.0f;
-      s_currentFiltered = CURRENT_EMA_ALPHA * currentA + (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
+      s_currentFiltered =
+          CURRENT_EMA_ALPHA * engineeringCurrentA +
+          (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
 
-      // Single threshold on the FILTERED value -- no hysteresis, no latch,
-      // per Commit 4A scope.
-      ev.signalPresent = (s_currentFiltered >= kThresholdA);
-      ev.ageMs = millis() - g_lastCurrentSampleMs;
+      // [P2] Hysteresis latch (Schmitt trigger) on the filtered value --
+      // replaces the old single stateless threshold entirely. Latches true
+      // at/above CURRENT_ON_THRESHOLD_A, stays true until dropping below
+      // CURRENT_OFF_THRESHOLD_A. Function-local static, same confinement
+      // rule as s_currentFiltered above.
+      static bool s_currentLatched = false;
+      if (!s_currentLatched && s_currentFiltered >= CURRENT_ON_THRESHOLD_A) {
+        s_currentLatched = true;
+      } else if (s_currentLatched && s_currentFiltered < CURRENT_OFF_THRESHOLD_A) {
+        s_currentLatched = false;
+      }
+      ev.signalPresent    = s_currentLatched;
+      ev.ageMs            = millis() - g_lastCurrentSampleMs;
+      ev.absentStoppingMs = NO_CURRENT_STOPPING_MS;
+      ev.absentStoppedMs  = FORCE_CURRENT_STOPPED_MS;
+
+#ifdef DEBUG_CURRENT_PATH
+      // [v16.6g] Diagnostic-only, 1 Hz -- decision-layer half of
+      // [CURRENT_DIAG] (measurement-layer half is in readCTR4A01Current()).
+      {
+        static uint32_t s_lastDiagMs = 0;
+        uint32_t nowMs = millis();
+        if (nowMs - s_lastDiagMs >= 1000) {
+          s_lastDiagMs = nowMs;
+          Serial.println("[CURRENT_DIAG]");
+          // [P2] "threshold=" is kept, unchanged name, as the single source of
+          // truth for the ON value -- it is an ALIAS of CURRENT_ON_THRESHOLD_A,
+          // not a distinct measurement. The ON value is intentionally NOT
+          // repeated below under a second key, to avoid two fields claiming
+          // the same value with different names.
+          Serial.printf("engineeringA=%.3f\n", engineeringCurrentA);
+          Serial.printf("threshold=%.3f\n",    CURRENT_ON_THRESHOLD_A);
+          Serial.printf("signalPresent=%d\n",  (int)ev.signalPresent);
+          // [P2] Structured fields -- the OFF threshold is new information (no
+          // prior field carried it); the ON value is deliberately not repeated
+          // here since "threshold=" above already is that value.
+          Serial.printf("raw_current=%.3f\n",           engineeringCurrentA);
+          Serial.printf("ema_current=%.3f\n",           s_currentFiltered);
+          Serial.printf("signal_present=%d\n",          (int)ev.signalPresent);
+          Serial.printf("current_threshold_off=%.3f\n", CURRENT_OFF_THRESHOLD_A);
+          Serial.printf("motor_state=%d\n",              (int)g_motorRunState);
+          Serial.println("source=current");
+        }
+      }
+#endif
       break;
     }
     case MOTOR_SRC_PROXIMITY:
@@ -2887,6 +3003,8 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
                          (g_rpmEvidence.rpm >= (RATED_RPM - RATED_RPM_TOL)) &&
                          (g_rpmEvidence.rpm <= (RATED_RPM + RATED_RPM_TOL));
       ev.ageMs = timeSincePulseMs;
+      ev.absentStoppingMs = ABSENT_STOPPING_MS;
+      ev.absentStoppedMs  = ABSENT_STOPPED_MS;
       break;
     case MOTOR_SRC_RPM:
     default:
@@ -2901,6 +3019,8 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
                          (g_rpmEvidence.rpm >= (RATED_RPM - RATED_RPM_TOL)) &&
                          (g_rpmEvidence.rpm <= (RATED_RPM + RATED_RPM_TOL));
       ev.ageMs = timeSincePulseMs;
+      ev.absentStoppingMs = ABSENT_STOPPING_MS;   // [P2] unchanged RPM value
+      ev.absentStoppedMs  = ABSENT_STOPPED_MS;    // [P2] unchanged RPM value
       break;
   }
   return ev;
@@ -2954,7 +3074,7 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
   // [MOTOR-TRANSITION] prints below can report old/new. Read-only.
   MotorRunState_t diagOldState = g_motorRunState;
 
-  if (evidence.ageMs > FORCE_STOP_TIMEOUT_MS || absentMs > ABSENT_STOPPED_MS) {
+  if (evidence.ageMs > FORCE_STOP_TIMEOUT_MS || absentMs > evidence.absentStoppedMs) {
     if (diagOldState != MOTOR_STOPPED) {
       Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
                     "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
@@ -2967,7 +3087,7 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
     }
     g_motorRunState  = MOTOR_STOPPED;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else if (evidence.ageMs > NO_PULSE_STOPPING_MS || absentMs > ABSENT_STOPPING_MS) {
+  } else if (evidence.ageMs > NO_PULSE_STOPPING_MS || absentMs > evidence.absentStoppingMs) {
     if (diagOldState != MOTOR_STOPPING) {
       Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
                     "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
@@ -4035,8 +4155,40 @@ static bool readCTR4A01Current(float &amps) {
   modbus.begin(MODBUS_SLAVE_ID, SerialRS485);  // restore WTVB02 addressing
   vTaskDelay(pdMS_TO_TICKS(5));
   if (ok) {
-    amps = currentMa / 1000.0f;
+    // [v16.6g] Phase-2: Measurement Layer owns calibration. rawCurrentA is
+    // the CTR4A01's raw reading, converted to amps only (no CT compensation
+    // yet) -- it exists solely in this scope and in the diagnostic block
+    // below; nothing past this function ever sees it again.
+    // compensateCurrent() applies the real CT_TURNS/CT_RATIO_* conversion --
+    // its result, engineeringCurrentA, is what gets stored into current_a,
+    // so every downstream consumer (EMA, motor-state threshold, MQTT current
+    // field, trend buffer, analytics slope) receives engineering current
+    // without ever referencing CT_TURNS/CT_RATIO_* itself.
+    float rawCurrentA        = currentMa / 1000.0f;
+    float engineeringCurrentA = compensateCurrent(rawCurrentA);
+    amps = engineeringCurrentA;
     g_lastCurrentSampleMs = millis();  // [Commit 3] only updated on success -- drives evidence ageMs
+
+#ifdef DEBUG_CURRENT_PATH
+    // [v16.6g] Diagnostic-only, 1 Hz -- Measurement Layer half of
+    // [CURRENT_DIAG]. rawCurrentA/CT_TURNS/CT_RATIO_*/scale are meaningful
+    // only here, at the acquisition boundary; the decision-layer half
+    // (engineeringA/threshold/signalPresent) is printed separately from
+    // buildMotorStateEvidence(), which never references CT_TURNS/CT_RATIO_*.
+    static uint32_t s_lastMeasDiagMs = 0;
+    uint32_t nowMeasMs = millis();
+    if (nowMeasMs - s_lastMeasDiagMs >= 1000) {
+      s_lastMeasDiagMs = nowMeasMs;
+      float scale = (rawCurrentA != 0.0f) ? (engineeringCurrentA / rawCurrentA) : 0.0f;
+      Serial.println("[CURRENT_DIAG]");
+      Serial.printf("rawA=%.3f\n",              rawCurrentA);
+      Serial.printf("engineeringA=%.3f\n",       engineeringCurrentA);
+      Serial.printf("ctTurns=%d\n",              (int)CT_TURNS);
+      Serial.printf("ctRatioPrimaryA=%.3f\n",    (float)CT_RATIO_PRIMARY_A);
+      Serial.printf("ctRatioSecondaryA=%.3f\n",  (float)CT_RATIO_SECONDARY_A);
+      Serial.printf("scale=%.3f\n",              scale);
+    }
+#endif
   }
   else    g_ctReadErrors++;  // [v16.6b] remote-visible failure counter -- see /vibration current_read_errors
   return ok;
