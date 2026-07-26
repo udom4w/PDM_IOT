@@ -204,3 +204,32 @@ Lesson: the same "raw vs. gated variable" mistake can hide in debug
 prints, not just export paths. When verifying a gate policy fix,
 check Serial/console prints too, not only the JSON payload builders.
 
+---
+
+## RPM Debounce Investigation (v16.5.5) — CLOSED
+
+Status: CLOSED (temporary). Baseline frozen. Do not modify the RPM
+subsystem unless new evidence or a reproducible issue surfaces.
+
+Fix:
+
+    RPM_DEBOUNCE_US = RPM_MIN_INTERVAL_US   (was RPM_MIN_INTERVAL_US / 2)
+
+Rationale: sub-20 ms bounce edges on the RPM pulse input were able to
+corrupt the next accepted interval when the debounce window was only
+half of RPM_MIN_INTERVAL_US.
+
+Verification:
+
+- Clean build passes, firmware flashes, boot sequence normal.
+- No compile or runtime regressions observed.
+- Current-based Motor State Machine stable.
+- RPM ISR, EMA, and MQTT telemetry functioning correctly.
+- Long-run logs show stable RPM (~1775 RPM) with no pulse loss or
+  abnormal spikes during steady-state operation.
+
+Committed as `424657a` — RPM debounce change only, committed alone.
+An unrelated in-progress `CT_TURNS` calibration edit (2 → 1) in the
+same file was intentionally left out of this commit and remains
+uncommitted, pending independent verification.
+
