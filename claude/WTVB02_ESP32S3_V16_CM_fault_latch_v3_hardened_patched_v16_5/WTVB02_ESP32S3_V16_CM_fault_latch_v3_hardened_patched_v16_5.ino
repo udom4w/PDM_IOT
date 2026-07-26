@@ -2222,8 +2222,10 @@ static bool g_rtcValid = false;
 
 static const uint32_t RPM_MIN_INTERVAL_US =
     60000000UL / (MAX_RPM * PULSE_PER_REV);
+// [v16.5.5] Align ISR debounce with RPM_MIN_INTERVAL_US.
+// Prevent sub-20 ms bounce edges from corrupting the next accepted interval.
 static const uint32_t RPM_DEBOUNCE_US =
-    RPM_MIN_INTERVAL_US / 2;
+    RPM_MIN_INTERVAL_US;
 
 volatile uint32_t g_rpmLastPulseTime  = 0;
 volatile uint32_t g_rpmPulseInterval  = 0;
