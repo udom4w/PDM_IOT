@@ -1255,17 +1255,18 @@ typedef enum {
   MODEM_STATE_ERROR
 } ModemState_t;
 
-// Motor run-state (derived from proximity sensor pulse timing)
+// Motor run-state -- the motor's BUSINESS state, same meaning regardless of source
 typedef enum {
-  MOTOR_STOPPED  = 0,   // ???? / ????? pulse
-  MOTOR_STARTING = 1,   // ????? start (rpm ????????? rated band)
-  MOTOR_RUNNING  = 2,   // RUNNING -- rpm ?????? RATED_RPM +/- RATED_RPM_TOL
-  MOTOR_STOPPING = 3    // ????? stop (pulse ??????????????)
+  MOTOR_STOPPED  = 0,   // Confirmed not running
+  MOTOR_STARTING = 1,   // Evidence active, not yet past warm-up debounce
+  MOTOR_RUNNING  = 2,   // Evidence active continuously past warm-up debounce
+  MOTOR_STOPPING = 3    // Evidence inactive/stale, not yet past stop debounce
 } MotorRunState_t;
 
 // [vNext] Evidence source selector for the Motor State Machine.
-// MOTOR_SRC_RPM is the only implemented path today; CURRENT and PROXIMITY
-// are reserved for future commits and currently fall back to RPM values.
+// MOTOR_SRC_RPM and MOTOR_SRC_CURRENT are both fully implemented,
+// independent evidence paths (see buildMotorStateEvidence()); PROXIMITY
+// remains a placeholder that currently falls back to the RPM computation.
 enum MotorStateSource {
   MOTOR_SRC_RPM,
   MOTOR_SRC_CURRENT,
@@ -1290,6 +1291,21 @@ struct MotorStateEvidence {
   // updateMotorStateMachine() unaware of which source produced the evidence.
   uint32_t absentStoppingMs;
   uint32_t absentStoppedMs;
+  // [v16.5.6] Source-specific STOPPING/STOPPED staleness (ageMs) thresholds --
+  // same purpose as absentStoppingMs/absentStoppedMs above, but for the other
+  // axis: "evidence itself is stale" instead of "evidence is fresh but
+  // absent". RPM/PROXIMITY set these to the existing NO_PULSE_STOPPING_MS/
+  // FORCE_STOP_TIMEOUT_MS (unchanged). CURRENT derives them from
+  // CURRENT_SAMPLE_INTERVAL_MS instead of a hardcoded literal, because
+  // MOTOR_SRC_CURRENT's ageMs is time-since-last-CT-poll -- its normal range
+  // is set by the CT sensor's own sampling cadence, not by RPM pulse timing.
+  // Before this fix, ageMs was compared unconditionally against the
+  // RPM-tuned constants regardless of active source, so CURRENT's normal
+  // ~500ms sampling cadence alone (with current continuously present) was
+  // enough to trip STOPPING every cycle -- see the STARTING<->STOPPING
+  // oscillation investigation this fixes.
+  uint32_t ageStoppingMs;
+  uint32_t ageStoppedMs;
 };
 
 // [v16.5.4] Improvement 3: explicit freshness for the RPM EMA evidence.
@@ -2966,6 +2982,17 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       ev.ageMs            = millis() - g_lastCurrentSampleMs;
       ev.absentStoppingMs = NO_CURRENT_STOPPING_MS;
       ev.absentStoppedMs  = FORCE_CURRENT_STOPPED_MS;
+      // [v16.5.6] Deliberately derived, not a hardcoded literal: ageMs above
+      // is time-since-last-CT-poll, so its normal range is intrinsically set
+      // by CURRENT_SAMPLE_INTERVAL_MS (the CT sensor's own 500ms sampling
+      // cadence) -- not by RPM pulse timing. Deriving from it keeps this
+      // threshold automatically in sync if the sampling cadence ever
+      // changes, and prevents false STOPPING/STOPPED caused by normal sensor
+      // sampling cadence (rather than a real current loss). x3/x10 preserve
+      // the same ~1500ms/~5000ms horizons this source already used on the
+      // absentStoppingMs/absentStoppedMs axis above.
+      ev.ageStoppingMs    = CURRENT_SAMPLE_INTERVAL_MS * 3;
+      ev.ageStoppedMs     = CURRENT_SAMPLE_INTERVAL_MS * 10;
 
 #ifdef DEBUG_CURRENT_PATH
       // [v16.6g] Diagnostic-only, 1 Hz -- decision-layer half of
@@ -3007,6 +3034,8 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       ev.ageMs = timeSincePulseMs;
       ev.absentStoppingMs = ABSENT_STOPPING_MS;
       ev.absentStoppedMs  = ABSENT_STOPPED_MS;
+      ev.ageStoppingMs    = NO_PULSE_STOPPING_MS;   // [v16.5.6] unchanged RPM value
+      ev.ageStoppedMs     = FORCE_STOP_TIMEOUT_MS;  // [v16.5.6] unchanged RPM value
       break;
     case MOTOR_SRC_RPM:
     default:
@@ -3023,6 +3052,8 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       ev.ageMs = timeSincePulseMs;
       ev.absentStoppingMs = ABSENT_STOPPING_MS;   // [P2] unchanged RPM value
       ev.absentStoppedMs  = ABSENT_STOPPED_MS;    // [P2] unchanged RPM value
+      ev.ageStoppingMs    = NO_PULSE_STOPPING_MS;   // [v16.5.6] unchanged RPM value
+      ev.ageStoppedMs     = FORCE_STOP_TIMEOUT_MS;  // [v16.5.6] unchanged RPM value
       break;
   }
   return ev;
@@ -3060,13 +3091,11 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
   uint32_t absentMs = evidence.signalPresent ? 0 : (millis() - g_absentSince);
 
   // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- read-only. Reports every time
-  // signalPresent flips, using diagnostic mirrors set by processRPM(); never
-  // consulted by any branch below.
+  // signalPresent flips (evidence-only fields; no source-specific data);
+  // never consulted by any branch below.
   if (g_diagSignalPresentInit && evidence.signalPresent != g_diagPrevSignalPresent) {
-    Serial.printf("[SIGNAL]\n%d->%d\npulseCount=%lu rpmRaw=%.1f rpmFiltered=%.1f timeSincePulseMs=%lu\n",
-                  (int)g_diagPrevSignalPresent, (int)evidence.signalPresent,
-                  (unsigned long)g_diagPulseCount, g_diagRpmRaw, g_rpmFiltered,
-                  (unsigned long)g_diagTimeSincePulseMs);
+    Serial.printf("[SIGNAL]\n%d->%d\n",
+                  (int)g_diagPrevSignalPresent, (int)evidence.signalPresent);
   }
   g_diagPrevSignalPresent  = evidence.signalPresent;
   g_diagSignalPresentInit  = true;
@@ -3076,29 +3105,33 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
   // [MOTOR-TRANSITION] prints below can report old/new. Read-only.
   MotorRunState_t diagOldState = g_motorRunState;
 
-  if (evidence.ageMs > FORCE_STOP_TIMEOUT_MS || absentMs > evidence.absentStoppedMs) {
+  // [v16.5.6] FORCE_STOP_TIMEOUT_MS/NO_PULSE_STOPPING_MS replaced with
+  // evidence.ageStoppedMs/evidence.ageStoppingMs -- source-specific
+  // thresholds populated per-branch in buildMotorStateEvidence() (RPM/
+  // PROXIMITY keep the old global values numerically unchanged; CURRENT now
+  // derives them from CURRENT_SAMPLE_INTERVAL_MS instead of being checked
+  // against RPM-tuned constants). No other transition logic changed.
+  if (evidence.ageMs > evidence.ageStoppedMs || absentMs > evidence.absentStoppedMs) {
     if (diagOldState != MOTOR_STOPPED) {
       Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
-                    "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
-                    "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                    "signalPresent=%d age=%lu ageThreshold=%lu absentMs=%lu absentThreshold=%lu\n",
                     (int)diagOldState, (int)MOTOR_STOPPED,
-                    (evidence.ageMs > FORCE_STOP_TIMEOUT_MS) ? "ageMs>FORCE_STOP_TIMEOUT_MS" : "absentMs>ABSENT_STOPPED_MS",
-                    (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
-                    (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
-                    (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+                    (evidence.ageMs > evidence.ageStoppedMs) ? "ageMs>ageStoppedMs" : "absentMs>absentStoppedMs",
+                    (int)evidence.signalPresent,
+                    (unsigned long)evidence.ageMs, (unsigned long)evidence.ageStoppedMs,
+                    (unsigned long)absentMs, (unsigned long)evidence.absentStoppedMs);
     }
     g_motorRunState  = MOTOR_STOPPED;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
-  } else if (evidence.ageMs > NO_PULSE_STOPPING_MS || absentMs > evidence.absentStoppingMs) {
+  } else if (evidence.ageMs > evidence.ageStoppingMs || absentMs > evidence.absentStoppingMs) {
     if (diagOldState != MOTOR_STOPPING) {
       Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
-                    "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
-                    "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                    "signalPresent=%d age=%lu ageThreshold=%lu absentMs=%lu absentThreshold=%lu\n",
                     (int)diagOldState, (int)MOTOR_STOPPING,
-                    (evidence.ageMs > NO_PULSE_STOPPING_MS) ? "ageMs>NO_PULSE_STOPPING_MS" : "absentMs>ABSENT_STOPPING_MS",
-                    (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
-                    (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
-                    (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+                    (evidence.ageMs > evidence.ageStoppingMs) ? "ageMs>ageStoppingMs" : "absentMs>absentStoppingMs",
+                    (int)evidence.signalPresent,
+                    (unsigned long)evidence.ageMs, (unsigned long)evidence.ageStoppingMs,
+                    (unsigned long)absentMs, (unsigned long)evidence.absentStoppingMs);
     }
     g_motorRunState  = MOTOR_STOPPING;
     g_runInBandSince = 0;                 // [v16.3z] reset warm-up
@@ -3112,22 +3145,18 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
           Serial.printf("[MOTOR] Warm-up complete (in-band %.1fs) -> RUNNING\n",
                         RUNNING_WARMUP_MS / 1000.0f);
           Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
-                        "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
-                        "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                        "signalPresent=%d ageMs=%lu absentMs=%lu\n",
                         (int)diagOldState, (int)MOTOR_RUNNING, "warmup_complete",
-                        (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
-                        (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                        (int)evidence.signalPresent,
                         (unsigned long)evidence.ageMs, (unsigned long)absentMs);
         }
         g_motorRunState = MOTOR_RUNNING;
       } else {
         if (diagOldState != MOTOR_STARTING) {
           Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
-                        "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
-                        "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                        "signalPresent=%d ageMs=%lu absentMs=%lu\n",
                         (int)diagOldState, (int)MOTOR_STARTING, "warmup_in_progress",
-                        (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
-                        (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                        (int)evidence.signalPresent,
                         (unsigned long)evidence.ageMs, (unsigned long)absentMs);
         }
         g_motorRunState = MOTOR_STARTING; // ยังนับ warm-up อยู่
@@ -3135,11 +3164,9 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
     } else {
       if (diagOldState != MOTOR_STARTING) {
         Serial.printf("[MOTOR-TRANSITION]\nold=%d new=%d reason=%s\n"
-                      "signalPresent=%d rpmFiltered=%.1f rpmRaw=%.1f pulseCount=%lu "
-                      "timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
+                      "signalPresent=%d ageMs=%lu absentMs=%lu\n",
                       (int)diagOldState, (int)MOTOR_STARTING, "signal_absent_fresh",
-                      (int)evidence.signalPresent, g_rpmFiltered, g_diagRpmRaw,
-                      (unsigned long)g_diagPulseCount, (unsigned long)g_diagTimeSincePulseMs,
+                      (int)evidence.signalPresent,
                       (unsigned long)evidence.ageMs, (unsigned long)absentMs);
       }
       g_runInBandSince = 0;               // [v16.3z] หลุด band -> reset warm-up
