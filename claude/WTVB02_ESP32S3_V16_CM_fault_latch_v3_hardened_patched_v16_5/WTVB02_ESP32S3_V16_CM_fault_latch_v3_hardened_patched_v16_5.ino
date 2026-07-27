@@ -2995,30 +2995,35 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       ev.ageStoppedMs     = CURRENT_SAMPLE_INTERVAL_MS * 10;
 
 #ifdef DEBUG_CURRENT_PATH
-      // [v16.6g] Diagnostic-only, 1 Hz -- decision-layer half of
-      // [CURRENT_DIAG] (measurement-layer half is in readCTR4A01Current()).
+      // [P3-01] Diagnostic-only, 1 Hz -- decision-layer diagnostics, renamed
+      // from [CURRENT_DIAG] to [CURRENT_DECISION]. This block owns only
+      // decision-derived values; it no longer re-prints measurement-owned
+      // data (rawA/engineeringA/CT constants/scale remain the sole
+      // responsibility of readCTR4A01Current()'s [CURRENT_DIAG] block).
+      // ageMs (ev.ageMs) is a decision-derived value computed from the
+      // measurement-owned g_lastCurrentSampleMs timestamp -- it gives this
+      // block a staleness signal without duplicating the measurement value.
       {
         static uint32_t s_lastDiagMs = 0;
         uint32_t nowMs = millis();
         if (nowMs - s_lastDiagMs >= 1000) {
           s_lastDiagMs = nowMs;
-          Serial.println("[CURRENT_DIAG]");
+          Serial.println("[CURRENT_DECISION]");
           // [P2] "threshold=" is kept, unchanged name, as the single source of
           // truth for the ON value -- it is an ALIAS of CURRENT_ON_THRESHOLD_A,
           // not a distinct measurement. The ON value is intentionally NOT
           // repeated below under a second key, to avoid two fields claiming
           // the same value with different names.
-          Serial.printf("engineeringA=%.3f\n", engineeringCurrentA);
           Serial.printf("threshold=%.3f\n",    CURRENT_ON_THRESHOLD_A);
           Serial.printf("signalPresent=%d\n",  (int)ev.signalPresent);
           // [P2] Structured fields -- the OFF threshold is new information (no
           // prior field carried it); the ON value is deliberately not repeated
           // here since "threshold=" above already is that value.
-          Serial.printf("raw_current=%.3f\n",           engineeringCurrentA);
           Serial.printf("ema_current=%.3f\n",           s_currentFiltered);
           Serial.printf("signal_present=%d\n",          (int)ev.signalPresent);
           Serial.printf("current_threshold_off=%.3f\n", CURRENT_OFF_THRESHOLD_A);
           Serial.printf("motor_state=%d\n",              (int)g_motorRunState);
+          Serial.printf("ageMs=%lu\n",                   (unsigned long)ev.ageMs);
           Serial.println("source=current");
         }
       }
