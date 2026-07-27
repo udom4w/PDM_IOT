@@ -329,7 +329,8 @@ patching forward across multiple unreviewed commits.
 ## 10. Production Readiness Checklist
 
 **Build**
-- [ ] Clean `arduino-cli` build, FQBN `esp32:esp32:esp32s3`, zero
+- [ ] Clean `arduino-cli` build, FQBN: see `CLAUDE.md` § "Production Build
+      Configuration" (do NOT use the bare `esp32:esp32:esp32s3` FQBN), zero
       warnings/errors
 - [ ] Production library versions pinned and recorded (ESP32-S3 core,
       TinyGSM, ModbusMaster, PubSubClient, ArduinoJson) — per this

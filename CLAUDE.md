@@ -42,8 +42,28 @@ Always perform a clean build before diagnosing or modifying code.
 - คง backward-compat ของ MQTT payload (อย่าลบ field เดิม — ถ้าเปลี่ยนความหมายให้เพิ่ม field ใหม่ + deprecate ของเก่า)
 - .ino auto-prototype: custom enum/struct ที่เป็น return type หรือ parameter ต้อง typedef ก่อน function แรกของไฟล์
 
-## Build
-- arduino-cli, FQBN: esp32:esp32:esp32s3 (ปรับ PSRAM/flash ตามบอร์ด LilyGO)
+## Production Build Configuration
+
+**Complete FQBN (validated 2026-07-27):**
+```
+esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,FlashMode=qio,FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,UploadMode=default,UploadSpeed=921600
+```
+
+- **Purpose:** the only FQBN to use for compiling/flashing this firmware — every board option is explicit, none left to arduino-cli's own defaults.
+- **Hardware target:** LilyGO T-Vending S3 — ESP32-S3, 16 MB Flash, 8 MB OPI PSRAM.
+- **Validation date:** 2026-07-27.
+- **Validation result:** PASS.
+
+**⚠️ Do NOT compile using the default FQBN (`esp32:esp32:esp32s3`) for production firmware.** The bare FQBN silently falls back to `CDCOnBoot=default` (Disabled): boot ROM messages still appear, but every application `Serial.print()`/`Serial.println()` is lost, while MQTT/application behavior is unaffected — a working-but-unobservable device.
+
+**Validation evidence (2026-07-27):**
+- Serial output restored immediately after boot.
+- MQTT `CONNECTED (mTLS)` unchanged.
+- Continuous telemetry confirmed.
+- No source code modifications required — board-option/FQBN change only.
+- Root cause confirmed as the missing `CDCOnBoot=cdc` board option.
+
+- Toolchain: arduino-cli (bundled with Arduino IDE)
 
 ## Feature History (tag ที่ทำไปแล้ว — อย่าทำซ้ำ)
 - v16.3z: motor RUNNING warm-up debounce (rpm in-band 2.5s ก่อนเป็น RUNNING)

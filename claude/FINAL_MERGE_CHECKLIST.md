@@ -7,7 +7,9 @@ changes made during verification.
 
 ## Build Result
 
-- Toolchain: `arduino-cli` (bundled with Arduino IDE), FQBN `esp32:esp32:esp32s3`
+- Toolchain: `arduino-cli` (bundled with Arduino IDE), FQBN: see `CLAUDE.md` §
+  "Production Build Configuration" (do NOT use the bare `esp32:esp32:esp32s3`
+  FQBN)
 - Clean build (`--clean`, empty `--build-path` cache, no reused objects): **PASS, exit code 0, zero warnings**
 
 ## Flash / RAM Usage
