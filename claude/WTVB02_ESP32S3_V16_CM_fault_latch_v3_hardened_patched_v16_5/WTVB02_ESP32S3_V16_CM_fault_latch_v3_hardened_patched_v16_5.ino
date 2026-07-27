@@ -2959,27 +2959,73 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       // This is just a clarity alias, not a second compensation step.
       float engineeringCurrentA = currentA;
 
-      // [Commit 4A] EMA filter -- see CURRENT_EMA_ALPHA for full justification.
-      // Function-local static: persists across calls, confined entirely to
-      // this branch -- not a global, not visible outside buildMotorStateEvidence().
-      static float s_currentFiltered = 0.0f;
-      s_currentFiltered =
-          CURRENT_EMA_ALPHA * engineeringCurrentA +
-          (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
+      // [P4-01] CURRENT_EVIDENCE_MAX_AGE_MS is a separate, independently-named
+      // constant -- not a reuse of the ageStoppedMs expression below -- same
+      // horizon by deliberate choice, same rationale as MAX_EMA_INTERVAL_US
+      // vs. FORCE_STOP_TIMEOUT_MS for RPM: two different concerns (evidence
+      // freshness vs. FSM business-timeout) sharing one knob would let a
+      // future change to one silently change the other.
+      static const uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10;
+
+      // [P4-01] Function-local statics, confined entirely to this branch --
+      // not globals, not visible outside buildMotorStateEvidence(). Detects
+      // whether this cycle carries a genuinely new sample (g_lastCurrentSampleMs
+      // changed since last seen) vs. a repeat of the same stale sample --
+      // needed so the EMA can hold, rather than re-converge toward a repeated
+      // stale value, on cycles where no new poll landed (see s_currentFiltered
+      // "Valid, no new poll" comment below).
+      static uint32_t s_lastSeenSampleMs     = 0;
+      static float    s_currentFiltered      = 0.0f;
+      static bool     s_currentLatched       = false;
+      // [P4-01] Evidence validity -- a concept distinct from s_currentFiltered's
+      // numeric value. "No data" and "0 A" are not the same thing; this flag
+      // carries the "no data" meaning so the 0.0f reset below is never
+      // mistaken for a claim that current is genuinely zero.
+      static bool     s_currentEvidenceValid = false;
+
+      uint32_t ageMsNow      = millis() - g_lastCurrentSampleMs;
+      bool     isFreshSample = (g_lastCurrentSampleMs != s_lastSeenSampleMs);
+      if (isFreshSample) {
+        s_lastSeenSampleMs = g_lastCurrentSampleMs;
+      }
+
+      if (ageMsNow > CURRENT_EVIDENCE_MAX_AGE_MS) {
+        // [P4-01] Invalid/Expired: reset to an inert baseline. This is an
+        // IMPLEMENTATION DETAIL, not a semantic claim -- s_currentEvidenceValid
+        // alone carries the "no data" meaning.
+        s_currentFiltered      = 0.0f;
+        s_currentLatched       = false;
+        s_currentEvidenceValid = false;
+      } else if (isFreshSample) {
+        if (!s_currentEvidenceValid) {
+          // [P4-01] Recovery from Expired/Uninitialized: reseed directly from
+          // the fresh sample -- do not blend with the stale/reset baseline,
+          // mirroring g_rpmFiltered's own reseed-on-recovery behavior.
+          s_currentFiltered = engineeringCurrentA;
+        } else {
+          // [Commit 4A] EMA filter -- see CURRENT_EMA_ALPHA for full justification.
+          s_currentFiltered =
+              CURRENT_EMA_ALPHA * engineeringCurrentA +
+              (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
+        }
+        s_currentEvidenceValid = true;
+      }
+      // [P4-01] else: Valid, no new poll this cycle -- hold s_currentFiltered
+      // unchanged rather than re-feeding the same stale engineeringCurrentA
+      // into the EMA again (previously this ran unconditionally every call).
 
       // [P2] Hysteresis latch (Schmitt trigger) on the filtered value --
       // replaces the old single stateless threshold entirely. Latches true
       // at/above CURRENT_ON_THRESHOLD_A, stays true until dropping below
-      // CURRENT_OFF_THRESHOLD_A. Function-local static, same confinement
-      // rule as s_currentFiltered above.
-      static bool s_currentLatched = false;
+      // CURRENT_OFF_THRESHOLD_A. Unchanged -- still evaluated every cycle
+      // against whatever s_currentFiltered currently holds.
       if (!s_currentLatched && s_currentFiltered >= CURRENT_ON_THRESHOLD_A) {
         s_currentLatched = true;
       } else if (s_currentLatched && s_currentFiltered < CURRENT_OFF_THRESHOLD_A) {
         s_currentLatched = false;
       }
       ev.signalPresent    = s_currentLatched;
-      ev.ageMs            = millis() - g_lastCurrentSampleMs;
+      ev.ageMs            = ageMsNow;
       ev.absentStoppingMs = NO_CURRENT_STOPPING_MS;
       ev.absentStoppedMs  = FORCE_CURRENT_STOPPED_MS;
       // [v16.5.6] Deliberately derived, not a hardcoded literal: ageMs above
