@@ -1531,6 +1531,7 @@ typedef struct {
   int             health_score;  // Business Decision -- computed by computeHealthScore(), not present in VibrationData_t
   MachineState_t  alarm_level;   // effective g_systemState.state at capture (incl. MAINTENANCE) -- not present in VibrationData_t
   VibrationData_t vib;           // full measurement record -- all other fields (rms_x/y/z, cf_max, kurtosis_max, temperature, current_a, timestamp, valid, ...) read from here
+  bool            currentEvidenceValid;  // [P4-02] telemetry mirror of g_currentEvidenceValid at capture time -- pure copy, no computation
 } TelemetrySnapshot;
 
 // Network status (Core 1 only) - Modified for 4G
@@ -1839,6 +1840,13 @@ static volatile uint16_t  g_currentHead  = 0;
 static volatile uint16_t  g_currentCount = 0;
 static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
 static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of last SUCCESSFUL CTR4A01 read (0=never); drives MotorStateEvidence.ageMs for MOTOR_SRC_CURRENT
+
+// [P4-02] Telemetry mirror of s_currentEvidenceValid (buildMotorStateEvidence(),
+// MOTOR_SRC_CURRENT case). NOT a second source of truth -- written only there,
+// read only by captureTelemetrySnapshot(). Plain bool, not volatile: producer
+// and consumer both run on Core 0 in taskStateMachine(), same cycle, sequential
+// -- no cross-core read of this variable exists (see P4_02_DESIGN_CONTRACT.md §5).
+static bool               g_currentEvidenceValid = false;
 
 // ============================================================================
 // MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
@@ -2996,6 +3004,7 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
         s_currentFiltered      = 0.0f;
         s_currentLatched       = false;
         s_currentEvidenceValid = false;
+        g_currentEvidenceValid = s_currentEvidenceValid;  // [P4-02] telemetry mirror only
       } else if (isFreshSample) {
         if (!s_currentEvidenceValid) {
           // [P4-01] Recovery from Expired/Uninitialized: reseed directly from
@@ -3009,6 +3018,7 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
               (1.0f - CURRENT_EMA_ALPHA) * s_currentFiltered;
         }
         s_currentEvidenceValid = true;
+        g_currentEvidenceValid = s_currentEvidenceValid;  // [P4-02] telemetry mirror only
       }
       // [P4-01] else: Valid, no new poll this cycle -- hold s_currentFiltered
       // unchanged rather than re-feeding the same stale engineeringCurrentA
@@ -3468,6 +3478,7 @@ static void captureTelemetrySnapshot(const VibrationData_t* data, MachineState_t
   snap.alarm_level  = effectiveState;
   snap.health_score = computeHealthScore(data);
   memcpy(&snap.vib, data, sizeof(VibrationData_t));
+  snap.currentEvidenceValid = g_currentEvidenceValid;  // [P4-02] pure copy, no computation
 
   if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(10)) == pdTRUE) {
     memcpy(&g_telemSnapshot, &snap, sizeof(TelemetrySnapshot));
@@ -6979,6 +6990,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // (check slave address/wiring/baud); if both stay 0, the 500ms cadence itself never fired.
     doc["current_buf_count"]    = g_currentCount;   // 0..CURRENT_BUF_SIZE, buffer fill level
     doc["current_read_errors"]  = g_ctReadErrors;    // cumulative CTR4A01 Modbus failures since boot
+    // [P4-02] pure copy, no computation -- see P4_02_DESIGN_CONTRACT.md
+    doc["current_evidence_valid"] = snap->currentEvidenceValid;
     doc["trend_dir"]      = trendDirStr;
     doc["spike_count"]    = g_trendResult.spike_count;
     // v15.2 Fix 17: suppress freq fields เมื่อ RPM < RPM_FREQ_GATE
