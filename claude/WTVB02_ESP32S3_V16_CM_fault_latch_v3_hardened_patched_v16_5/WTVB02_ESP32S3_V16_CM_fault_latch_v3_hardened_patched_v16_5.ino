@@ -149,7 +149,7 @@
 // nameplate Full-Load Amps before MOTOR_SRC_CURRENT is trusted beyond bench
 // testing. CURRENT_ON_THRESHOLD_A / CURRENT_OFF_THRESHOLD_A are derived from
 // it, so commissioning this one constant recalibrates both automatically.
-constexpr float MOTOR_NAMEPLATE_CURRENT_A = 2.0f;   // [A] nameplate FLA -- PLACEHOLDER, commission before use
+constexpr float MOTOR_NAMEPLATE_CURRENT_A = 1.2f;   // [A] nameplate FLA -- commissioned per P3-02 (ABB M2BAX 71MA2, 220V/50Hz/Delta)
 
 // [P2] Hysteresis pair on the EMA-filtered engineering current (s_currentFiltered
 // in buildMotorStateEvidence()'s MOTOR_SRC_CURRENT branch): signalPresent
