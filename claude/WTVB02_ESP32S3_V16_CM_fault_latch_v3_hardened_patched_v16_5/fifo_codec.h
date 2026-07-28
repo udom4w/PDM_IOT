@@ -3,12 +3,12 @@
 // [v16.6.5-fifo] fifo_codec.h
 //
 // L2 -- Frame Codec (CM-100_FIFO_DRIVER_SDS_v1.0 SS8, SS16; Implementation
-// Plan Task 2.1).
+// Plan Tasks 2.1, 2.2).
 //
-// This file currently contains only the streaming CRC-16 component
-// (Task 2.1). SampleDecoder (Task 2.2) and FrameCodec (Task 2.3) extend this
-// same file in later tasks -- not present yet, by design; no placeholder
-// content for them exists here.
+// This file currently contains the streaming CRC-16 component (Task 2.1)
+// and SampleDecoder (Task 2.2). FrameCodec (Task 2.3) extends this same
+// file in a later task -- not present yet, by design; no placeholder
+// content for it exists here.
 //
 // Zero Arduino/ESP32 dependency by design, matching fifo_transport.h and
 // test/log_replay_transport.h -- compiles standalone under a plain C++
@@ -95,3 +95,74 @@ void Crc16_Update(uint16_t* state, uint8_t b);
 //   the frozen Task 2.1 interface) so a call site reads as "I am done
 //   accumulating, give me the result," not as a decision to keep updating.
 uint16_t Crc16_Final(uint16_t state);
+
+// ----------------------------------------------------------------------------
+// [v16.6.6-fifo] SampleDecoder -- decode one already-assembled 6-byte
+// RAWFIFO payload stride into one raw int16 tri-axial sample triple
+// (SDS K-8, D-9; Implementation Plan Task 2.2).
+//
+// Byte layout (SDS K-8: 1024 samples x 3 axes x int16, big-endian, stride
+// 6B, order X,Y,Z -- verified against the fixture corpus, not re-derived
+// from the datasheet alone):
+//   sixBytes[0..1] -> X, big-endian signed int16
+//   sixBytes[2..3] -> Y, big-endian signed int16
+//   sixBytes[4..5] -> Z, big-endian signed int16
+//
+// Big-endian decoding: each axis's two bytes are combined as
+// (highByte << 8) | lowByte, i.e. sixBytes[2*axis] is the MOST significant
+// byte -- the reverse of the little-endian byte order native to this
+// platform.
+//
+// Signed int16 interpretation: the combined 16-bit value is a two's-
+// complement signed count, not an unsigned magnitude. The implementation
+// assembles the bit pattern as an unsigned uint16_t first, then reinterprets
+// it as int16_t via a narrowing cast. That narrowing conversion is
+// implementation-defined (not undefined) by the C++ standard for values
+// that don't fit int16_t's positive range, and GCC -- the toolchain this
+// project targets (xtensa-esp32s3-elf-g++) -- explicitly documents this
+// case as mapping to the expected two's-complement value, not an
+// unspecified one. This is a deliberate reliance on that documented GCC
+// guarantee, not an oversight.
+//
+// D-9: this function never applies K-9's g-scale factor. Samples are raw
+// counts only -- scaling is a consumer decision, made where K-9's "evidence-
+// backed, not confirmed" caveat (RFC-0007 SS4) remains visible.
+//
+// Pure, stateless: SampleDecoder holds no state of its own, unlike
+// StreamingCrc16's Init/Update/Final split. It does not accumulate partial
+// bytes across calls -- deciding "when do I have 6 complete bytes" and
+// holding a partial-stride buffer while waiting is FrameCodec's (Task 2.3)
+// responsibility, not this component's. Each call is fully independent of
+// every other call.
+//
+// Precondition: `sixBytes` must point to exactly one correctly aligned,
+// already-fully-received 6-byte RAWFIFO sample stride, in wire order. This
+// function has no way to detect a misaligned or partial window -- every
+// 6-byte input decodes to *some* well-defined int16 triple; there is no
+// invalid bit pattern. Stride-alignment correctness is entirely the
+// caller's responsibility (see fifo_codec.cpp's doc comment for why this
+// component cannot and does not report malformed input).
+//
+// Composition:
+//   - With StreamingCrc16 (Task 2.1): sibling, not caller/callee. FrameCodec
+//     feeds each arriving byte to Crc16_Update() for the running CRC, and
+//     separately calls SampleDecoder_DecodeStride() once a stride is
+//     complete -- two independent uses of the same bytes, composed by
+//     FrameCodec, never by either of these components directly.
+//   - With FrameCodec (Task 2.3, not yet implemented): FrameCodec owns the
+//     partial-stride buffer and calls this function once per complete
+//     stride, passing write pointers that ultimately trace back to
+//     FifoArena_WriteHandleX/Y/Z() (advanced per sample index by L3).
+//     SampleDecoder never sees an array, an index, or FifoArena -- only the
+//     one triple of pointers for this call (SDS D-7/Freeze Review 1.1's
+//     "L2 has zero dependency on any L3 type" discipline, applied here too).
+// ----------------------------------------------------------------------------
+
+// SampleDecoder_DecodeStride() -- decode one 6-byte stride into (x, y, z).
+//   Precondition: `sixBytes` points to exactly 6 valid, in-order bytes.
+//                 `outX`, `outY`, `outZ` are valid, non-null, caller-owned
+//                 pointers.
+//   Postcondition: *outX, *outY, *outZ hold the decoded raw int16 counts.
+//                  No other state is read or written.
+void SampleDecoder_DecodeStride(const uint8_t* sixBytes,
+                                 int16_t* outX, int16_t* outY, int16_t* outZ);
