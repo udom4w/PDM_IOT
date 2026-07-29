@@ -130,6 +130,14 @@
 #include "fifo_transport_uart485.h"
 #include "fifo_driver.h"
 
+// [v16.6 logging refactor] Centralized logging framework -- see log.h.
+// Included near the top for the same .ino auto-prototype reason as the
+// FIFO headers above: LOGE/LOGW/LOGI/LOGD/LOGT are plain macros (no
+// return-value/parameter type), so this placement is not load-bearing for
+// that specific hazard, but keeping all local module headers grouped
+// together matches this file's existing convention.
+#include "log.h"
+
 ///////////////////////////////////////////////////////////////////////////////
 // COMMISSIONING CONFIGURATION
 // Site-specific parameters.
