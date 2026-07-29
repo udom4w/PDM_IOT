@@ -3141,23 +3141,23 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
         uint32_t nowMs = millis();
         if (nowMs - s_lastDiagMs >= 1000) {
           s_lastDiagMs = nowMs;
-          Serial.println("[CURRENT_DECISION]");
+          LOGD("[CURRENT_DECISION]\r\n");
           // [P2] "threshold=" is kept, unchanged name, as the single source of
           // truth for the ON value -- it is an ALIAS of CURRENT_ON_THRESHOLD_A,
           // not a distinct measurement. The ON value is intentionally NOT
           // repeated below under a second key, to avoid two fields claiming
           // the same value with different names.
-          Serial.printf("threshold=%.3f\n",    CURRENT_ON_THRESHOLD_A);
-          Serial.printf("signalPresent=%d\n",  (int)ev.signalPresent);
+          LOGD("threshold=%.3f\n",    CURRENT_ON_THRESHOLD_A);
+          LOGD("signalPresent=%d\n",  (int)ev.signalPresent);
           // [P2] Structured fields -- the OFF threshold is new information (no
           // prior field carried it); the ON value is deliberately not repeated
           // here since "threshold=" above already is that value.
-          Serial.printf("ema_current=%.3f\n",           s_currentFiltered);
-          Serial.printf("signal_present=%d\n",          (int)ev.signalPresent);
-          Serial.printf("current_threshold_off=%.3f\n", CURRENT_OFF_THRESHOLD_A);
-          Serial.printf("motor_state=%d\n",              (int)g_motorRunState);
-          Serial.printf("ageMs=%lu\n",                   (unsigned long)ev.ageMs);
-          Serial.println("source=current");
+          LOGD("ema_current=%.3f\n",           s_currentFiltered);
+          LOGD("signal_present=%d\n",          (int)ev.signalPresent);
+          LOGD("current_threshold_off=%.3f\n", CURRENT_OFF_THRESHOLD_A);
+          LOGD("motor_state=%d\n",              (int)g_motorRunState);
+          LOGD("ageMs=%lu\n",                   (unsigned long)ev.ageMs);
+          LOGD("source=current\r\n");
         }
       }
 #endif
@@ -3418,7 +3418,7 @@ static void processRPM(VibrationData_t* data) {
   // sensor-read cadence, so this naturally prints every ~250ms without adding
   // a separate timer. Read-only; state/evidence were already fully decided
   // above by the untouched logic.
-  Serial.printf("[MOTOR-DIAG]\nstate=%d signalPresent=%d pulseCount=%lu rpmRaw=%.1f "
+  LOGD("[MOTOR-DIAG]\nstate=%d signalPresent=%d pulseCount=%lu rpmRaw=%.1f "
                 "rpmFiltered=%.1f timeSincePulseMs=%lu ageMs=%lu absentMs=%lu\n",
                 (int)g_motorRunState, (int)evidence.signalPresent,
                 (unsigned long)g_diagPulseCount, g_diagRpmRaw, g_rpmFiltered,
@@ -3589,7 +3589,7 @@ static void LogEnPinTransition(uint8_t newState) {
   }
   s_lastEnPinLoggedState = newState;
   FifoPhase phase = FifoDriver_GetPhase();
-  Serial.printf("[EN-DIAG] GPIO42 -> %s FifoState=%s FifoPhase=%d busOwner=%s t=%lums\n",
+  LOGT("[EN-DIAG] GPIO42 -> %s FifoState=%s FifoPhase=%d busOwner=%s t=%lums\n",
                 (newState == HIGH) ? "HIGH" : "LOW",
                 FifoDriver_GetInternalStateNameForDiag(),
                 static_cast<int>(phase),
@@ -3612,7 +3612,7 @@ static inline void rs485Enable(const char* caller = "?") {
   // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY] fires on EVERY call (not just
   // actual level transitions, unlike LogEnPinTransition() above) so the
   // caller identity is never lost even on a same-level repeat call.
-  Serial.printf("[EN-CALLER] rs485Enable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
+  LOGT("[EN-CALLER] rs485Enable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
                 caller, (int)FifoDriver_OwnsBus(),
                 (unsigned long)FifoDriver_GetAttemptNumberForDiag(), (unsigned long)millis());
 }
@@ -3621,7 +3621,7 @@ static inline void rs485Disable(const char* caller = "?") {
   digitalWrite(RS485_EN_PIN, HIGH);
   LogEnPinTransition(HIGH);  // [Task 4.5 -- TEMPORARY DIAGNOSTIC ONLY]
   // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY] see rs485Enable()'s own comment.
-  Serial.printf("[EN-CALLER] rs485Disable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
+  LOGT("[EN-CALLER] rs485Disable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
                 caller, (int)FifoDriver_OwnsBus(),
                 (unsigned long)FifoDriver_GetAttemptNumberForDiag(), (unsigned long)millis());
 }
@@ -4398,13 +4398,13 @@ static bool readCTR4A01Current(float &amps) {
     if (nowMeasMs - s_lastMeasDiagMs >= 1000) {
       s_lastMeasDiagMs = nowMeasMs;
       float scale = (rawCurrentA != 0.0f) ? (engineeringCurrentA / rawCurrentA) : 0.0f;
-      Serial.println("[CURRENT_DIAG]");
-      Serial.printf("rawA=%.3f\n",              rawCurrentA);
-      Serial.printf("engineeringA=%.3f\n",       engineeringCurrentA);
-      Serial.printf("ctTurns=%d\n",              (int)CT_TURNS);
-      Serial.printf("ctRatioPrimaryA=%.3f\n",    (float)CT_RATIO_PRIMARY_A);
-      Serial.printf("ctRatioSecondaryA=%.3f\n",  (float)CT_RATIO_SECONDARY_A);
-      Serial.printf("scale=%.3f\n",              scale);
+      LOGT("[CURRENT_DIAG]\r\n");
+      LOGT("rawA=%.3f\n",              rawCurrentA);
+      LOGT("engineeringA=%.3f\n",       engineeringCurrentA);
+      LOGT("ctTurns=%d\n",              (int)CT_TURNS);
+      LOGT("ctRatioPrimaryA=%.3f\n",    (float)CT_RATIO_PRIMARY_A);
+      LOGT("ctRatioSecondaryA=%.3f\n",  (float)CT_RATIO_SECONDARY_A);
+      LOGT("scale=%.3f\n",              scale);
     }
 #endif
   }
@@ -4438,7 +4438,7 @@ static BusOwnerDiag s_busOwnerDiag = BusOwnerDiag::NONE;
 static void FifoDiag_SetBusOwner(BusOwnerDiag newOwner) {
   if (newOwner == s_busOwnerDiag) return;
   static const char* const kBusOwnerNames[] = { "NONE", "MODBUS", "FIFO" };
-  Serial.printf("[BUS] BUS_OWNER -> %s\n", kBusOwnerNames[static_cast<int>(newOwner)]);
+  LOGD("[BUS] BUS_OWNER -> %s\n", kBusOwnerNames[static_cast<int>(newOwner)]);
   s_busOwnerDiag = newOwner;
 }
 
@@ -4602,7 +4602,7 @@ void taskModbusRead(void* parameter) {
       // to prevent entry).
       {
         bool fifoOwnsBusNow = (FifoDriver_GetPhase() == FifoPhase::ACTIVE);
-        Serial.printf("[MODBUS] poll start (fifoOwnsBus=%d)\n", (int)fifoOwnsBusNow);
+        LOGT("[MODBUS] poll start (fifoOwnsBus=%d)\n", (int)fifoOwnsBusNow);
         FifoDiag_SetBusOwner(fifoOwnsBusNow ? BusOwnerDiag::FIFO : BusOwnerDiag::MODBUS);
       }
 
@@ -8266,7 +8266,14 @@ void setup() {
   // forward declaration is needed. Intended to be removed, along with
   // FifoDriver_SetDiagLogger() itself and every DiagLog() call site it
   // guards in fifo_driver.cpp, once this investigation concludes.
-  FifoDriver_SetDiagLogger([](const char* msg) { Serial.println(msg); });
+  // [v16.6 logging refactor] Gated at LOG_TRACE: below that level the
+  // registration call itself is skipped, so s_diagLog stays at its default
+  // nullptr and fifo_driver.cpp's DiagLog() no-ops on its existing
+  // `if (!s_diagLog) return;` check -- no vsnprintf formatting cost is paid
+  // per call, not just the Serial write.
+#if LOG_LEVEL >= LOG_TRACE
+  FifoDriver_SetDiagLogger([](const char* msg) { LOGT("%s\r\n", msg); });
+#endif
   // [Task 7.1 -- TEMPORARY DIAGNOSTIC ONLY, UART receive-error
   // instrumentation & validation, not a permanent production feature]
   // Registers fifo_driver.cpp's pull-based UART-stats hooks with the
