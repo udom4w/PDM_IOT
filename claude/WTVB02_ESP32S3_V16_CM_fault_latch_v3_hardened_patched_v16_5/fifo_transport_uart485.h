@@ -48,3 +48,33 @@
 //                 FifoDriver_Service() call (matches FifoDriver_Init()'s own
 //                 "once per boot" contract, SDS A-1).
 void Uart485Transport_Init(FifoTransport* out, HardwareSerial* serial);
+
+// [Task 7.1 -- UART receive-error instrumentation, diagnostic only, not a
+// permanent production feature] Cumulative, per-error-type counters for
+// every hardwareSerial_error_t this transport's onReceiveError() callback
+// can receive. Closes the gap Task 6.2 identified: the existing
+// Uart485Transport_OnReceiveError() only ever acted on UART_FIFO_OVF_ERROR/
+// UART_BUFFER_FULL_ERROR (setting s_rxOverflow, read via the unchanged
+// hadOverflow() transport-contract member) -- UART_BREAK_ERROR/
+// UART_FRAME_ERROR/UART_PARITY_ERROR reached the callback and were silently
+// dropped. These counters now record all five, independently of and
+// without altering s_rxOverflow/hadOverflow()'s existing behavior.
+
+// Uart485Transport_GetErrorCounts() -- read the current cumulative counts.
+//   Precondition:  all five out-pointers non-null.
+//   Postcondition: each *out receives the lifetime count of that error type
+//                  since the last Uart485Transport_ResetErrorCounts() call
+//                  (or since boot, if never reset). Read-only -- does not
+//                  clear or otherwise modify the counters (unlike
+//                  hadOverflow()'s existing read-and-clear contract).
+void Uart485Transport_GetErrorCounts(uint32_t* outFifoOvf, uint32_t* outBufferFull,
+                                      uint32_t* outBreak, uint32_t* outFrameErr,
+                                      uint32_t* outParityErr);
+
+// Uart485Transport_ResetErrorCounts() -- zero all five counters.
+//   Precondition:  none. Intended call site: exactly once per NEW FIFO
+//                  session admission, never between retry attempts of the
+//                  same session (the caller, not this function, is
+//                  responsible for calling this only at the correct
+//                  boundary).
+void Uart485Transport_ResetErrorCounts();

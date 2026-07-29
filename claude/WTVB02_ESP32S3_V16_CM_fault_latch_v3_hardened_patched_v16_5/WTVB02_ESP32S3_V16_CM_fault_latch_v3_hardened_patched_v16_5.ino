@@ -120,6 +120,16 @@
 #include <RTClib.h>
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
 
+// [Task 4.1] FIFO waveform driver -- included near the top, alongside the
+// other library includes, matching CM-100_FIFO_Implementation_Plan_v1.0.md's
+// own prescribed Task 4.1 placement ("near the top... avoids the .ino
+// auto-prototype forward-declaration problem"). No new type is used as a
+// return value or parameter of any function defined directly in this .ino
+// file, so no typedef-before-first-use step is needed here.
+#include "fifo_types.h"
+#include "fifo_transport_uart485.h"
+#include "fifo_driver.h"
+
 ///////////////////////////////////////////////////////////////////////////////
 // COMMISSIONING CONFIGURATION
 // Site-specific parameters.
@@ -225,6 +235,16 @@ constexpr uint32_t FORCE_CURRENT_STOPPED_MS = 5000;   // [ms] continuous below-O
 #define RS485_RX_PIN 38
 #define RS485_TX_PIN 39
 #define RS485_EN_PIN 42
+
+// [Task 4.5 -- TEMPORARY DIAGNOSTIC ONLY, EN-ownership-hypothesis
+// verification, not a permanent production feature] Last logged RS485_EN_PIN
+// level -- 0xFF means "never logged yet" (distinct from any real digitalWrite
+// value) so the very first rs485Enable()/rs485Disable() call of the run is
+// always logged as a transition. Read/written only from rs485Enable()/
+// rs485Disable() themselves (Core 0, taskModbusRead's own call chain plus
+// setup(), both single-threaded with respect to this pin). Intended to be
+// removed once this investigation concludes.
+static uint8_t s_lastEnPinLoggedState = 0xFF;
 
 // --- I2C Pins ---
 #define I2C_SDA_PIN 44
@@ -1213,6 +1233,26 @@ MQTTClient mqttClient(2800);  // Phase 5: 2800->3400 (fault_score+uncertainty+fi
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, I2C_SCL_PIN, I2C_SDA_PIN);
 ModbusMaster modbus;
 
+// [Task 4.1] FIFO transport binding -- global/static storage, matching
+// Uart485Transport_Init()'s own documented lifetime precondition ("must
+// back ctx with static/global storage, never a stack-local"). Bound once
+// in setup() via Uart485Transport_Init(&g_fifoTransport, &SerialRS485);
+// the FifoDriver itself is otherwise entirely dormant -- nothing calls
+// FifoDriver_Request() yet, so this never touches the RS485 bus in
+// current production operation.
+FifoTransport g_fifoTransport;
+
+// [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY] Type-only declaration, placed
+// before the file's first function definition. The .ino auto-prototype
+// generator collects forward declarations for every function in the file
+// (including FifoDiag_SetBusOwner(), defined later near taskModbusRead())
+// and inserts them all together near the top of the file -- so any
+// enum/struct used as a parameter/return type must already be visible at
+// that insertion point, not merely before its own function body (CLAUDE.md's
+// documented auto-prototype hazard). Intended to be removed once Task 4.2A
+// concludes.
+enum class BusOwnerDiag : uint8_t { NONE, MODBUS, FIFO };
+
 // RTC
 RTC_DS3231 rtc;
 
@@ -1995,6 +2035,11 @@ static bool saveNvsConfig(const char* plant, const char* machine,
                           const char* sensor, int rpm, const char* apn) {
   Preferences p;
   if (!p.begin(CFG_NS, false)) return false;
+  // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY] NVS write entry/exit markers.
+  // NOTE: only reachable via runConfigMode(), an interactive boot-time-only
+  // path (setup(), gated on a 5s Serial Enter-key window) -- not reachable
+  // during normal runtime/FIFO operation, instrumented for completeness.
+  Serial.printf("[NVS_BEGIN] %lu\n", (unsigned long)millis());
   p.putUInt  (CFG_MAGIC_KEY,   0u);               // disarm magic ก่อน
   p.putString(CFG_KEY_PLANT,   plant);
   p.putString(CFG_KEY_MACHINE, machine);
@@ -2004,6 +2049,7 @@ static bool saveNvsConfig(const char* plant, const char* machine,
   p.putInt   (CFG_KEY_TREND,   (int)g_trendPersistence);  // [v16.3ab] อ่าน global ตรง ไม่ต้องแก้ signature
   p.putUInt  (CFG_MAGIC_KEY,   CFG_MAGIC_VAL);    // arm magic หลังเขียนครบ
   p.end();
+  Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
   return true;
 }
 
@@ -2369,8 +2415,14 @@ static void loadRuntimeHour() {
 // NVS: ?????? runtime_hour ?? Flash
 static void saveRuntimeHour(float value) {
   g_motorPrefs.begin("motor_nvs", false);
+  // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY] NVS write entry/exit markers,
+  // bracketing exactly the commit call (putFloat + end(), where the actual
+  // flash write/cross-core cache-disable happens per SDK behavior) for
+  // correlation against [UART_ERR] timestamps.
+  Serial.printf("[NVS_BEGIN] %lu\n", (unsigned long)millis());
   g_motorPrefs.putFloat("runtime_h", value);
   g_motorPrefs.end();
+  Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
 }
 
 // ============================================================================
@@ -2420,6 +2472,12 @@ static const char* faultEventStr(uint8_t code) {
 static void saveFaultLatchNVS() {
   Preferences p;
   p.begin(FL_NS, false);
+  // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY] NVS write entry/exit markers.
+  // NOTE: this function currently has no call sites anywhere in this file
+  // (checkAndLatchFault() uses its own inline write block instead, below) --
+  // instrumented anyway per this task's explicit "at minimum" list, and in
+  // case it becomes reachable in the future.
+  Serial.printf("[NVS_BEGIN] %lu\n", (unsigned long)millis());
   p.putUChar(FL_KEY_PENDING, 0u);              // Step 1: disarm
   p.putUChar(FL_KEY_CODE,    g_fl.code);       // Step 2: data
   p.putUInt (FL_KEY_TS,      g_fl.ts);
@@ -2428,6 +2486,7 @@ static void saveFaultLatchNVS() {
   p.putUInt (FL_KEY_MAGIC,   FL_MAGIC_VALUE);  // Step 3: commit marker
   p.putUChar(FL_KEY_PENDING, 1u);              // Step 4: arm
   p.end();
+  Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
   Serial.printf("[LATCH] SAVE code=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f n=%lu\n",
                 g_fl.code, faultEventStr(g_fl.code), faultSeverity(g_fl.code),
                 (unsigned long)g_fl.ts, g_fl.rms, g_fl.kurtosis,
@@ -2507,9 +2566,12 @@ static void clearFaultLatchNVS() {
   }
   Preferences p;
   p.begin(FL_NS, false);
+  // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY] NVS write entry/exit markers.
+  Serial.printf("[NVS_BEGIN] %lu\n", (unsigned long)millis());
   p.putUChar(FL_KEY_PENDING, 0u);
   p.putUInt (FL_KEY_MAGIC,   0u);
   p.end();
+  Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
   g_fl.pending = false;
   xSemaphoreGive(mutexFaultLatch);
   Serial.println("[LATCH] CLEAR — delivered, NVS latch released");
@@ -2884,6 +2946,12 @@ static void checkAndLatchFault(const VibrationData_t* data,
   {
     Preferences p;
     p.begin(FL_NS, false);
+    // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY] NVS write entry/exit markers
+    // -- this is the ACTUAL, reachable fault-latch write path (unlike the
+    // unused standalone saveFaultLatchNVS() above), called from
+    // checkAndLatchFault() (taskStateMachine, Core 0) whenever a new fault
+    // is latched.
+    Serial.printf("[NVS_BEGIN] %lu\n", (unsigned long)millis());
     p.putUChar(FL_KEY_PENDING, 0u);
     p.putUChar(FL_KEY_CODE,    snapCode);
     p.putUInt (FL_KEY_TS,      snapTs);
@@ -2892,6 +2960,7 @@ static void checkAndLatchFault(const VibrationData_t* data,
     p.putUInt (FL_KEY_MAGIC,   FL_MAGIC_VALUE);
     p.putUChar(FL_KEY_PENDING, 1u);
     p.end();
+    Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
     Serial.printf("[LATCH] SAVE code=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f n=%lu\n",
                   snapCode, faultEventStr(snapCode), faultSeverity(snapCode),
                   (unsigned long)snapTs, snapRms, snapKurt,
@@ -3491,12 +3560,62 @@ static void captureTelemetrySnapshot(const VibrationData_t* data, MachineState_t
 // RS485 CONTROL (Core 0)
 // ============================================================================
 
-static inline void rs485Enable() {
-  digitalWrite(RS485_EN_PIN, LOW);
+// [Task 4.5 -- TEMPORARY DIAGNOSTIC ONLY, EN-ownership-hypothesis
+// verification, not a permanent production feature] Logs RS485_EN_PIN
+// (GPIO42) ONLY on an actual level change (requirement 1: "every
+// transition"), alongside timestamp (2), current internal FifoState (3),
+// current FifoPhase (4), and a directly-derived bus owner (5) -- FIFO
+// whenever FifoDriver_GetPhase() == ACTIVE, otherwise MODBUS/OTHER (the only
+// other caller of rs485Enable()/rs485Disable() in this codebase). Called
+// from inside rs485Enable()/rs485Disable() themselves, AFTER the real
+// digitalWrite() -- this is the single point every existing call site
+// (taskModbusRead's gated poll, sensor-reconfig helpers, setup()) already
+// funnels through, so no other code changes anywhere. Purely observational:
+// reads state, writes nothing but its own tracking variable. Intended to be
+// removed, along with rs485Enable()/rs485Disable()'s one added call each,
+// FifoDriver_GetInternalStateNameForDiag(), and s_lastEnPinLoggedState, once
+// this investigation concludes.
+static void LogEnPinTransition(uint8_t newState) {
+  if (newState == s_lastEnPinLoggedState) {
+    return;  // no change -- not a transition, nothing to log
+  }
+  s_lastEnPinLoggedState = newState;
+  FifoPhase phase = FifoDriver_GetPhase();
+  Serial.printf("[EN-DIAG] GPIO42 -> %s FifoState=%s FifoPhase=%d busOwner=%s t=%lums\n",
+                (newState == HIGH) ? "HIGH" : "LOW",
+                FifoDriver_GetInternalStateNameForDiag(),
+                static_cast<int>(phase),
+                (phase == FifoPhase::ACTIVE) ? "FIFO" : "MODBUS/OTHER",
+                (unsigned long)millis());
 }
 
-static inline void rs485Disable() {
+// [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY, auto-restart runtime-verification
+// investigation, not a permanent production feature] `caller` is an
+// optional, defaulted diagnostic tag identifying WHICH of this codebase's
+// several call sites invoked rs485Enable()/rs485Disable() this time (Task
+// 5.1/5.2 identified more than one: the Task 4.6 EN-ownership tracker, the
+// normal-polling gate, the stuck-detection auto-restart path, the NaN/Inf
+// guard, and setup()). Purely a string label passed through to logging --
+// digitalWrite(RS485_EN_PIN, ...) itself, and every existing call site that
+// does not pass this new optional argument, are byte-for-byte unchanged.
+static inline void rs485Enable(const char* caller = "?") {
+  digitalWrite(RS485_EN_PIN, LOW);
+  LogEnPinTransition(LOW);  // [Task 4.5 -- TEMPORARY DIAGNOSTIC ONLY]
+  // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY] fires on EVERY call (not just
+  // actual level transitions, unlike LogEnPinTransition() above) so the
+  // caller identity is never lost even on a same-level repeat call.
+  Serial.printf("[EN-CALLER] rs485Enable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
+                caller, (int)FifoDriver_OwnsBus(),
+                (unsigned long)FifoDriver_GetAttemptNumberForDiag(), (unsigned long)millis());
+}
+
+static inline void rs485Disable(const char* caller = "?") {
   digitalWrite(RS485_EN_PIN, HIGH);
+  LogEnPinTransition(HIGH);  // [Task 4.5 -- TEMPORARY DIAGNOSTIC ONLY]
+  // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY] see rs485Enable()'s own comment.
+  Serial.printf("[EN-CALLER] rs485Disable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
+                caller, (int)FifoDriver_OwnsBus(),
+                (unsigned long)FifoDriver_GetAttemptNumberForDiag(), (unsigned long)millis());
 }
 
 // ============================================================================
@@ -4291,6 +4410,30 @@ static bool readCTR4A01Current(float &amps) {
  * Reads sensor data via RS485 and sends to queue
  * v15.0: 3 Modbus transactions -- VEL(0x3A) + TEMP(0x40) + FREQ(0x44) + CF/K(0x47)
  */
+// [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY, not a permanent production
+// feature] Bus-ownership instrumentation to prove/falsify the RS485
+// concurrent-access hypothesis (K-14 / err=226 cascade). Purely observational:
+// derives ownership from FifoDriver_GetPhase() (already-public API) and the
+// existing rs485Enable()/rs485Disable() poll window in taskModbusRead() --
+// does not touch fifo_driver.cpp/fifo_session.cpp/fifo_codec.cpp, does not
+// change FIFO retry/CRC/timing logic. Function body placed here, immediately
+// before its only call sites in taskModbusRead(), rather than near the top
+// of the file -- an earlier placement made this the file's first
+// function-with-a-body, which shifted the .ino auto-prototype insertion
+// point ahead of later typedefs (AnalysisReason_t, MqttOutboundTopic_t,
+// TelemetrySnapshot, ...) and broke unrelated forward declarations
+// (CLAUDE.md's documented auto-prototype hazard). The BusOwnerDiag enum
+// itself is declared near g_fifoTransport, above, since it must be visible
+// at the auto-prototype insertion point too. Intended to be removed once
+// Task 4.2A concludes.
+static BusOwnerDiag s_busOwnerDiag = BusOwnerDiag::NONE;
+static void FifoDiag_SetBusOwner(BusOwnerDiag newOwner) {
+  if (newOwner == s_busOwnerDiag) return;
+  static const char* const kBusOwnerNames[] = { "NONE", "MODBUS", "FIFO" };
+  Serial.printf("[BUS] BUS_OWNER -> %s\n", kBusOwnerNames[static_cast<int>(newOwner)]);
+  s_busOwnerDiag = newOwner;
+}
+
 void taskModbusRead(void* parameter) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xFrequency = pdMS_TO_TICKS(250);  // 250ms = 4Hz
@@ -4314,6 +4457,112 @@ void taskModbusRead(void* parameter) {
   while (1) {
     g_sensorReads++;
 
+    // [Task 4.1] Advance the FIFO driver by one bounded step, unconditionally,
+    // once per tick (SDS D-1/A-3) -- placed here, before any of this loop's
+    // three exit paths (restart continue/NaN-guard continue/normal end),
+    // specifically so it is never skipped regardless of which path a given
+    // iteration takes. Currently a no-op every call: nothing yet calls
+    // FifoDriver_Request(), so the driver never advances past S1 IDLE and
+    // never touches SerialRS485/modbus.* -- existing bus usage below is
+    // unaffected.
+    FifoDriver_Service();
+
+    // [Task 4.6] RS485 EN ownership for FIFO transactions -- the missing
+    // half of ADR-1 ("bus/EN ownership belongs entirely to
+    // taskModbusRead()'s OwnsBus() boundary") that Task 4.2 left unfilled
+    // (Task 4.2 only gated normal Modbus/CTR4A01 polling; nothing ever
+    // asserted RS485_EN_PIN for FifoDriver's OWN transactions -- confirmed
+    // by Task 4.5's direct GPIO capture: GPIO42 stayed HIGH/disabled for the
+    // entire S2_ARMED..S10_DRAIN span of every attempt). Edge-triggered on
+    // FifoDriver_OwnsBus() (already-public API, unchanged) so this is a
+    // single rs485Enable()/rs485Disable() call each time ownership starts or
+    // ends -- both functions, and RS485_EN_PIN itself, are unchanged; this
+    // adds a second, unconditional call site (previously the only call
+    // sites were inside the normal-polling gated block below and the
+    // sensor-reconfig helpers). No effect whenever FifoDriver never owns the
+    // bus (fifoOwnsBusNow stays false every tick) -- requirement 4,
+    // "preserve existing normal Modbus behavior."
+    {
+      static bool s_fifoOwnedBusLastTick = false;
+      bool fifoOwnsBusNow = FifoDriver_OwnsBus();
+      if (fifoOwnsBusNow && !s_fifoOwnedBusLastTick) {
+        rs485Enable("EN-TRACKER");   // FIFO acquiring the bus -- assert EN before any FIFO transmit
+      } else if (!fifoOwnsBusNow && s_fifoOwnedBusLastTick) {
+        rs485Disable("EN-TRACKER");  // FIFO ownership just ended -- release EN immediately
+      }
+      s_fifoOwnedBusLastTick = fifoOwnsBusNow;
+    }
+
+    // [Task 4.3 -- TEMPORARY, change-only phase logger, not a permanent
+    // production feature] Caller-side only (outside FifoDriver_Service()
+    // itself, so D-4's "no I/O inside the driver's own receive path" is
+    // untouched) -- logs exactly when FifoDriver_GetPhase() changes, never
+    // per-tick, to make every state transition observable for this
+    // validation exercise. Intended to be removed afterward.
+    {
+      static FifoPhase s_lastLoggedFifoPhase = FifoPhase::IDLE;
+      FifoPhase nowFifoPhase = FifoDriver_GetPhase();
+      if (nowFifoPhase != s_lastLoggedFifoPhase) {
+        Serial.printf("[Task4.3] FifoPhase %d -> %d @ t=%lums\n",
+                      static_cast<int>(s_lastLoggedFifoPhase),
+                      static_cast<int>(nowFifoPhase),
+                      (unsigned long)millis());
+        // [Task 4.2A -- TEMPORARY DIAGNOSTIC] FIFO transaction begin/end,
+        // logged at the same ACTIVE-boundary transitions the line above
+        // already detects. Requirement 4 (log ownership state on FIFO
+        // transaction begin/end).
+        if (nowFifoPhase == FifoPhase::ACTIVE) {
+          FifoDiag_SetBusOwner(BusOwnerDiag::FIFO);
+          Serial.printf("[FIFO] transaction begin (owner=FIFO) @ t=%lums\n", (unsigned long)millis());
+        } else if (s_lastLoggedFifoPhase == FifoPhase::ACTIVE) {
+          FifoDiag_SetBusOwner(BusOwnerDiag::NONE);
+          Serial.printf("[FIFO] transaction end (owner=NONE) @ t=%lums\n", (unsigned long)millis());
+        }
+        s_lastLoggedFifoPhase = nowFifoPhase;
+      }
+    }
+
+    // [Task 4.4 -- TEMPORARY, one-shot validation trigger, not a permanent
+    // production feature] Fires FifoDriver_Request() exactly once, gated on
+    // the REAL runtime conditions the admission gate itself checks --
+    // g_motorRunState == MOTOR_RUNNING, mqttClient.connected(), and
+    // g_modbusConsecErrors == 0 -- rather than a fixed millis() delay
+    // (Task 4.3's version fired at ~4.5s, before those conditions were
+    // genuinely true, and was correctly rejected with ERR_NOT_PERMITTED).
+    // millis() > 45000 is kept only as an additional floor, not the sole
+    // gate. No new task, no button/MQTT wiring, no compile-time flag -- a
+    // single runtime one-shot guard reusing this loop's existing tick.
+    // Intended to be removed once this validation exercise concludes.
+    {
+      static bool s_fifoOneShotTriggered = false;
+      bool fifoMotorReady = (g_motorRunState == MOTOR_RUNNING);
+      bool fifoMqttReady  = mqttClient.connected();
+      bool fifoSensorReady = (g_modbusConsecErrors == 0);
+      if (!s_fifoOneShotTriggered && millis() > 45000 &&
+          fifoMotorReady && fifoMqttReady && fifoSensorReady) {
+        s_fifoOneShotTriggered = true;
+        FifoCaptureRequest fifoReq{};
+        fifoReq.triggerSource = FifoTriggerSource::COMMISSIONING;
+        const char* fifoTag = "task4_4";
+        for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && fifoTag[ti] != '\0'; ti++) {
+          fifoReq.tag[ti] = fifoTag[ti];
+        }
+        fifoReq.requirePermissive = true;
+        fifoReq.maxRetries = 2;
+        fifoReq.admissionContext.motorStable    = (g_motorRunState == MOTOR_RUNNING);
+        fifoReq.admissionContext.sensorHealthy  = (g_modbusConsecErrors == 0);
+        fifoReq.admissionContext.mqttReconnecting = !mqttClient.connected();
+        uint32_t fifoHandle = 0;
+        FifoError fifoVerdict = FifoDriver_Request(&fifoReq, &fifoHandle);
+        Serial.printf("[Task4.3] FifoDriver_Request() verdict=%d handle=%lu "
+                      "motorStable=%d sensorHealthy=%d mqttReconnecting=%d\n",
+                      static_cast<int>(fifoVerdict), (unsigned long)fifoHandle,
+                      (int)fifoReq.admissionContext.motorStable,
+                      (int)fifoReq.admissionContext.sensorHealthy,
+                      (int)fifoReq.admissionContext.mqttReconnecting);
+      }
+    }
+
 #ifdef VERIFY_TEST
     // [VERIFY_TEST] Producer-side snapshot: one currentPollSeq per acquisition attempt.
     // Block-scoped (fresh each loop iteration) -- never reused across iterations.
@@ -4329,100 +4578,130 @@ void taskModbusRead(void* parameter) {
 
     bool success = true;
 
-    // Read all registers (blocking I/O, but isolated to this task)
-    // v15.0: 3 Modbus transactions -- VEL + TEMP + FREQ + CF/K
-    rs485Enable();
-    vTaskDelay(pdMS_TO_TICKS(5));  // 5ms stabilization
+    // [Task 4.2] RS485 bus arbitration (A-5) -- the normal Modbus/CTR4A01
+    // polling below is skipped entirely while FifoDriver owns the bus
+    // (internal S2_ARMED..S10_DRAIN). `success` stays true (its
+    // initialized value) and raw_x/y/z/... retain their previous
+    // iteration's values on a skipped cycle -- existing polling code
+    // itself, and all downstream success/stuck-detection/telemetry logic,
+    // are unchanged.
+    if (!FifoDriver_OwnsBus()) {
+      // [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY] Requirement 3: whenever a
+      // normal Modbus poll begins, log whether FifoDriver currently owns the
+      // bus, BEFORE this task issues any modbus.* call. Now nested inside
+      // the Task 4.2 gate -- fifoOwnsBusNow will always be false here post-
+      // fix (a "poll start (fifoOwnsBus=1)" line would mean the gate failed
+      // to prevent entry).
+      {
+        bool fifoOwnsBusNow = (FifoDriver_GetPhase() == FifoPhase::ACTIVE);
+        Serial.printf("[MODBUS] poll start (fifoOwnsBus=%d)\n", (int)fifoOwnsBusNow);
+        FifoDiag_SetBusOwner(fifoOwnsBusNow ? BusOwnerDiag::FIFO : BusOwnerDiag::MODBUS);
+      }
 
-    // Transaction 1: Velocity RMS X, Y, Z (§6.4.14-16)
-    // VRMSX=0x50, VRMSY=0x5C, VRMSZ=0x68 (ไม่ consecutive -- อ่านแยก 3 ครั้ง)
-    // Scaling: raw / 1000.0f → mm/s (True RMS, ไม่ต้อง × 0.7071)
-    if (modbus.readHoldingRegisters(REG_VRMS_X, 1) == modbus.ku8MBSuccess) {
-      raw_x = (int16_t)modbus.getResponseBuffer(0);
-    } else {
-      success = false; retryCount++;
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
+      // Read all registers (blocking I/O, but isolated to this task)
+      // v15.0: 3 Modbus transactions -- VEL + TEMP + FREQ + CF/K
+      rs485Enable("NORMAL-POLL");
+      vTaskDelay(pdMS_TO_TICKS(5));  // 5ms stabilization
 
-    if (modbus.readHoldingRegisters(REG_VRMS_Y, 1) == modbus.ku8MBSuccess) {
-      raw_y = (int16_t)modbus.getResponseBuffer(0);
-    } else {
-      success = false; retryCount++;
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    if (modbus.readHoldingRegisters(REG_VRMS_Z, 1) == modbus.ku8MBSuccess) {
-      raw_z = (int16_t)modbus.getResponseBuffer(0);
-    } else {
-      success = false; retryCount++;
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    // Transaction 2a: Temperature (0x40)
-    if (modbus.readHoldingRegisters(REG_TEMPERATURE, 1) == modbus.ku8MBSuccess) {
-      raw_temp = (int16_t)modbus.getResponseBuffer(0);
-    } else {
-      success = false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    // Transaction 2b: Frequency X, Y, Z (3 consecutive registers 0x44~0x46)
-    if (modbus.readHoldingRegisters(REG_FREQ_X, 3) == modbus.ku8MBSuccess) {
-      raw_fx = (uint16_t)modbus.getResponseBuffer(0);
-      raw_fy = (uint16_t)modbus.getResponseBuffer(1);
-      raw_fz = (uint16_t)modbus.getResponseBuffer(2);
-    } else {
-      raw_fx = 0;
-      raw_fy = 0;
-      raw_fz = 0;
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    // Transaction 3: CFX (0x47) + KX (0x48) -- Accel Crest Factor & Kurtosis [v15.0]
-    // Optional -- ถ้า fail ปล่อยค่าเดิม (0) ไม่กระทบ success หลัก
-    if (modbus.readHoldingRegisters(REG_CFX, 2) == modbus.ku8MBSuccess) {
-      raw_cfx = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.14
-      raw_kx  = (uint16_t)modbus.getResponseBuffer(1);
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    // Transaction 4: CFY (0x53) + KY (0x54) -- Y-axis [v15.1]
-    if (modbus.readHoldingRegisters(REG_CFY, 2) == modbus.ku8MBSuccess) {
-      raw_cfy = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.15
-      raw_ky  = (uint16_t)modbus.getResponseBuffer(1);
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    // Transaction 5: CFZ (0x5F) + KZ (0x60) -- Z-axis [v15.1]
-    if (modbus.readHoldingRegisters(REG_CFZ, 2) == modbus.ku8MBSuccess) {
-      raw_cfz = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.16
-      raw_kz  = (uint16_t)modbus.getResponseBuffer(1);
-    }
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    // Transaction 6: Peak Velocity X,Y,Z (3 consecutive registers 0x3A~0x3C) [DESIGN-0004]
-    // Datasheet §6.4.6 worked example: 50 03 00 3A 00 03 -- single 3-register block read
-    if (modbus.readHoldingRegisters(REG_PEAK_X, 3) == modbus.ku8MBSuccess) {
-      raw_peak_x = (int16_t)modbus.getResponseBuffer(0);
-      raw_peak_y = (int16_t)modbus.getResponseBuffer(1);
-      raw_peak_z = (int16_t)modbus.getResponseBuffer(2);
-    }
-    // ทั้ง T3/T4/T5/T6 เป็น optional -- ไม่ set success = false ถ้า fail
-
-    // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
-    // Cadence gating + result storage only -- readCTR4A01Current() owns the
-    // slave-ID switch/restore (shares this RS485-enabled window, runs before
-    // rs485Disable() below).
-    localData.current_valid = false;
-    if (millis() - s_lastCurrentSampleMs >= CURRENT_SAMPLE_INTERVAL_MS) {
-      s_lastCurrentSampleMs = millis();
-      // [PHASE2-EXPERIMENT] single controlled inter-frame delay before the only
-      // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
+      // Transaction 1: Velocity RMS X, Y, Z (§6.4.14-16)
+      // VRMSX=0x50, VRMSY=0x5C, VRMSZ=0x68 (ไม่ consecutive -- อ่านแยก 3 ครั้ง)
+      // Scaling: raw / 1000.0f → mm/s (True RMS, ไม่ต้อง × 0.7071)
+      if (modbus.readHoldingRegisters(REG_VRMS_X, 1) == modbus.ku8MBSuccess) {
+        raw_x = (int16_t)modbus.getResponseBuffer(0);
+      } else {
+        success = false; retryCount++;
+      }
       vTaskDelay(pdMS_TO_TICKS(5));
-      localData.current_valid = readCTR4A01Current(localData.current_a);
-    }
 
-    rs485Disable();
+      if (modbus.readHoldingRegisters(REG_VRMS_Y, 1) == modbus.ku8MBSuccess) {
+        raw_y = (int16_t)modbus.getResponseBuffer(0);
+      } else {
+        success = false; retryCount++;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      if (modbus.readHoldingRegisters(REG_VRMS_Z, 1) == modbus.ku8MBSuccess) {
+        raw_z = (int16_t)modbus.getResponseBuffer(0);
+      } else {
+        success = false; retryCount++;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // Transaction 2a: Temperature (0x40)
+      if (modbus.readHoldingRegisters(REG_TEMPERATURE, 1) == modbus.ku8MBSuccess) {
+        raw_temp = (int16_t)modbus.getResponseBuffer(0);
+      } else {
+        success = false;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // Transaction 2b: Frequency X, Y, Z (3 consecutive registers 0x44~0x46)
+      if (modbus.readHoldingRegisters(REG_FREQ_X, 3) == modbus.ku8MBSuccess) {
+        raw_fx = (uint16_t)modbus.getResponseBuffer(0);
+        raw_fy = (uint16_t)modbus.getResponseBuffer(1);
+        raw_fz = (uint16_t)modbus.getResponseBuffer(2);
+      } else {
+        raw_fx = 0;
+        raw_fy = 0;
+        raw_fz = 0;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // Transaction 3: CFX (0x47) + KX (0x48) -- Accel Crest Factor & Kurtosis [v15.0]
+      // Optional -- ถ้า fail ปล่อยค่าเดิม (0) ไม่กระทบ success หลัก
+      if (modbus.readHoldingRegisters(REG_CFX, 2) == modbus.ku8MBSuccess) {
+        raw_cfx = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.14
+        raw_kx  = (uint16_t)modbus.getResponseBuffer(1);
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // Transaction 4: CFY (0x53) + KY (0x54) -- Y-axis [v15.1]
+      if (modbus.readHoldingRegisters(REG_CFY, 2) == modbus.ku8MBSuccess) {
+        raw_cfy = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.15
+        raw_ky  = (uint16_t)modbus.getResponseBuffer(1);
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // Transaction 5: CFZ (0x5F) + KZ (0x60) -- Z-axis [v15.1]
+      if (modbus.readHoldingRegisters(REG_CFZ, 2) == modbus.ku8MBSuccess) {
+        raw_cfz = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.16
+        raw_kz  = (uint16_t)modbus.getResponseBuffer(1);
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // Transaction 6: Peak Velocity X,Y,Z (3 consecutive registers 0x3A~0x3C) [DESIGN-0004]
+      // Datasheet §6.4.6 worked example: 50 03 00 3A 00 03 -- single 3-register block read
+      if (modbus.readHoldingRegisters(REG_PEAK_X, 3) == modbus.ku8MBSuccess) {
+        raw_peak_x = (int16_t)modbus.getResponseBuffer(0);
+        raw_peak_y = (int16_t)modbus.getResponseBuffer(1);
+        raw_peak_z = (int16_t)modbus.getResponseBuffer(2);
+      }
+      // ทั้ง T3/T4/T5/T6 เป็น optional -- ไม่ set success = false ถ้า fail
+
+      // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
+      // Cadence gating + result storage only -- readCTR4A01Current() owns the
+      // slave-ID switch/restore (shares this RS485-enabled window, runs before
+      // rs485Disable() below).
+      localData.current_valid = false;
+      if (millis() - s_lastCurrentSampleMs >= CURRENT_SAMPLE_INTERVAL_MS) {
+        s_lastCurrentSampleMs = millis();
+        // [PHASE2-EXPERIMENT] single controlled inter-frame delay before the only
+        // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
+        vTaskDelay(pdMS_TO_TICKS(5));
+        localData.current_valid = readCTR4A01Current(localData.current_a);
+      }
+
+      rs485Disable("NORMAL-POLL");
+
+      // [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY] Modbus poll window ended.
+      // Only clear ownership to NONE if FIFO isn't concurrently ACTIVE --
+      // otherwise this would incorrectly mask a still-in-progress FIFO
+      // transaction (its own end transition is logged separately, above,
+      // at the ACTIVE-boundary phase-change site).
+      if (FifoDriver_GetPhase() != FifoPhase::ACTIVE) {
+        FifoDiag_SetBusOwner(BusOwnerDiag::NONE);
+      }
+    }
 
     if (success) {
       // -- + ??????????: Reset consecutive error counter --
@@ -4568,10 +4847,37 @@ void taskModbusRead(void* parameter) {
 
       // --- ??? Restart ????? axis ??? stuck ??? threshold ---
       if (needRestart) {
-        rs485Enable();
+        // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY, auto-restart runtime-
+        // verification investigation, not a permanent production feature]
+        // needRestart-just-became-true + restartSensorViaModbus() entry,
+        // with the exact FIFO-ownership/phase/attempt context Task 5.1/5.2
+        // identified as unguarded. This is the single point that answers
+        // "was a FIFO session ACTIVE when auto-restart fired?".
+        uint32_t t5_3EntryMs = millis();
+        Serial.printf("[RESTART-DIAG] needRestart=true axis=%s fifoOwnsBus=%d "
+                      "fifoPhase=%d attempt=%lu t=%lums\n",
+                      stuckAxis, (int)FifoDriver_OwnsBus(),
+                      static_cast<int>(FifoDriver_GetPhase()),
+                      (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
+                      (unsigned long)t5_3EntryMs);
+        rs485Enable("STUCK-RESTART");
         vTaskDelay(pdMS_TO_TICKS(5));
 
-        if (restartSensorViaModbus(stuckAxis)) {
+        Serial.printf("[RESTART-DIAG] restartSensorViaModbus() ENTRY axis=%s "
+                      "fifoOwnsBus=%d fifoPhase=%d attempt=%lu t=%lums\n",
+                      stuckAxis, (int)FifoDriver_OwnsBus(),
+                      static_cast<int>(FifoDriver_GetPhase()),
+                      (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
+                      (unsigned long)millis());
+        bool restartOk = restartSensorViaModbus(stuckAxis);
+        Serial.printf("[RESTART-DIAG] restartSensorViaModbus() EXIT ok=%d axis=%s "
+                      "fifoOwnsBus=%d fifoPhase=%d attempt=%lu elapsedMs=%lu t=%lums\n",
+                      (int)restartOk, stuckAxis, (int)FifoDriver_OwnsBus(),
+                      static_cast<int>(FifoDriver_GetPhase()),
+                      (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
+                      (unsigned long)(millis() - t5_3EntryMs), (unsigned long)millis());
+
+        if (restartOk) {
           Serial.printf("[SENSOR] + Auto-restart OK (axis=%s), monitoring recovery...\n", stuckAxis);
         } else {
           Serial.printf("[SENSOR] x Auto-restart FAILED (axis=%s), retry after cooldown\n", stuckAxis);
@@ -4581,7 +4887,7 @@ void taskModbusRead(void* parameter) {
           g_vzStuckCount = 0;
         }
 
-        rs485Disable();
+        rs485Disable("STUCK-RESTART");
 
         // Reset timing ????? restart ??????? ~3 ??????
         xLastWakeTime = xTaskGetTickCount();
@@ -4677,7 +4983,7 @@ void taskModbusRead(void* parameter) {
                       localData.vel_peak_y,
                       localData.vel_peak_z);
         // ไม่ set localData.valid = true → State Machine ไม่รับค่านี้
-        rs485Disable();
+        rs485Disable("NAN-GUARD");
         xLastWakeTime = xTaskGetTickCount();
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
         continue;
@@ -7648,8 +7954,14 @@ void logResetReason() {
   Preferences resetPrefs;
   if (resetPrefs.begin("boot", false)) {
     g_rebootCount = resetPrefs.getUInt("count", 0) + 1;
+    // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY] NVS write entry/exit markers.
+    // NOTE: setup()-time only, before any task/FIFO activity exists --
+    // instrumented for completeness, not expected to correlate with
+    // anything in a 240s runtime capture.
+    Serial.printf("[NVS_BEGIN] %lu\n", (unsigned long)millis());
     resetPrefs.putUInt("count", g_rebootCount);
     resetPrefs.end();
+    Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
   }
 
   // Print banner
@@ -7860,7 +8172,7 @@ void setup() {
   digitalWrite(PIN_BUZZER, LOW);
   digitalWrite(BUILTIN_LED, LOW);
   digitalWrite(PIN_LED_CLOUD, LOW);
-  rs485Enable();
+  rs485Enable("SETUP");
 
   Serial.println("[Init] GPIO configured");
 
@@ -7920,8 +8232,61 @@ void setup() {
   }
 
   // Initialize Modbus
+  // [v16.6.1-fifo] RX buffer sized for FIFO dump transfers (SDS P-1): the
+  // default 256B buffer gives only ~267ms of headroom against the 250ms
+  // taskModbusRead() cadence (6% margin) -- insufficient once a 6146B FIFO
+  // dump exists to receive. 2048B gives 8.5x margin. Normal Modbus responses
+  // are <=37B, so this has no effect on existing polling behavior.
+  SerialRS485.setRxBufferSize(2048);
   SerialRS485.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
   modbus.begin(MODBUS_SLAVE_ID, SerialRS485);
+
+  // [Task 4.1] Bind the FIFO transport and initialize the driver, exactly
+  // once, right after SerialRS485.begin()/modbus.begin() -- satisfies
+  // Uart485Transport_Init()'s documented precondition (serial->begin()
+  // already called) and FifoDriver_Init()'s "once per boot" contract.
+  // The driver is otherwise dormant: nothing calls FifoDriver_Request()
+  // yet, so it never touches the RS485 bus in current production
+  // operation -- this call alone changes no existing behavior.
+  Uart485Transport_Init(&g_fifoTransport, &SerialRS485);
+  FifoDriver_Init(&g_fifoTransport);
+  // [Task 4.4 -- TEMPORARY DIAGNOSTIC ONLY, retry-root-cause investigation,
+  // not a permanent production feature] Register a Serial-backed sink for
+  // fifo_driver.cpp's optional diagnostic hook (default nullptr/no-op) --
+  // a non-capturing lambda converts to the plain C function pointer
+  // FifoDriver_SetDiagLogger() expects, so no separate named function or
+  // forward declaration is needed. Intended to be removed, along with
+  // FifoDriver_SetDiagLogger() itself and every DiagLog() call site it
+  // guards in fifo_driver.cpp, once this investigation concludes.
+  FifoDriver_SetDiagLogger([](const char* msg) { Serial.println(msg); });
+  // [Task 7.1 -- TEMPORARY DIAGNOSTIC ONLY, UART receive-error
+  // instrumentation & validation, not a permanent production feature]
+  // Registers fifo_driver.cpp's pull-based UART-stats hooks with the
+  // concrete Uart485Transport_* accessors -- this is the ONLY place in the
+  // whole project that lets fifo_driver.cpp (transport-agnostic) obtain
+  // UART-485-specific data, without ever #including fifo_transport_uart485.h
+  // itself. Intended to be removed, along with FifoDriver_SetUartDiagHooks()
+  // and its call sites in fifo_driver.cpp/.h, once this investigation
+  // concludes.
+  {
+    FifoUartDiagHooks uartHooks{};
+    uartHooks.getStats = [](uint32_t* outFifoOvf, uint32_t* outBufferFull,
+                             uint32_t* outBreak, uint32_t* outFrameErr,
+                             uint32_t* outParityErr) {
+      Uart485Transport_GetErrorCounts(outFifoOvf, outBufferFull, outBreak,
+                                       outFrameErr, outParityErr);
+    };
+    uartHooks.resetStats = []() { Uart485Transport_ResetErrorCounts(); };
+    FifoDriver_SetUartDiagHooks(uartHooks);
+  }
+  // [Task 7.4 -- TEMPORARY DIAGNOSTIC ONLY, ReadDump timing audit, not a
+  // permanent production feature] Registers Arduino's micros() as
+  // fifo_driver.cpp's microsecond-clock pull hook. Intended to be removed,
+  // along with FifoDriver_SetMicrosProvider() and its call sites, once this
+  // investigation concludes.
+  FifoDriver_SetMicrosProvider([]() -> uint32_t { return micros(); });
+  Serial.printf("[Init] FifoDriver initialized, phase=%d\n",
+                static_cast<int>(FifoDriver_GetPhase()));
 
   Serial.printf("[Init] Modbus @ %d baud, ID: 0x%02X\n",
                 MODBUS_BAUDRATE, MODBUS_SLAVE_ID);

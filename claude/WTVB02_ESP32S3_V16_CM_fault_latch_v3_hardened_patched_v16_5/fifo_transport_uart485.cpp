@@ -35,7 +35,52 @@ static Uart485TransportCtx s_ctx = {nullptr};
 // ----------------------------------------------------------------------------
 static volatile bool s_rxOverflow = false;
 
+// ----------------------------------------------------------------------------
+// [Task 7.1 -- UART receive-error instrumentation, diagnostic only, not a
+// permanent production feature] Cumulative, per-error-type counters for all
+// five hardwareSerial_error_t values Uart485Transport_OnReceiveError() can
+// receive. Same single-writer (event task) / single-reader
+// (taskModbusRead, via Uart485Transport_GetErrorCounts()) pattern as
+// s_rxOverflow above -- plain volatile uint32_t, matching this codebase's
+// established single-word cross-task convention. Reset only by
+// Uart485Transport_ResetErrorCounts(), never implicitly.
+// ----------------------------------------------------------------------------
+static volatile uint32_t s_countFifoOvf    = 0;
+static volatile uint32_t s_countBufferFull = 0;
+static volatile uint32_t s_countBreak      = 0;
+static volatile uint32_t s_countFrameErr   = 0;
+static volatile uint32_t s_countParityErr  = 0;
+
 static void Uart485Transport_OnReceiveError(hardwareSerial_error_t err) {
+  // [Task 7.1] Count every one of the five detectable error types --
+  // Task 6.2's audit found UART_BREAK_ERROR/UART_FRAME_ERROR/
+  // UART_PARITY_ERROR reached this function and were silently dropped.
+  // s_rxOverflow/hadOverflow()'s existing behavior, directly below,
+  // is completely unchanged.
+  switch (err) {
+    case UART_FIFO_OVF_ERROR:    s_countFifoOvf++;    break;
+    case UART_BUFFER_FULL_ERROR: s_countBufferFull++; break;
+    case UART_BREAK_ERROR:       s_countBreak++;       break;
+    case UART_FRAME_ERROR:       s_countFrameErr++;    break;
+    case UART_PARITY_ERROR:      s_countParityErr++;   break;
+    default:                     break;  // UART_NO_ERROR never reaches this callback
+  }
+  // [Task 7.3 -- TEMPORARY DIAGNOSTIC ONLY, NVS/flash correlation
+  // investigation, not a permanent production feature] Print immediately,
+  // from this callback's own context (HardwareSerial's _uartEventTask,
+  // HardwareSerial.cpp:275-322), the instant a FIFO_OVF/BUFFER_FULL event
+  // is detected -- this is the earliest possible point to timestamp the
+  // event for correlation against [NVS_BEGIN]/[NVS_END] markers printed
+  // elsewhere. Uses this file's existing direct Serial.printf() access
+  // (already established as safe in this file -- unlike fifo_driver.cpp,
+  // this is the one file in the whole FIFO driver that is Arduino-
+  // dependent by design, see this file's own top-of-file comment).
+  if (err == UART_FIFO_OVF_ERROR || err == UART_BUFFER_FULL_ERROR) {
+    Serial.printf("[UART_ERR]\ntimestamp_ms=%lu\ntype=%s\nfifo_ovf_count=%lu\nbuffer_full_count=%lu\n",
+                  (unsigned long)millis(),
+                  (err == UART_FIFO_OVF_ERROR) ? "UART_FIFO_OVF" : "UART_BUFFER_FULL",
+                  (unsigned long)s_countFifoOvf, (unsigned long)s_countBufferFull);
+  }
   if (err == UART_FIFO_OVF_ERROR || err == UART_BUFFER_FULL_ERROR) {
     s_rxOverflow = true;
   }
@@ -191,6 +236,29 @@ static bool Uart485Transport_HadOverflow(void* ctx) {
   bool had = s_rxOverflow;
   s_rxOverflow = false;
   return had;
+}
+
+// [Task 7.1] See fifo_transport_uart485.h for the full contract. Read-only --
+// unlike hadOverflow() above, does not clear anything.
+void Uart485Transport_GetErrorCounts(uint32_t* outFifoOvf, uint32_t* outBufferFull,
+                                      uint32_t* outBreak, uint32_t* outFrameErr,
+                                      uint32_t* outParityErr) {
+  *outFifoOvf    = s_countFifoOvf;
+  *outBufferFull = s_countBufferFull;
+  *outBreak      = s_countBreak;
+  *outFrameErr   = s_countFrameErr;
+  *outParityErr  = s_countParityErr;
+}
+
+// [Task 7.1] See fifo_transport_uart485.h for the full contract -- caller's
+// responsibility to invoke this only at a genuinely new FIFO session's
+// admission, never between retry attempts of the same session.
+void Uart485Transport_ResetErrorCounts() {
+  s_countFifoOvf    = 0;
+  s_countBufferFull = 0;
+  s_countBreak      = 0;
+  s_countFrameErr   = 0;
+  s_countParityErr  = 0;
 }
 
 // ----------------------------------------------------------------------------
