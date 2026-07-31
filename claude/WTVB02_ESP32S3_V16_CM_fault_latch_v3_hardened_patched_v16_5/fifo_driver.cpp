@@ -1,5 +1,5 @@
 // ============================================================================
-// [v16.6.12-fifo] fifo_driver.cpp
+// [v16.6.13-fifo] fifo_driver.cpp
 //
 // See fifo_driver.h for FifoState. This file implements two internal
 // entry points, matching the frozen Implementation Plan's own two-task
@@ -97,6 +97,17 @@
 // D-14 / G-1: the single named compile-time constant Task 3.4 owns, per
 // the frozen Implementation Plan's own Task 3.3(old)/3.4(new) Risks field.
 // TRUEPOLL is the provisional default (SS11.3). Unchanged from Task 3.4.
+//
+// [v16.6.13-fifo] PURELISTEN is the selected mode. The WTVB05 streams both
+// its progress frames and the full dump autonomously after a single RAWFIFO
+// request -- confirmed by an independent RS485 bus capture showing exactly
+// one `50 03 00 2C 00 01` request per attempt followed by four unsolicited
+// progress frames -- so TRUEPOLL's per-progress-frame re-request is not
+// required by the protocol. TRUEPOLL was evaluated on hardware and rejected:
+// it reproduced the same receive failure while roughly quadrupling UART
+// FIFO-overflow events, its extra request/turnaround cycles adding bus and
+// service overhead without benefit. See ADR-0005 for the receive-path
+// analysis that supersedes this line of investigation.
 // ----------------------------------------------------------------------------
 #define FIFO_PROTOCOL_MODE_TRUEPOLL   0
 #define FIFO_PROTOCOL_MODE_PURELISTEN 1
