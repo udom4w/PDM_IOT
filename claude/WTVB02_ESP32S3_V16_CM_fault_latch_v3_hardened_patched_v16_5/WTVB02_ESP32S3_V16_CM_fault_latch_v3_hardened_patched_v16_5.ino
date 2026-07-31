@@ -239,6 +239,12 @@ constexpr uint32_t FORCE_CURRENT_STOPPED_MS = 5000;   // [ms] continuous below-O
 #define PIN_BUTTON_ENTER 6  // ENTER button (alarm acknowledge)
 #define PIN_BUZZER 7        // Buzzer output
 
+// [Production Trigger, Commit 6] ENTER double-click window for the
+// OPERATOR_BUTTON FIFO trigger. Recommended 350-400ms range; 400ms chosen
+// for slack on physical hardware. Measured click-release-to-click-release,
+// not press-to-press (see taskButtonHandler()'s own comment for why).
+#define ENTER_DOUBLECLICK_WINDOW_MS 400
+
 // --- RS485 Pins ---
 #define RS485_RX_PIN 38
 #define RS485_TX_PIN 39
@@ -562,6 +568,7 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define QUEUE_SIZE_DISPLAY 3
 #define QUEUE_SIZE_MAINT 2   // V14.4: maintenance reset events (Button -> Network)
 #define QUEUE_SIZE_MQTT_OUTBOUND 6  // [v16.5] Section 7 Item 3: dormant outbound MQTT queue (Analytics -> Network4G, not wired yet)
+#define QUEUE_SIZE_FIFO_TRIGGER 1  // [Broker, Commit 1] SDS SS14.1 depth-1 request queue (any task -> taskModbusRead)
 #ifdef VERIFY_TEST
 #define QUEUE_SIZE_DIAG_SNAPSHOT 1  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
 #endif
@@ -1244,10 +1251,11 @@ ModbusMaster modbus;
 // [Task 4.1] FIFO transport binding -- global/static storage, matching
 // Uart485Transport_Init()'s own documented lifetime precondition ("must
 // back ctx with static/global storage, never a stack-local"). Bound once
-// in setup() via Uart485Transport_Init(&g_fifoTransport, &SerialRS485);
-// the FifoDriver itself is otherwise entirely dormant -- nothing calls
-// FifoDriver_Request() yet, so this never touches the RS485 bus in
-// current production operation.
+// in setup() via Uart485Transport_Init(&g_fifoTransport, &SerialRS485).
+// [Broker, Commit 1] The commissioning trigger in taskModbusRead() now
+// enqueues onto queueFifoTrigger, and taskModbusRead()'s drain block calls
+// FifoDriver_Request() -- so this DOES touch the RS485 bus once the
+// commissioning gate's runtime conditions are met, not never.
 FifoTransport g_fifoTransport;
 
 // [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY] Type-only declaration, placed
@@ -1632,6 +1640,7 @@ typedef struct {
 // and consumer (Network4G) are wired in later checklist items; dormant here.
 typedef enum {
   MQTT_OUTBOUND_TOPIC_TREND = 0,   // only topic routed through this queue (design v16.5 §3.2)
+  MQTT_OUTBOUND_TOPIC_EVENT = 1,   // [Result Consumer, Commit 2] SDS SS18.3 /event -- FIFO capture metadata
 } MqttOutboundTopic_t;
 
 typedef struct {
@@ -1640,6 +1649,23 @@ typedef struct {
   size_t              len;
   uint8_t             qos;
 } MqttOutboundMsg_t;
+
+// [Broker, Commit 1] Cross-core/cross-task FIFO trigger intent -- the SDS
+// SS14.1-specified "xQueueSend/xQueueReceive, depth 1" request-submission
+// mechanism, hosted here in the .ino rather than in fifo_driver.cpp because
+// fifo_driver.cpp has zero #include dependencies by design (host-test
+// compatibility, fifo_driver.h's own documented contract) and structurally
+// cannot hold a FreeRTOS queue. Depth 1 is deliberate, not a starting size:
+// xQueueSend(...,0) is non-blocking and drops a new intent if one is
+// already queued, so a second producer while one is in flight is discarded
+// rather than accumulated (SDS SS14.2's own stated rationale for depth 1).
+// Producer: any task, any core (SDS A-2). Consumer: taskModbusRead() only --
+// the ONLY function in this firmware permitted to call FifoDriver_Request().
+typedef struct {
+  FifoTriggerSource source;
+  char              tag[FIFO_TAG_MAXLEN];
+  bool              requirePermissive;
+} FifoTriggerIntent_t;
 
 // ============================================================================
 // FREERTOS HANDLES
@@ -1660,6 +1686,7 @@ QueueHandle_t queueButtonEvent = NULL;
 QueueHandle_t queueDisplayUpdate = NULL;
 QueueHandle_t queueMaintEvent = NULL;   // V14.4: maintenance reset (Button -> Network)
 QueueHandle_t queueMqttOutboundTrend = NULL;  // [v16.5] Section 7 Item 3: dormant, no producer/consumer wired yet
+QueueHandle_t queueFifoTrigger = NULL;  // [Broker, Commit 1] FIFO trigger intent (any task -> taskModbusRead), depth 1
 #ifdef VERIFY_TEST
 QueueHandle_t queueDiagSnapshot = NULL;  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
 #endif
@@ -2974,6 +3001,40 @@ static void checkAndLatchFault(const VibrationData_t* data,
                   (unsigned long)snapTs, snapRms, snapKurt,
                   (unsigned long)snapCount);
   }
+
+  // [Production Trigger, Commit 5] A new fault latch has just been asserted
+  // (fresh latch or a higher-severity OVERWRITE -- the SKIP branch above
+  // already returned early for anything else, so every path that reaches
+  // here is a genuinely new latch). taskStateMachine() (this function's
+  // caller, Core 0) is a DIFFERENT task from taskModbusRead() (also Core 0,
+  // but a distinct FreeRTOS task/priority) -- per the Trigger Broker's own
+  // contract (Commit 1), this NEVER calls FifoDriver_Request() directly; it
+  // only enqueues onto queueFifoTrigger, exactly like the commissioning
+  // producer. The depth-1, non-blocking xQueueSend(...,0) IS the duplicate-
+  // trigger guard: if an earlier trigger (this or the commissioning
+  // one-shot) is still undrained, this send fails and is dropped here --
+  // no second queue entry, no retry. If the queue is empty because a
+  // capture is already ACTIVE or in COOLDOWN, this send succeeds, but
+  // FifoDriver_Request()'s own admission gates (S1_IDLE, cooldown, circuit
+  // breaker, result-held -- fifo_driver.cpp, unmodified) then reject it
+  // with the appropriate ERR_* code on the next taskModbusRead() drain
+  // tick. Either way: at most one FifoDriver_Request() attempt per latch,
+  // never retried (requirement 5).
+  {
+    FifoTriggerIntent_t faultIntent{};
+    faultIntent.source = FifoTriggerSource::FAULT_LATCH;
+    const char* faultTag = "fault_latch";
+    for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && faultTag[ti] != '\0'; ti++) {
+      faultIntent.tag[ti] = faultTag[ti];
+    }
+    faultIntent.requirePermissive = true;
+    if (xQueueSend(queueFifoTrigger, &faultIntent, 0) != pdTRUE) {
+      Serial.println("[LATCH] FifoTriggerIntent enqueue SKIPPED (queue full -- capture already pending)");
+    } else {
+      Serial.println("[LATCH] FifoTriggerIntent enqueued source=FAULT_LATCH");
+    }
+  }
+
   return;  // mutex ถูก release ไปแล้วข้างบน ไม่ต้องทำอีก
 }
 
@@ -4442,9 +4503,169 @@ static void FifoDiag_SetBusOwner(BusOwnerDiag newOwner) {
   s_busOwnerDiag = newOwner;
 }
 
+// [Result Consumer, Commit 2] Human-readable stringification for the FIFO
+// /event payload -- same pattern as faultEventStr()/faultSeverity() above.
+// `default` falls back to "UNKNOWN" rather than failing to compile, so a
+// future addition to fifo_types.h's frozen enums (out of this file's
+// control, per Task 6.1's own scope) degrades gracefully instead of
+// breaking this build.
+static const char* fifoTriggerSourceStr(FifoTriggerSource src) {
+  switch (src) {
+    case FifoTriggerSource::FAULT_LATCH:     return "FAULT_LATCH";
+    case FifoTriggerSource::OPERATOR_BUTTON: return "OPERATOR_BUTTON";
+    case FifoTriggerSource::SCHEDULED:       return "SCHEDULED";
+    case FifoTriggerSource::COMMISSIONING:   return "COMMISSIONING";
+    default:                                 return "UNKNOWN";
+  }
+}
+
+static const char* fifoPhaseStr(FifoPhase phase) {
+  switch (phase) {
+    case FifoPhase::IDLE:             return "IDLE";
+    case FifoPhase::ACTIVE:           return "ACTIVE";
+    case FifoPhase::RESULT_READY:     return "RESULT_READY";
+    case FifoPhase::COOLDOWN:         return "COOLDOWN";
+    case FifoPhase::BREAKER_DISABLED: return "BREAKER_DISABLED";
+    default:                          return "UNKNOWN";
+  }
+}
+
+static const char* fifoErrorStr(FifoError err) {
+  switch (err) {
+    case FifoError::NONE:                    return "NONE";
+    case FifoError::ERR_NO_RESPONSE:         return "ERR_NO_RESPONSE";
+    case FifoError::ERR_INTER_BYTE_TIMEOUT:  return "ERR_INTER_BYTE_TIMEOUT";
+    case FifoError::ERR_DESYNC_LIMIT:        return "ERR_DESYNC_LIMIT";
+    case FifoError::ERR_RX_OVERFLOW:         return "ERR_RX_OVERFLOW";
+    case FifoError::ERR_CRC_MISMATCH:        return "ERR_CRC_MISMATCH";
+    case FifoError::ERR_BAD_TYPE_BYTE:       return "ERR_BAD_TYPE_BYTE";
+    case FifoError::ERR_PROGRESS_REGRESSION: return "ERR_PROGRESS_REGRESSION";
+    case FifoError::ERR_PROGRESS_OVERRUN:    return "ERR_PROGRESS_OVERRUN";
+    case FifoError::ERR_BUSY:                return "ERR_BUSY";
+    case FifoError::ERR_NOT_PERMITTED:       return "ERR_NOT_PERMITTED";
+    case FifoError::ERR_RESULT_NOT_RELEASED: return "ERR_RESULT_NOT_RELEASED";
+    case FifoError::ERR_ABORTED:             return "ERR_ABORTED";
+    case FifoError::ERR_RETRY_EXHAUSTED:     return "ERR_RETRY_EXHAUSTED";
+    case FifoError::ERR_CIRCUIT_OPEN:        return "ERR_CIRCUIT_OPEN";
+    default:                                 return "UNKNOWN";
+  }
+}
+
+// [Result Consumer, Commit 2] SDS SS9.1's "handleFifoCaptureCompletion()" --
+// the ONE function in this firmware permitted to call
+// FifoDriver_TryAcquireResult() and FifoDriver_ReleaseResult() (Freeze
+// Review Finding 2.1; fifo_driver.h's own documented "Intended call site:
+// exactly one"). Called unconditionally, once per tick, immediately after
+// FifoDriver_Service() in taskModbusRead() -- same task, same core as every
+// other driver interaction, so no cross-core synchronization is needed
+// around the acquire/release pair itself.
+//
+// Zero-copy (SDS D-10, SS9.1): result.x/y/z are never read or dereferenced
+// here -- the 6144-byte waveform is never copied, never serialized, and
+// never published. Only the ~500 B metadata/diagnostics block (SS8.2) is
+// built and enqueued. Egress of the waveform itself is Implementation Plan
+// Phase 7 (deferred, D-20) and is out of this commit's scope.
+//
+// Every successful acquire is followed by a release on every path out of
+// this function: one early `return` before acquisition (nothing ready --
+// nothing was acquired, nothing to release) and one fall-through path after
+// acquisition that always reaches FifoDriver_ReleaseResult() at the end, so
+// no path can leave a result held. Holds no lock and calls nothing blocking
+// between acquire and release -- enqueueMqttOutbound() is a non-blocking
+// xQueueSend(...,0) -- so hold time is bounded by local JSON serialization
+// only (SDS SS17.5's 30 s watchdog budget is never approached).
+static void handleFifoCaptureCompletion() {
+  FifoCaptureResult result;
+  if (!FifoDriver_TryAcquireResult(&result)) {
+    return;  // nothing ready, or already held -- nothing to do this tick
+  }
+
+  // result.tag has no null-termination guarantee at the struct level (fixed
+  // FIFO_TAG_MAXLEN=16 bytes) -- copy defensively before treating it as a
+  // C string for JSON serialization.
+  char tagSafe[FIFO_TAG_MAXLEN + 1];
+  memcpy(tagSafe, result.tag, FIFO_TAG_MAXLEN);
+  tagSafe[FIFO_TAG_MAXLEN] = '\0';
+
+  StaticJsonDocument<640> evDoc;
+  evDoc["plant_id"]               = PLANT_ID;
+  evDoc["machine_id"]             = MACHINE_ID;
+  evDoc["event"]                  = "fifo_capture";
+  evDoc["capture_id"]             = result.captureId;
+  evDoc["tag"]                    = tagSafe;
+  evDoc["trigger"]                = fifoTriggerSourceStr(result.triggerSource);
+  evDoc["status"]                 = fifoPhaseStr(result.status);
+  evDoc["error"]                  = fifoErrorStr(result.error);
+  evDoc["sample_count"]           = result.sampleCount;
+  evDoc["sr_index"]               = result.srIndexAtCapture;
+  evDoc["sr_hz"]                  = result.srHz;
+  evDoc["t_request_ms"]           = result.tRequestMs;
+  evDoc["t_complete_ms"]          = result.tCompleteMs;
+  evDoc["duration_ms"]            = (result.tCompleteMs >= result.tRequestMs)
+                                       ? (result.tCompleteMs - result.tRequestMs) : 0;
+  evDoc["temp_c"]                 = result.tempCAtCapture;
+  evDoc["motor_state"]            = result.motorStateAtCapture;
+  evDoc["rpm"]                    = result.rpmAtCapture;
+  evDoc["poll_count"]             = result.pollCount;
+  evDoc["progress_frame_count"]   = result.progressFrameCount;
+  evDoc["crc_error_count"]        = result.crcErrorCount;
+  evDoc["retry_count"]            = result.retryCount;
+  evDoc["last_progress_fill"]     = result.lastProgressFill;
+  evDoc["desync_bytes_discarded"] = result.desyncBytesDiscarded;
+
+  char evBuf[700];
+  size_t szEvt = serializeJson(evDoc, evBuf, sizeof(evBuf));
+
+  bool enqueued = enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_EVENT, evBuf, szEvt, MQTT_QOS);
+  Serial.printf("[FIFO-RESULT] captureId=%lu trigger=%s error=%s enqueued=%d szEvt=%u\n",
+                (unsigned long)result.captureId, fifoTriggerSourceStr(result.triggerSource),
+                fifoErrorStr(result.error), (int)enqueued, (unsigned)szEvt);
+
+  // Mandatory (SDS A-6/A-7 ownership contract): release on this, the only
+  // path that reaches here, regardless of whether the enqueue above
+  // succeeded -- a dropped /event is acceptable (enqueueMqttOutbound()'s own
+  // "drop-newest with counter" overflow policy); a stuck driver is not.
+  FifoDriver_ReleaseResult();
+}
+
 void taskModbusRead(void* parameter) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xFrequency = pdMS_TO_TICKS(250);  // 250ms = 4Hz
+  // [v16.6h] Dual service cadence -- 250ms for normal sensor polling, 10ms
+  // while FifoDriver owns the RS485 bus. The faster FIFO cadence is a
+  // correctness requirement of the RAWFIFO capture, not a performance tuning
+  // choice, for the reason below.
+  //
+  // FrameCodec_Step() performs exactly ONE bounded sub-action per call
+  // (fifo_codec.cpp: ScanAnchor() stops the instant the `50 03` anchor is
+  // matched and never consumes past it; ReadType() reads at most one byte and
+  // never loops; the progress tail is 4 bytes), and FifoDriver_Service()
+  // invokes it exactly once per iteration of this loop. Through the
+  // anchor/type/progress phases the driver therefore consumes only 0-3 bytes
+  // per cycle.
+  //
+  // The WTVB05 meanwhile streams its 6149-byte dump autonomously at 9600 baud
+  // = ~240 bytes per 250ms. At a 250ms cadence that is a ~100:1
+  // producer/consumer mismatch: the 2048-byte IDF RX ring buffer saturates in
+  // ~8 cycles (~2s), after which the 128-byte UART hardware FIFO overflows and
+  // bytes are discarded by the peripheral before the parser can ever read them
+  // -- yielding either a truncated frame (ERR_INTER_BYTE_TIMEOUT) or a
+  // byte-shifted frame that fails CRC. At 10ms the driver drains the ring
+  // buffer every cycle and its occupancy stays under ~40 of 2048 bytes.
+  //
+  // [DESIGN-0005] INVARIANT: normal Modbus polling remains at 250ms. Two
+  // independent, load-bearing reasons:
+  //   1. STUCK_THRESHOLD is a READ COUNT, not a duration -- the stuck-axis
+  //      detection it drives is calibrated to this cadence ("5 reads x 250ms
+  //      = 1.25s"). A faster poll rate would trip it on the sensor's own
+  //      not-yet-updated registers, causing spurious restartSensorViaModbus()
+  //      calls, which set g_modbusConsecErrors != 0 and in turn block FIFO
+  //      admission (see the request gate's sensorHealthy term).
+  //   2. The normal-poll body cannot fit a shorter period: ~9 Modbus
+  //      transactions at 9600 baud plus 10x vTaskDelay(5ms) is ~230ms.
+  // Scoping the faster cadence to the FifoDriver_OwnsBus() window -- where
+  // normal polling is already skipped entirely -- keeps both reasons intact.
+  const TickType_t xFrequencyFifo = pdMS_TO_TICKS(10);
 
   VibrationData_t localData;
   int16_t raw_x, raw_y, raw_z, raw_temp;
@@ -4465,15 +4686,59 @@ void taskModbusRead(void* parameter) {
   while (1) {
     g_sensorReads++;
 
+    // [Broker, Commit 1] Drain at most one pending FIFO trigger intent,
+    // before FifoDriver_Service() advances the driver this tick, so an
+    // intent enqueued on a prior tick (or by a different task/core) is
+    // turned into an admission attempt using THIS tick's freshest
+    // g_motorRunState/g_modbusConsecErrors/mqttClient state -- never a
+    // producer's possibly-stale snapshot (the data-freshness risk Task 6.2
+    // of the Implementation Plan calls out). fifo_driver.cpp reads only
+    // FifoAdmissionContext, never a .ino global directly, so this is the
+    // one place that must populate it. taskModbusRead() is the ONLY
+    // function in this firmware permitted to call FifoDriver_Request() --
+    // this drain block is the sole call site.
+    {
+      FifoTriggerIntent_t fifoIntent;
+      if (xQueueReceive(queueFifoTrigger, &fifoIntent, 0) == pdPASS) {
+        FifoCaptureRequest fifoReq{};
+        fifoReq.triggerSource = fifoIntent.source;
+        for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && fifoIntent.tag[ti] != '\0'; ti++) {
+          fifoReq.tag[ti] = fifoIntent.tag[ti];
+        }
+        fifoReq.requirePermissive = fifoIntent.requirePermissive;
+        fifoReq.maxRetries = 2;
+        fifoReq.admissionContext.motorStable      = (g_motorRunState == MOTOR_RUNNING);
+        fifoReq.admissionContext.sensorHealthy    = (g_modbusConsecErrors == 0);
+        fifoReq.admissionContext.mqttReconnecting = !mqttClient.connected();
+        uint32_t fifoHandle = 0;
+        FifoError fifoVerdict = FifoDriver_Request(&fifoReq, &fifoHandle);
+        Serial.printf("[FIFO-BROKER] FifoDriver_Request() source=%d verdict=%d handle=%lu "
+                      "motorStable=%d sensorHealthy=%d mqttReconnecting=%d\n",
+                      static_cast<int>(fifoIntent.source),
+                      static_cast<int>(fifoVerdict), (unsigned long)fifoHandle,
+                      (int)fifoReq.admissionContext.motorStable,
+                      (int)fifoReq.admissionContext.sensorHealthy,
+                      (int)fifoReq.admissionContext.mqttReconnecting);
+      }
+    }
+
     // [Task 4.1] Advance the FIFO driver by one bounded step, unconditionally,
     // once per tick (SDS D-1/A-3) -- placed here, before any of this loop's
     // three exit paths (restart continue/NaN-guard continue/normal end),
     // specifically so it is never skipped regardless of which path a given
-    // iteration takes. Currently a no-op every call: nothing yet calls
-    // FifoDriver_Request(), so the driver never advances past S1 IDLE and
-    // never touches SerialRS485/modbus.* -- existing bus usage below is
-    // unaffected.
+    // iteration takes. Not a no-op: the broker drain block immediately
+    // above may have just admitted a request, so Service() genuinely
+    // advances the driver -- existing bus usage below is unaffected while
+    // no request is pending, exactly as before.
     FifoDriver_Service();
+
+    // [Result Consumer, Commit 2] Immediately after Service(), every tick --
+    // so a capture that just reached S11_RESULT_READY this tick is acquired,
+    // published, and released before this loop iteration ends, minimizing
+    // hold time. Internally a no-op (early return) whenever no result is
+    // ready, matching FifoDriver_Service() call above's own unconditional
+    // per-tick placement (SDS D-1/A-3 style).
+    handleFifoCaptureCompletion();
 
     // [Task 4.6] RS485 EN ownership for FIFO transactions -- the missing
     // half of ADR-1 ("bus/EN ownership belongs entirely to
@@ -4501,73 +4766,41 @@ void taskModbusRead(void* parameter) {
       s_fifoOwnedBusLastTick = fifoOwnsBusNow;
     }
 
-    // [Task 4.3 -- TEMPORARY, change-only phase logger, not a permanent
-    // production feature] Caller-side only (outside FifoDriver_Service()
-    // itself, so D-4's "no I/O inside the driver's own receive path" is
-    // untouched) -- logs exactly when FifoDriver_GetPhase() changes, never
-    // per-tick, to make every state transition observable for this
-    // validation exercise. Intended to be removed afterward.
-    {
-      static FifoPhase s_lastLoggedFifoPhase = FifoPhase::IDLE;
-      FifoPhase nowFifoPhase = FifoDriver_GetPhase();
-      if (nowFifoPhase != s_lastLoggedFifoPhase) {
-        Serial.printf("[Task4.3] FifoPhase %d -> %d @ t=%lums\n",
-                      static_cast<int>(s_lastLoggedFifoPhase),
-                      static_cast<int>(nowFifoPhase),
-                      (unsigned long)millis());
-        // [Task 4.2A -- TEMPORARY DIAGNOSTIC] FIFO transaction begin/end,
-        // logged at the same ACTIVE-boundary transitions the line above
-        // already detects. Requirement 4 (log ownership state on FIFO
-        // transaction begin/end).
-        if (nowFifoPhase == FifoPhase::ACTIVE) {
-          FifoDiag_SetBusOwner(BusOwnerDiag::FIFO);
-          Serial.printf("[FIFO] transaction begin (owner=FIFO) @ t=%lums\n", (unsigned long)millis());
-        } else if (s_lastLoggedFifoPhase == FifoPhase::ACTIVE) {
-          FifoDiag_SetBusOwner(BusOwnerDiag::NONE);
-          Serial.printf("[FIFO] transaction end (owner=NONE) @ t=%lums\n", (unsigned long)millis());
-        }
-        s_lastLoggedFifoPhase = nowFifoPhase;
-      }
-    }
-
-    // [Task 4.4 -- TEMPORARY, one-shot validation trigger, not a permanent
-    // production feature] Fires FifoDriver_Request() exactly once, gated on
-    // the REAL runtime conditions the admission gate itself checks --
-    // g_motorRunState == MOTOR_RUNNING, mqttClient.connected(), and
-    // g_modbusConsecErrors == 0 -- rather than a fixed millis() delay
-    // (Task 4.3's version fired at ~4.5s, before those conditions were
-    // genuinely true, and was correctly rejected with ERR_NOT_PERMITTED).
-    // millis() > 45000 is kept only as an additional floor, not the sole
-    // gate. No new task, no button/MQTT wiring, no compile-time flag -- a
-    // single runtime one-shot guard reusing this loop's existing tick.
-    // Intended to be removed once this validation exercise concludes.
+    // [Task 4.4 -- TEMPORARY DIAGNOSTIC ONLY, one-shot commissioning
+    // trigger, not a permanent production feature. Restored: release
+    // cleanup had deleted this block, leaving it as the sole firmware
+    // producer of FIFO capture requests -- removing it left the qualified
+    // H4 receive path (ADR-0005) unreachable by any caller. Gated on the
+    // same real runtime conditions the driver's own admission gate
+    // re-checks -- g_motorRunState == MOTOR_RUNNING, mqttClient.connected(),
+    // g_modbusConsecErrors == 0 -- with millis() > 45000 kept only as an
+    // additional floor, not the sole gate. [Broker, Commit 1] This block no
+    // longer calls FifoDriver_Request() itself: it only enqueues an intent
+    // onto queueFifoTrigger (SDS SS14.1's specified request-submission
+    // mechanism); taskModbusRead()'s drain block, above, performs the
+    // actual call on the next tick using freshly-read admission state.
+    // Intended to be replaced by a real production trigger, not removed
+    // until one lands.
     {
       static bool s_fifoOneShotTriggered = false;
-      bool fifoMotorReady = (g_motorRunState == MOTOR_RUNNING);
-      bool fifoMqttReady  = mqttClient.connected();
+      bool fifoMotorReady  = (g_motorRunState == MOTOR_RUNNING);
+      bool fifoMqttReady   = mqttClient.connected();
       bool fifoSensorReady = (g_modbusConsecErrors == 0);
       if (!s_fifoOneShotTriggered && millis() > 45000 &&
           fifoMotorReady && fifoMqttReady && fifoSensorReady) {
         s_fifoOneShotTriggered = true;
-        FifoCaptureRequest fifoReq{};
-        fifoReq.triggerSource = FifoTriggerSource::COMMISSIONING;
+        FifoTriggerIntent_t fifoIntent{};
+        fifoIntent.source = FifoTriggerSource::COMMISSIONING;
         const char* fifoTag = "task4_4";
         for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && fifoTag[ti] != '\0'; ti++) {
-          fifoReq.tag[ti] = fifoTag[ti];
+          fifoIntent.tag[ti] = fifoTag[ti];
         }
-        fifoReq.requirePermissive = true;
-        fifoReq.maxRetries = 2;
-        fifoReq.admissionContext.motorStable    = (g_motorRunState == MOTOR_RUNNING);
-        fifoReq.admissionContext.sensorHealthy  = (g_modbusConsecErrors == 0);
-        fifoReq.admissionContext.mqttReconnecting = !mqttClient.connected();
-        uint32_t fifoHandle = 0;
-        FifoError fifoVerdict = FifoDriver_Request(&fifoReq, &fifoHandle);
-        Serial.printf("[Task4.3] FifoDriver_Request() verdict=%d handle=%lu "
-                      "motorStable=%d sensorHealthy=%d mqttReconnecting=%d\n",
-                      static_cast<int>(fifoVerdict), (unsigned long)fifoHandle,
-                      (int)fifoReq.admissionContext.motorStable,
-                      (int)fifoReq.admissionContext.sensorHealthy,
-                      (int)fifoReq.admissionContext.mqttReconnecting);
+        fifoIntent.requirePermissive = true;
+        if (xQueueSend(queueFifoTrigger, &fifoIntent, 0) != pdTRUE) {
+          Serial.println("[Task4.4] FifoTriggerIntent enqueue FAILED (queue full)");
+        } else {
+          Serial.println("[Task4.4] FifoTriggerIntent enqueued source=COMMISSIONING tag=task4_4");
+        }
       }
     }
 
@@ -5068,7 +5301,14 @@ void taskModbusRead(void* parameter) {
     }
 
     // Wait until next cycle (precise timing)
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // [v16.6h] Cadence selection -- see xFrequencyFifo's declaration at the
+    // top of this function for the full rationale. This is the only delay
+    // site that needs gating: the loop's other two vTaskDelayUntil() call
+    // sites (the stuck-restart and NaN-guard early-continues) are nested
+    // inside the `if (!FifoDriver_OwnsBus())` block above and so are
+    // unreachable while FIFO owns the bus -- they always resolve to 250ms.
+    vTaskDelayUntil(&xLastWakeTime,
+                    FifoDriver_OwnsBus() ? xFrequencyFifo : xFrequency);
   }
 }
 
@@ -5824,8 +6064,12 @@ void taskNetwork(void* parameter) {
     if (mqttConnSnap19 && queueMqttOutboundTrend != NULL) {
       MqttOutboundMsg_t outMsg;
       if (xQueueReceive(queueMqttOutboundTrend, &outMsg, 0) == pdPASS) {
-        const char* outTopic = (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_TREND)
-                                 ? g_mqttTopicTrend : NULL;
+        // [Result Consumer, Commit 2] MQTT_OUTBOUND_TOPIC_EVENT added -- routes
+        // handleFifoCaptureCompletion()'s /event payload the same way TREND
+        // already routes to /trend; no other change to this drain's logic.
+        const char* outTopic = (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_TREND)  ? g_mqttTopicTrend
+                              : (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_EVENT) ? g_mqttTopicEvent
+                              : NULL;
         if (outTopic != NULL) {
           if (mqttClient.publish(outTopic, outMsg.payload, (int)outMsg.len, false, outMsg.qos)) {
             g_network.publishCount++;
@@ -6100,6 +6344,19 @@ void taskButtonHandler(void* parameter) {
   bool lastStateEnter = HIGH;
   uint32_t pressStartEnter = 0;
   bool processedEnter = false;
+  // [Production Trigger, Commit 6] ENTER double-click detector state --
+  // deliberately NOT reset on press-edge (unlike pressStartEnter/
+  // processedEnter above): a double-click must be recognized ACROSS the
+  // gap between the first click's release and the second click's press, so
+  // this state has to survive that gap. Persists across multiple press/
+  // release cycles. Armed (awaitingSecondEnterClick=true,
+  // firstEnterReleaseMs=now) on every qualifying release, in the release
+  // branch below; consumed (checked and cleared) on the NEXT press-edge,
+  // in the press branch below -- window is release-to-press, per the
+  // revised design, so the second click's own hold duration never affects
+  // recognition.
+  bool     awaitingSecondEnterClick = false;
+  uint32_t firstEnterReleaseMs      = 0;
 
   Serial.println("[CORE 1] Button task started (SELECT + ENTER)");
 
@@ -6286,6 +6543,43 @@ void taskButtonHandler(void* parameter) {
     if (currentStateEnter == LOW && lastStateEnter == HIGH) {
       pressStartEnter = now;
       processedEnter = false;
+
+      // [Production Trigger, Commit 6] OPERATOR_BUTTON double-click fire
+      // check -- evaluated HERE, at this press-edge, not at this press's
+      // eventual release: the window is first-click-release ->
+      // second-click-press, so recognition happens the instant the second
+      // press begins and is never affected by how long that second press
+      // is then held (matches common double-click UX -- e.g. a mouse
+      // double-click does not require a fast second release, only a fast
+      // second press). Purely additive -- does not alter
+      // pressStartEnter/processedEnter's reset above in any way.
+      if (awaitingSecondEnterClick &&
+          (now - firstEnterReleaseMs) <= ENTER_DOUBLECLICK_WINDOW_MS) {
+        // Second click's press arrived within the window -- valid
+        // double-click. Consume the gesture (reset immediately) BEFORE
+        // touching the queue, so this pair can never be reused by a
+        // subsequent third press.
+        awaitingSecondEnterClick = false;
+
+        FifoTriggerIntent_t buttonIntent{};
+        buttonIntent.source = FifoTriggerSource::OPERATOR_BUTTON;
+        const char* buttonTag = "operator_btn";
+        for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && buttonTag[ti] != '\0'; ti++) {
+          buttonIntent.tag[ti] = buttonTag[ti];
+        }
+        buttonIntent.requirePermissive = true;
+        // The depth-1, non-blocking send IS the duplicate/queue-depth
+        // guard (same pattern as Commit 1's commissioning producer and
+        // Commit 5's FAULT_LATCH producer) -- never calls
+        // FifoDriver_Request() directly, never retried if rejected here
+        // or later by the driver's own admission gates (ACTIVE/COOLDOWN
+        // -> ERR_BUSY, fifo_driver.cpp, unmodified).
+        if (xQueueSend(queueFifoTrigger, &buttonIntent, 0) != pdTRUE) {
+          Serial.println("[CORE 1] ENTER: double-click -> FifoTriggerIntent enqueue SKIPPED (queue full -- capture already pending)");
+        } else {
+          Serial.println("[CORE 1] ENTER: double-click -> FifoTriggerIntent enqueued source=OPERATOR_BUTTON");
+        }
+      }
     }
 
     // Detect hold duration (long press for alarm ACK)
@@ -6312,6 +6606,24 @@ void taskButtonHandler(void* parameter) {
         // Short press ENTER - Currently unused, can add functionality
         Serial.println("[CORE 1] ENTER: Short press");
         // Future: Toggle logging, reset stats, etc.
+
+        // [Production Trigger, Commit 6] Arms the double-click window for
+        // a POTENTIAL next press (recognition/firing itself happens at
+        // the next press-edge, above -- see that block's own comment).
+        // Reuses this branch's own existing condition (50-800ms,
+        // !processedEnter) as the double-click's debounce/qualifying-click
+        // floor -- deliberately not a separate mechanism, since a
+        // double-click's constituent clicks must themselves be genuine
+        // short presses, and this is already this button's established
+        // debounce window. Unconditional re-arm on every qualifying
+        // release (no "already awaiting" branch needed here anymore: the
+        // press-edge check above already consumed+cleared the flag if
+        // THIS click was itself a successful second click, so by the time
+        // execution reaches here that case is already handled). Does not
+        // alter the Serial.println() or "Future:" comment above in any way
+        // -- purely additive.
+        awaitingSecondEnterClick = true;
+        firstEnterReleaseMs      = now;
       }
     }
 
@@ -8253,9 +8565,11 @@ void setup() {
   // once, right after SerialRS485.begin()/modbus.begin() -- satisfies
   // Uart485Transport_Init()'s documented precondition (serial->begin()
   // already called) and FifoDriver_Init()'s "once per boot" contract.
-  // The driver is otherwise dormant: nothing calls FifoDriver_Request()
-  // yet, so it never touches the RS485 bus in current production
-  // operation -- this call alone changes no existing behavior.
+  // [Broker, Commit 1] The driver is no longer permanently dormant: the
+  // commissioning trigger (taskModbusRead()) enqueues onto queueFifoTrigger,
+  // and taskModbusRead()'s drain block calls FifoDriver_Request() once its
+  // runtime gate is satisfied. This Init() call itself still changes no
+  // behavior on its own -- it only binds the transport.
   Uart485Transport_Init(&g_fifoTransport, &SerialRS485);
   FifoDriver_Init(&g_fifoTransport);
   // [Task 4.4 -- TEMPORARY DIAGNOSTIC ONLY, retry-root-cause investigation,
@@ -8368,9 +8682,10 @@ void setup() {
   queueButtonEvent = xQueueCreate(QUEUE_SIZE_BUTTON, sizeof(ButtonEvent_t));
   queueDisplayUpdate = xQueueCreate(QUEUE_SIZE_DISPLAY, sizeof(DisplayCommand_t));
   queueMaintEvent = xQueueCreate(QUEUE_SIZE_MAINT, sizeof(MaintenanceEvent_t));  // V14.4
+  queueFifoTrigger = xQueueCreate(QUEUE_SIZE_FIFO_TRIGGER, sizeof(FifoTriggerIntent_t));  // [Broker, Commit 1]
 
   if (queueSensorData == NULL || queueButtonEvent == NULL || queueDisplayUpdate == NULL
-      || queueMaintEvent == NULL) {
+      || queueMaintEvent == NULL || queueFifoTrigger == NULL) {
     Serial.println("[FATAL] Failed to create queues!");
     while (1) delay(1000);
   }
