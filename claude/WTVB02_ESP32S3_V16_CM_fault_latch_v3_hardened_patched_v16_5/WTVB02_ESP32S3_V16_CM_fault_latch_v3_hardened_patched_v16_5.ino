@@ -1661,6 +1661,9 @@ typedef struct {
 // rather than accumulated (SDS SS14.2's own stated rationale for depth 1).
 // Producer: any task, any core (SDS A-2). Consumer: taskModbusRead() only --
 // the ONLY function in this firmware permitted to call FifoDriver_Request().
+// [ARCH-INVARIANT] docs/FIFO_TRIGGER_BROKER_INVARIANTS.md -- every trigger
+// producer enqueues one of these; none constructs a FifoCaptureRequest or
+// calls the driver directly.
 typedef struct {
   FifoTriggerSource source;
   char              tag[FIFO_TAG_MAXLEN];
@@ -1687,6 +1690,9 @@ QueueHandle_t queueDisplayUpdate = NULL;
 QueueHandle_t queueMaintEvent = NULL;   // V14.4: maintenance reset (Button -> Network)
 QueueHandle_t queueMqttOutboundTrend = NULL;  // [v16.5] Section 7 Item 3: dormant, no producer/consumer wired yet
 QueueHandle_t queueFifoTrigger = NULL;  // [Broker, Commit 1] FIFO trigger intent (any task -> taskModbusRead), depth 1
+// [ARCH-INVARIANT] The Trigger Broker's single admission point. Every
+// producer sends here; taskModbusRead()'s drain block is the only reader.
+// See docs/FIFO_TRIGGER_BROKER_INVARIANTS.md.
 #ifdef VERIFY_TEST
 QueueHandle_t queueDiagSnapshot = NULL;  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
 #endif
@@ -3028,6 +3034,7 @@ static void checkAndLatchFault(const VibrationData_t* data,
       faultIntent.tag[ti] = faultTag[ti];
     }
     faultIntent.requirePermissive = true;
+    // [ARCH-INVARIANT] producer #1/3 -- enqueue only, never FifoDriver_Request().
     if (xQueueSend(queueFifoTrigger, &faultIntent, 0) != pdTRUE) {
       Serial.println("[LATCH] FifoTriggerIntent enqueue SKIPPED (queue full -- capture already pending)");
     } else {
@@ -4551,6 +4558,9 @@ static const char* fifoErrorStr(FifoError err) {
   }
 }
 
+// [ARCH-INVARIANT] docs/FIFO_TRIGGER_BROKER_INVARIANTS.md invariant #3:
+// the only acquire/release site in the firmware. A second consumer would
+// either be rejected (result already held) or race this one's release.
 // [Result Consumer, Commit 2] SDS SS9.1's "handleFifoCaptureCompletion()" --
 // the ONE function in this firmware permitted to call
 // FifoDriver_TryAcquireResult() and FifoDriver_ReleaseResult() (Freeze
@@ -4697,6 +4707,10 @@ void taskModbusRead(void* parameter) {
     // one place that must populate it. taskModbusRead() is the ONLY
     // function in this firmware permitted to call FifoDriver_Request() --
     // this drain block is the sole call site.
+    // [ARCH-INVARIANT] docs/FIFO_TRIGGER_BROKER_INVARIANTS.md invariants
+    // #2/#5: the admission verdict below is decided entirely inside
+    // FifoDriver_Request() (fifo_driver.cpp, unmodified) -- this block
+    // never second-guesses it, never retries on rejection.
     {
       FifoTriggerIntent_t fifoIntent;
       if (xQueueReceive(queueFifoTrigger, &fifoIntent, 0) == pdPASS) {
@@ -4796,6 +4810,7 @@ void taskModbusRead(void* parameter) {
           fifoIntent.tag[ti] = fifoTag[ti];
         }
         fifoIntent.requirePermissive = true;
+        // [ARCH-INVARIANT] producer #2/3 -- enqueue only, never FifoDriver_Request().
         if (xQueueSend(queueFifoTrigger, &fifoIntent, 0) != pdTRUE) {
           Serial.println("[Task4.4] FifoTriggerIntent enqueue FAILED (queue full)");
         } else {
@@ -6574,6 +6589,7 @@ void taskButtonHandler(void* parameter) {
         // FifoDriver_Request() directly, never retried if rejected here
         // or later by the driver's own admission gates (ACTIVE/COOLDOWN
         // -> ERR_BUSY, fifo_driver.cpp, unmodified).
+        // [ARCH-INVARIANT] producer #3/3 -- enqueue only, never FifoDriver_Request().
         if (xQueueSend(queueFifoTrigger, &buttonIntent, 0) != pdTRUE) {
           Serial.println("[CORE 1] ENTER: double-click -> FifoTriggerIntent enqueue SKIPPED (queue full -- capture already pending)");
         } else {
