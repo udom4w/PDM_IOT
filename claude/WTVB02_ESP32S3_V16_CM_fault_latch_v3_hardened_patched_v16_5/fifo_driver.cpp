@@ -153,6 +153,18 @@ static FifoCaptureRequest s_pendingRequest;
 // duplicated/ambiguous state this task's requirements forbid.
 static bool s_retryPending = false;
 
+// [v16.6.15-fifo defect fix] Set by FifoDriver_Abort(), consulted by
+// HandleS10Drain()'s retry decision to suppress a retry after an explicit
+// abort. Deliberately a SEPARATE flag from s_result.retryCount -- the
+// previous implementation force-set retryCount to FIFO_MAX_RETRIES as the
+// suppression mechanism, which also leaks into the PUBLIC, telemetry-facing
+// FifoCaptureResult::retryCount (published as the MQTT /event's
+// "retry_count" field): an aborted capture with zero real retries reported
+// retry_count=2, misrepresenting what actually happened. This flag carries
+// the suppression signal instead, leaving retryCount an accurate count of
+// retries that actually occurred, for this case as for every other.
+static bool s_abortRequested = false;
+
 static FifoCaptureResult s_result;
 static uint32_t           s_captureIdCounter = 0;
 static uint16_t           s_attemptFillBaseline = 0;  // K-10 anchor, reset per attempt
@@ -429,6 +441,11 @@ static void HandleS1Idle() {
   s_result = FifoCaptureResult{};  // fresh, zero-initialized result
   s_result.captureId = s_pendingCaptureId;
   s_result.triggerSource = s_pendingRequest.triggerSource;
+  // [v16.6.15-fifo defect fix] A genuinely NEW session admission (this
+  // non-retry branch only) must not inherit a PRIOR session's abort --
+  // s_abortRequested's whole purpose is suppressing retries within the
+  // session it was raised for, never leaking into a later one.
+  s_abortRequested = false;
   for (size_t i = 0; i < FIFO_TAG_MAXLEN; i++) {
     s_result.tag[i] = s_pendingRequest.tag[i];
   }
@@ -885,6 +902,24 @@ static void LogReadDumpTiming(FifoSessionOutcome outcome, uint32_t stepDurationU
 
 static void HandleReceivingImpl(FifoTransport* t) {
   uint32_t now = t->nowMs(t->ctx);
+  // [v16.6.15-fifo defect fix] RX overflow check -- fifo_transport.h
+  // documents hadOverflow() as "the SOLE source of FifoError::ERR_RX_OVERFLOW
+  // ... without this member that error code has no way to ever be raised."
+  // Before this fix, the only call to hadOverflow() in this file was inside
+  // a diagnostics-only, nullptr-gated logging block (LogUartDrainSnapshot())
+  // that never wrote to s_result.error -- a real overflow (bytes dropped by
+  // the UART before this layer could read them) was silently absorbed and
+  // misattributed to whatever the corrupted remainder happened to produce
+  // (typically ERR_CRC_MISMATCH or ERR_BAD_TYPE_BYTE), never reported as
+  // what it actually was. Checked once per receiving tick, before anything
+  // else this tick, since an overflow means bytes were already lost and
+  // nothing else observed this tick can be trusted; mirrors the existing
+  // timeout branches' own shape (error + S9_VERIFY + return) below.
+  if (t->hadOverflow(t->ctx)) {
+    s_result.error = FifoError::ERR_RX_OVERFLOW;
+    s_state = FifoState::S9_VERIFY;
+    return;
+  }
   // [Task 4.8 -- TEMPORARY DIAGNOSTIC ONLY] snapshot BEFORE this tick's
   // FifoSession_Step()/FrameCodec_Step() call drains anything, reusing this
   // single t->available(t->ctx) call for both the existing Task 3.5
@@ -1139,6 +1174,29 @@ static void HandleReceivingImpl(FifoTransport* t) {
       s_result.error = (s_session.failReason == FifoSessionFailReason::BAD_FRAME_TYPE)
                             ? FifoError::ERR_BAD_TYPE_BYTE
                             : FifoError::ERR_DESYNC_LIMIT;
+      // [v16.6.15-fifo defect fix] s_result.desyncBytesDiscarded (published
+      // as the MQTT /event's "desync_bytes_discarded" field, ino
+      // handleFifoCaptureCompletion()) was never assigned anywhere in this
+      // file -- it stayed permanently 0 regardless of actual desync
+      // activity. Neither the live s_session.frameState.desyncBytesDiscarded
+      // NOR desyncBytesDiscardedBeforeStep works here: on the DESYNC_LIMIT
+      // path, FifoSession_Step() already called FrameCodecState_Reset()
+      // internally (fifo_session.cpp) before returning SESSION_FAILED,
+      // zeroing the live field before control reaches here, and the
+      // BEFORE-snapshot only reflects prior ticks, not this tick's own
+      // contribution when (as is typical) the scan crosses the threshold
+      // within a single call -- confirmed by direct test: both alternatives
+      // still reported 0. This file already has an established precedent
+      // for exactly this "value already reset" limitation --
+      // ComputeBytesConsumedThisTick()'s own SESSION_FAILED case, three
+      // lines below this one's own call site, returns `64u - desyncBefore`
+      // (the running total at termination equals MAX_DESYNC_BYTES,
+      // regardless of how many ticks the scan spanned, since the counter is
+      // monotonic non-decreasing until it triggers), citing fifo_codec.cpp's
+      // MAX_DESYNC_BYTES=64 (fifo_codec.cpp:118) with a disclosed small
+      // margin rather than exposing the private constant. Followed here
+      // identically, for the same reason.
+      s_result.desyncBytesDiscarded = 64u;  // MAX_DESYNC_BYTES, fifo_codec.cpp:118
       // [Task 4.4 -- TEMPORARY DIAGNOSTIC ONLY] "sensor response" + "failure reason"
       DiagLog("[FIFO-DIAG] attempt=%u SENSOR_RESPONSE=SESSION_FAILED reason=%s "
               "desyncBytesDiscarded=%lu t=%lums",
@@ -1231,7 +1289,11 @@ static void HandleS10Drain(FifoTransport* t) {
     return;  // not yet quiet long enough
   }
 
-  if (s_result.error != FifoError::NONE && s_result.retryCount < FIFO_MAX_RETRIES) {
+  if (s_result.error != FifoError::NONE && s_result.retryCount < FIFO_MAX_RETRIES &&
+      !s_abortRequested) {
+    // [v16.6.15-fifo defect fix] !s_abortRequested added -- see that flag's
+    // own declaration and FifoDriver_Abort() for why retryCount is no
+    // longer overloaded as the retry-suppression signal.
     // SS17.1 "Attempt level -> RETRY_ATTEMPT: full drain + bus release +
     // fresh attempt". Route through S1 IDLE for exactly one tick (bus
     // not held there) before re-arming -- SS17.3's "release the bus, and
@@ -1270,6 +1332,23 @@ static void HandleS10Drain(FifoTransport* t) {
           FifoErrorName(s_result.error), (unsigned)(s_result.retryCount + 1),
           (unsigned)s_consecutiveFailedSessions, (unsigned long)now);
   s_wasAcquiredThisHold = false;
+  // [v16.6.16-fifo defect fix] s_result.status (fifo_types.h: "driver phase
+  // at the moment this result was finalized") was never assigned anywhere
+  // in this file -- it stayed permanently at its zero-initialized default,
+  // FifoPhase::IDLE (enumerator 0), regardless of actual outcome. Confirmed
+  // on real hardware: a successful REMOTE_ON_DEMAND capture's published
+  // /event carried "status":"IDLE". This is the single, unconditional
+  // point every terminal outcome (success, retries-exhausted failure, and
+  // abort -- which routes through S13_FAILED -> S10_DRAIN -> here, same as
+  // every other terminal path) reaches exactly once, immediately before
+  // the only assignment of s_state = FifoState::S11_RESULT_READY in this
+  // file -- so RESULT_READY is the correct, single value: it's the phase
+  // the driver is actually in for the entire lifetime of this result, from
+  // finalization until a caller's TryAcquireResult()/ReleaseResult() cycle
+  // (FifoDriver_TryAcquireResult() itself gates on s_state ==
+  // S11_RESULT_READY, so every successful read of this field happens while
+  // that is true).
+  s_result.status = FifoPhase::RESULT_READY;
   s_state = FifoState::S11_RESULT_READY;
 }
 
@@ -1459,6 +1538,7 @@ void FifoDriver_Init(FifoTransport* transport) {
   s_requestPending = false;
   s_pendingRequest = FifoCaptureRequest{};
   s_retryPending = false;
+  s_abortRequested = false;  // [v16.6.15-fifo defect fix]
   s_result = FifoCaptureResult{};
   s_captureIdCounter = 0;
   s_pendingCaptureId = 0;
@@ -1519,19 +1599,26 @@ FifoError FifoDriver_Request(const FifoCaptureRequest* req, uint32_t* outHandle)
   // it exempts; this is the more conservative, invariant-preserving
   // reading, not the only grammatically possible one.
 
+  // Gate: circuit closed (not S14). [v16.6.15-fifo defect fix] MUST be
+  // checked BEFORE the driver-idle gate below: S14_DISABLED != S1_IDLE, so
+  // with the original ordering the idle gate always matched first and this
+  // branch was unreachable dead code -- ERR_CIRCUIT_OPEN could never
+  // actually be returned; every rejection while tripped surfaced as
+  // ERR_BUSY instead, which is externally visible via
+  // publishMqttRejectionEvent() and misrepresents recoverability (ERR_BUSY
+  // implies "try again shortly"; ERR_CIRCUIT_OPEN correctly implies
+  // "requires FifoDriver_ResetCircuitBreaker()"). Confirmed via the
+  // CircuitBreaker host test (test/test_fifo_driver.cpp) before this fix:
+  // verdict was ERR_BUSY, not ERR_CIRCUIT_OPEN, while BREAKER_DISABLED.
+  if (s_state == FifoState::S14_DISABLED) {
+    return FifoError::ERR_CIRCUIT_OPEN;
+  }
+
   // Gate: driver idle (S1 IDLE) -- also excludes the one-tick retry-
   // pending window (Task 3.5's s_retryPending), closing the exact race
   // flagged as remaining work in that task's own delivery.
   if (s_state != FifoState::S1_IDLE || s_retryPending) {
     return FifoError::ERR_BUSY;
-  }
-
-  // Gate: circuit closed (not S14) -- redundant with the S1-IDLE check
-  // above given this implementation (S14 is never S1), kept as its own
-  // explicit check to match the frozen table's own separate listing and
-  // stay correct even if that relationship ever changes.
-  if (s_state == FifoState::S14_DISABLED) {
-    return FifoError::ERR_CIRCUIT_OPEN;
   }
 
   // Gate: cooldown elapsed (>= T_COOLDOWN_MS since the last session
@@ -1635,10 +1722,15 @@ void FifoDriver_Abort(FifoError reason) {
     return;  // nothing active to abort
   }
   s_result.error = FifoError::ERR_ABORTED;
-  // Do not retry an explicit abort -- supply data the driver's OWN
-  // existing retry decision (HandleS10Drain(), Task 3.5) already
-  // respects, rather than this function deciding not to retry itself.
-  s_result.retryCount = FIFO_MAX_RETRIES;
+  // [v16.6.15-fifo defect fix] Do not retry an explicit abort. Previously
+  // this force-set s_result.retryCount to FIFO_MAX_RETRIES as the
+  // suppression signal HandleS10Drain()'s retry decision reads -- but that
+  // field is also the public, telemetry-facing FifoCaptureResult::retryCount
+  // (published as the MQTT /event's "retry_count"), so an abort with zero
+  // real retries falsely reported retry_count=2. s_abortRequested now
+  // carries the suppression signal instead (see its own declaration),
+  // leaving retryCount an accurate count of retries that actually occurred.
+  s_abortRequested = true;
   // Route directly to S13 FAILED -- S9's own job (translating a
   // FifoSessionOutcome into a FifoError) does not apply here, since this
   // function supplies the error directly; S13's existing, unchanged

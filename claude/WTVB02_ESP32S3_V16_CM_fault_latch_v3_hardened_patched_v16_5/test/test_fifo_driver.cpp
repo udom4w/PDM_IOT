@@ -264,6 +264,7 @@ static void Test_EndToEndSuccess() {
   FifoCaptureResult result{};
   TEST_ASSERT(FifoDriver_TryAcquireResult(&result), "acquire succeeds");
   TEST_ASSERT(result.error == FifoError::NONE, "result reports success");
+  TEST_ASSERT(result.status == FifoPhase::RESULT_READY, "status reflects RESULT_READY, not the zero-init default IDLE");
   TEST_ASSERT(result.captureId == handle, "captureId matches the handle Request() returned");
   TEST_ASSERT(result.sampleCount == 1024, "sampleCount == 1024");
   TEST_ASSERT(result.x[0] == xVals[0] && result.x[1023] == xVals[1023], "x samples decode correctly");
@@ -488,6 +489,7 @@ static void Test_RetryExhausted() {
   FifoCaptureResult result{};
   TEST_ASSERT(FifoDriver_TryAcquireResult(&result), "acquire succeeds");
   TEST_ASSERT(result.error == FifoError::ERR_BAD_TYPE_BYTE, "final error preserved from the last attempt");
+  TEST_ASSERT(result.status == FifoPhase::RESULT_READY, "status reflects RESULT_READY even on a failure outcome");
   TEST_ASSERT(result.retryCount == 2, "FIFO_MAX_RETRIES (2) retries were attempted, then stopped");
   FifoDriver_ReleaseResult();
 
@@ -525,6 +527,7 @@ static void Test_Abort() {
   FifoCaptureResult result{};
   TEST_ASSERT(FifoDriver_TryAcquireResult(&result), "acquire succeeds");
   TEST_ASSERT(result.error == FifoError::ERR_ABORTED, "result reports ERR_ABORTED");
+  TEST_ASSERT(result.status == FifoPhase::RESULT_READY, "status reflects RESULT_READY even for an aborted capture (routes through the same S10->S11 transition)");
   TEST_ASSERT(result.retryCount == 0, "abort does not trigger a retry");
   FifoDriver_ReleaseResult();
 
