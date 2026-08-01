@@ -45,6 +45,9 @@ line:
      scipy.signal.hilbert() (envelope = abs(hilbert(signal)); no band-pass
      filter yet -- that's a later phase) and records its path in the
      summary CSV (Phase 7B-3).
+  8. Computes a plain np.fft.rfft() of that same envelope signal (DC-
+     removed, no window function yet) per axis, plots it, and records its
+     dominant frequency and PNG path in the summary CSV (Phase 7B-4).
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -80,6 +83,8 @@ SUMMARY_CSV_FIELDS = [
     'dominant_freq_x_hz', 'dominant_freq_y_hz', 'dominant_freq_z_hz',
     'waveform_png', 'fft_png', 'spectrogram_png',
     'spectrogram_window', 'spectrogram_overlap', 'envelope_png', 'envelope_method',
+    'dominant_envelope_freq_x_hz', 'dominant_envelope_freq_y_hz', 'dominant_envelope_freq_z_hz',
+    'envelope_fft_png',
 ]
 
 
@@ -305,10 +310,12 @@ def analyze_one(cap, sr_hz, out_prefix):
     # later phase). Independent of FFT/spectrogram; does not read or
     # modify their results.
     envelope_x = np.array(cap['index']) / sr_hz if sr_hz else cap['index']
+    envelope_per_axis = {}
     fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
     for ax, (label, data) in zip(axs, axes.items()):
         ac = data - data.mean()
         envelope = np.abs(hilbert(ac))
+        envelope_per_axis[label] = envelope
         ax.plot(envelope_x, envelope, linewidth=0.8)
         ax.set_ylabel(f'{label} Envelope ({unit_label})')
         ax.grid(alpha=0.2)
@@ -321,6 +328,41 @@ def analyze_one(cap, sr_hz, out_prefix):
     plt.savefig(envelope_path, dpi=150)
     plt.close()
     print(f"  saved: {envelope_path}")
+
+    # --- FFT of the envelope per axis, Phase 7B-4 -- reuses the exact
+    # envelope arrays computed above (abs(hilbert(mean-removed waveform)));
+    # does not recompute the envelope differently. The envelope itself is a
+    # positive-only signal with a nonzero mean, so its own DC is removed
+    # here (envelope_ac = envelope - envelope.mean()) before the FFT --
+    # otherwise that DC bin would dominate and hide the modulation
+    # frequencies we're looking for. Same frequency-axis/peak-picking logic
+    # as the waveform FFT above; no window function in this phase.
+    fig, axs = plt.subplots(3, 1, figsize=(11, 8))
+    envelope_fft_summary = {}
+    for ax, label in zip(axs, ['X', 'Y', 'Z']):
+        envelope = envelope_per_axis[label]
+        envelope_ac = envelope - envelope.mean()
+
+        freqs = np.fft.rfftfreq(n, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(n, d=1.0)
+        mag = np.abs(np.fft.rfft(envelope_ac)) / n * 2
+        dominant_idx = np.argmax(mag[1:]) + 1  # skip DC bin
+        dominant_envelope_freq = freqs[dominant_idx]
+        envelope_fft_summary[label] = dominant_envelope_freq
+
+        ax.plot(freqs, mag, linewidth=0.8)
+        ax.set_ylabel(f'{label} Envelope FFT ({unit_label})' if is_phase7a else f'{label} Envelope FFT')
+        ax.grid(alpha=0.2)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        xunit = 'Hz' if sr_hz else 'cycles/1024-sample-block'
+        ax.set_title(f'{label}: dominant~{dominant_envelope_freq:.1f}{xunit}', fontsize=9, loc='left')
+    axs[-1].set_xlabel(f"Frequency ({'Hz' if sr_hz else 'cycles per 1024-sample block -- pass --sr-hz for real Hz'})")
+    fig.suptitle(f"FIFO-derived Envelope FFT — tag='{cap['tag']}'")
+    plt.tight_layout()
+    envelope_fft_path = f"{out_prefix}_{cap['tag']}_envelope_fft.png"
+    plt.savefig(envelope_fft_path, dpi=150)
+    plt.close()
+    print(f"  saved: {envelope_fft_path}")
 
     # --- Gravity-vector magnitude check (RFC-0006 §1, §4 Experiment 1) ---
     # Only meaningful for g-scaled DC values -- raw ADC counts have no fixed
@@ -364,6 +406,10 @@ def analyze_one(cap, sr_hz, out_prefix):
         'spectrogram_overlap': noverlap / nperseg,
         'envelope_png': envelope_path,
         'envelope_method': 'hilbert_raw',
+        'dominant_envelope_freq_x_hz': envelope_fft_summary['X'] if sr_hz else '',
+        'dominant_envelope_freq_y_hz': envelope_fft_summary['Y'] if sr_hz else '',
+        'dominant_envelope_freq_z_hz': envelope_fft_summary['Z'] if sr_hz else '',
+        'envelope_fft_png': envelope_fft_path,
     }
 
     return summary, row
