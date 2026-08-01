@@ -1,0 +1,820 @@
+﻿arduino-cli.exe : C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_driver.cpp: 
+In function 'void HandleReceivingImpl(FifoTransport*)':
+At line:4 char:1
++ & $cli compile --fqbn $fqbn --warnings all --clean $sketch 2>&1 | Tee ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\HP\Dow...foTransport*)'::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_driver.cpp:939:5: error: 
+'Serial' was not declared in this scope
+  939 |     Serial.printf("[XPORT-DIAG] t=%lums state=%s availBefore=%lu availAfter=%lu ringBufferDelta=%lu "  // TEMP_DIAG_VERIFY
+      |     ^~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_transport_uart485.cpp: In 
+function 'void Uart485Transport_OnReceiveError(hardwareSerial_error_t)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_transport_uart485.cpp:61:34: 
+warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+   61 |     case UART_FIFO_OVF_ERROR:    s_countFifoOvf++;    break;
+      |                                  ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_transport_uart485.cpp:62:34: 
+warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+   62 |     case UART_BUFFER_FULL_ERROR: s_countBufferFull++; break;
+      |                                  ^~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_transport_uart485.cpp:63:34: 
+warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+   63 |     case UART_BREAK_ERROR:       s_countBreak++;       break;
+      |                                  ^~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_transport_uart485.cpp:64:34: 
+warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+   64 |     case UART_FRAME_ERROR:       s_countFrameErr++;    break;
+      |                                  ^~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\fifo_transport_uart485.cpp:65:34: 
+warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+   65 |     case UART_PARITY_ERROR:      s_countParityErr++;   break;
+      |                                  ^~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:92:27: warning: "/*" within comment [-Wcomment]
+   92 |  * |   - PUB-B..G (/fusion/*, /ttw/model, /output)                      |
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:267:9: warning: "BUILTIN_LED" redefined
+  267 | #define BUILTIN_LED 10
+      |         ^~~~~~~~~~~
+In file included from C:\Users\HP\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.11\cores\esp32/Arduino.h:43,
+                 from C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S
+3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino:113:
+C:\Users\HP\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.11\variants\esp32s3/pins_arduino.h:16:9: note: this is the 
+location of the previous definition
+   16 | #define BUILTIN_LED LED_BUILTIN  // backward compatibility
+      |         ^~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:450:1: warning: multi-line comment [-Wcomment]
+  450 | //   openssl req -new -key PLANT01-ESP01.key -out PLANT01-ESP01.csr \
+      | ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:452:1: warning: multi-line comment [-Wcomment]
+  452 | //   openssl x509 -req -in PLANT01-ESP01.csr -CA industrial-root-ca.crt \
+      | ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In constructor 'GsmTLSClient::GsmTLSClient(TinyGsm&)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:965:17: warning: 'GsmTLSClient::_tcp' will be initialized after [-Wreorder]
+  965 |   TinyGsmClient _tcp;
+      |                 ^~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:964:12: warning:   'TinyGsm& GsmTLSClient::_modem' [-Wreorder]
+  964 |   TinyGsm& _modem;
+      |            ^~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:636:12: warning:   when initialized here [-Wreorder]
+  636 |   explicit GsmTLSClient(TinyGsm& modem)
+      |            ^~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void rpmISR()':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2411:5: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2411 |     g_rpmTotalPulses++;
+      |     ^~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void pushTelemBuf(const VibrationData_t*, MachineState_t)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2604:5: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2604 |     g_telemBufOverflowCount++;
+      |     ^~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2607:5: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2607 |     g_telemBufCount++;
+      |     ^~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2618:19: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2618 |     DateTime _ts; RTC_NOW_SAFE(_ts);
+      |                   ^~~~~~~~~~~~
+In file included from C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S
+3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino:120:
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2618:19: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2618 |     DateTime _ts; RTC_NOW_SAFE(_ts);
+      |                   ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool replayTelemBuf()':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2680:3: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 2680 |   StaticJsonDocument<1024> r;
+      |   ^~~~~~~~~~~~~~~~~~
+In file included from C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson.hpp:65,
+                 from C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson.h:9,
+                 from C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S
+3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino:119:
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2701:23: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2701 |       DateTime nowDt; RTC_NOW_SAFE(nowDt);
+      |                       ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2701:23: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2701 |       DateTime nowDt; RTC_NOW_SAFE(nowDt);
+      |                       ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2710:9: warning: '--' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2710 |         g_telemBufCount--;
+      |         ^~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2723:19: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2723 |     DateTime now; RTC_NOW_SAFE(now);  // [v16.3g]
+      |                   ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2723:19: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2723 |     DateTime now; RTC_NOW_SAFE(now);  // [v16.3g]
+      |                   ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2802:7: warning: '--' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2802 |       g_telemBufCount--;
+      |       ^~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2803:7: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2803 |       g_telemBufReplayedCount++;
+      |       ^~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool enqueueMqttOutbound(MqttOutboundTopic_t, const char*, size_t, uint8_t)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2836:5: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2836 |     g_trendEnqueueDropCount++;
+      |     ^~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void checkAndLatchFault(const VibrationData_t*, MachineState_t, int, bool, bool)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2892:23: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2892 |     DateTime _rtcNow; RTC_NOW_SAFE(_rtcNow);  // [v16.3g]
+      |                       ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2892:23: note: in expansion of macro 'RTC_NOW_SAFE'
+ 2892 |     DateTime _rtcNow; RTC_NOW_SAFE(_rtcNow);  // [v16.3g]
+      |                       ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2929:3: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2929 |   g_flCount++;
+      |   ^~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void LogEnPinTransition(uint8_t)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:3591:13: warning: unused variable 'phase' [-Wunused-variable]
+ 3591 |   FifoPhase phase = FifoDriver_GetPhase();
+      |             ^~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool parseGSMDateTime(const String&, DateTime&)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4179:24: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 4179 |   dt = DateTime(unixUTC);
+      |                        ^
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool syncRTCFromModem()':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4227:22: note: in expansion of macro 'RTC_NOW_SAFE'
+ 4227 |     DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                      ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4227:22: note: in expansion of macro 'RTC_NOW_SAFE'
+ 4227 |     DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                      ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4231:19: warning: format '%d' expects argument of type 'int', but argument 3 has type 'int32_t' {aka 
+'long int'} [-Wformat=]
+ 4231 |     Serial.printf("[NTP] RTC drift: %+d seconds\n", drift);
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  ~~~~~
+      |                                                     |
+      |                                                     int32_t {aka long int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4241:21: warning: format '%d' expects argument of type 'int', but argument 3 has type 'int32_t' {aka 
+'long int'} [-Wformat=]
+ 4241 |       Serial.printf("[NTP] ! Drift implausible (%+d s) after recent sync (%lu ms ago) -- skip\n",
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4242 |                     drift, (unsigned long)msSinceLastSync);
+      |                     ~~~~~
+      |                     |
+      |                     int32_t {aka long int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4269:21: warning: format '%d' expects argument of type 'int', but argument 3 has type 'int32_t' {aka 
+'long int'} [-Wformat=]
+ 4269 |       Serial.printf("[NTP] ! WARNING: RTC drift = %+d seconds!\n", drift);
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  ~~~~~
+      |                                                                    |
+      |                                                                    int32_t {aka long int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4273:21: warning: format '%d' expects argument of type 'int', but argument 3 has type 'int32_t' {aka 
+'long int'} [-Wformat=]
+ 4273 |       Serial.printf("[NTP] ! CRITICAL: RTC drift = %+d seconds -- FORCE CORRECTION\n", drift);
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  ~~~~~
+      |                                                                                        |
+      |                                                                                        int32_t {aka long int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4277:19: warning: format '%d' expects argument of type 'int', but argument 9 has type 'int32_t' {aka 
+'long int'} [-Wformat=]
+ 4277 |     Serial.printf("[NTP] Adjusting RTC: %04d-%02d-%02dT%02d:%02d:%02dZ (was off by %+ds)\n",
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4278 |                   networkUTC.year(), networkUTC.month(), networkUTC.day(),
+ 4279 |                   networkUTC.hour(), networkUTC.minute(), networkUTC.second(), drift);
+      |                                                                                ~~~~~
+      |                                                                                |
+      |                                                                                int32_t {aka long int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool readCTR4A01Current(float&)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4400:13: warning: unused variable 'scale' [-Wunused-variable]
+ 4400 |       float scale = (rawCurrentA != 0.0f) ? (engineeringCurrentA / rawCurrentA) : 0.0f;
+      |             ^~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4411:11: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4411 |   else    g_ctReadErrors++;  // [v16.6b] remote-visible failure counter -- see /vibration current_read_errors
+      |           ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void FifoDiag_SetBusOwner(BusOwnerDiag)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4440:28: warning: unused variable 'kBusOwnerNames' [-Wunused-variable]
+ 4440 |   static const char* const kBusOwnerNames[] = { "NONE", "MODBUS", "FIFO" };
+      |                            ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskModbusRead(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4466:5: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4466 |     g_sensorReads++;
+      |     ^~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4752:14: warning: unused variable 'wasOffline' [-Wunused-variable]
+ 4752 |         bool wasOffline = g_sensorOffline;
+      |              ^~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4805:11: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4805 |           g_allZeroStuckCount++;
+      |           ^~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4811:13: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4811 |             g_allZeroRestartCount++;
+      |             ^~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4828:11: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4828 |           g_vyStuckCount++;
+      |           ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4834:13: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4834 |             g_vyRestartCount++;
+      |             ^~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4851:11: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4851 |           g_vzStuckCount++;
+      |           ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4857:13: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4857 |             g_vzRestartCount++;
+      |             ^~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4874:11: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4874 |           g_vxStuckCount++;
+      |           ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4880:13: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 4880 |             g_vxRestartCount++;
+      |             ^~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5075:7: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5075 |       g_sensorErrors++;
+      |       ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5076:7: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5076 |       g_modbusConsecErrors++;
+      |       ^~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskStateMachine(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5215:11: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5215 |           g_deglitchCount++;
+      |           ^~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5364:44: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5364 |         if (g_trendCount < TREND_BUF_SIZE) g_trendCount++;
+      |                                            ^~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5374:48: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5374 |         if (g_currentCount < CURRENT_BUF_SIZE) g_currentCount++;
+      |                                                ^~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5386:9: warning: '--' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5386 |         g_sensorWarmupReads--;
+      |         ^~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskDisplayUpdate(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5540:7: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 5540 |       g_displayUpdates++;
+      |       ^~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskNetwork(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5899:11: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 5899 |           StaticJsonDocument<296> offlineDoc;
+      |           ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5911:30: note: in expansion of macro 'RTC_NOW_SAFE'
+ 5911 |             DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                              ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5911:30: note: in expansion of macro 'RTC_NOW_SAFE'
+ 5911 |             DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                              ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5964:11: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 5964 |           StaticJsonDocument<256> evDoc;
+      |           ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:6064:28: note: in expansion of macro 'RTC_NOW_SAFE'
+ 6064 |           DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                            ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:6064:28: note: in expansion of macro 'RTC_NOW_SAFE'
+ 6064 |           DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                            ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:6070:9: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 6070 |         StaticJsonDocument<1024> flDoc;
+      |         ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5615:12: warning: unused variable 'lastSignalCheck' [-Wunused-variable]
+ 5615 |   uint32_t lastSignalCheck = 0;
+      |            ^~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5617:18: warning: unused variable 'CONNECTION_RETRY_INTERVAL' [-Wunused-variable]
+ 5617 |   const uint32_t CONNECTION_RETRY_INTERVAL = 30000;
+      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void pushAggBuf(AggSample_t*, volatile uint16_t*, volatile uint16_t*, uint16_t, const 
+AggSample_t*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:6658:26: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 6658 |   if (*count < bufSize) (*count)++;
+      |                         ~^~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool publishTelemetry(const TelemetrySnapshot*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7038:7: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 7038 |       g_bearingStableCnt++;
+      |       ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7099:19: note: in expansion of macro 'RTC_NOW_SAFE'
+ 7099 |     DateTime now; RTC_NOW_SAFE(now);  // [v16.3g]
+      |                   ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7099:19: note: in expansion of macro 'RTC_NOW_SAFE'
+ 7099 |     DateTime now; RTC_NOW_SAFE(now);  // [v16.3g]
+      |                   ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7116:5: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 7116 |     StaticJsonDocument<960> s;
+      |     ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7233:5: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 7233 |     StaticJsonDocument<800> d;
+      |     ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7283:5: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 7283 |     StaticJsonDocument<2048> doc;
+      |     ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskAnalytics(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7812:23: note: in expansion of macro 'RTC_NOW_SAFE'
+ 7812 |       DateTime nowTs; RTC_NOW_SAFE(nowTs);  // [v16.3g] FIX: was rtc.now() without mutex → crash
+      |                       ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7812:23: note: in expansion of macro 'RTC_NOW_SAFE'
+ 7812 |       DateTime nowTs; RTC_NOW_SAFE(nowTs);  // [v16.3g] FIX: was rtc.now() without mutex → crash
+      |                       ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:7838:7: warning: 'template<unsigned int N> class ArduinoJson::V743PB22::StaticJsonDocument' is 
+deprecated: use JsonDocument instead [-Wdeprecated-declarations]
+ 7838 |       StaticJsonDocument<640> t;
+      |       ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson\src/ArduinoJson/compatibility.hpp:63:58: note: declared here
+   63 | class ARDUINOJSON_DEPRECATED("use JsonDocument instead") StaticJsonDocument
+      |                                                          ^~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void setup()':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8173:17: warning: format '%d' expects argument of type 'int', but argument 3 has type 'uint32_t' {aka 
+'long unsigned int'} [-Wformat=]
+ 8173 |   Serial.printf("CPU Frequency: %d MHz\n", ESP.getCpuFreqMHz());
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~  ~~~~~~~~~~~~~~~~~~~
+      |                                                             |
+      |                                                             uint32_t {aka long unsigned int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8174:17: warning: format '%d' expects argument of type 'int', but argument 3 has type 'long unsigned 
+int' [-Wformat=]
+ 8174 |   Serial.printf("Flash Size: %d MB\n", ESP.getFlashChipSize() / (1024 * 1024));
+      |                 ^~~~~~~~~~~~~~~~~~~~~  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                                               |
+      |                                                               long unsigned int
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8175:17: warning: format '%d' expects argument of type 'int', but argument 3 has type 'uint32_t' {aka 
+'long unsigned int'} [-Wformat=]
+ 8175 |   Serial.printf("Free Heap: %d bytes\n\n", ESP.getFreeHeap());
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~  ~~~~~~~~~~~~~~~~~
+      |                                                           |
+      |                                                           uint32_t {aka long unsigned int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8268:19: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 8268 |     now = rtc.now();
+      |                   ^
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void loop()':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8685:19: warning: format '%d' expects argument of type 'int', but argument 3 has type 'uint32_t' {aka 
+'long unsigned int'} [-Wformat=]
+ 8685 |     Serial.printf("| Free Heap:       %8d bytes                     |\n",
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 8686 |                   ESP.getFreeHeap());
+      |                   ~~~~~~~~~~~~~~~~~
+      |                                  |
+      |                                  uint32_t {aka long unsigned int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8687:19: warning: format '%d' expects argument of type 'int', but argument 3 has type 'uint32_t' {aka 
+'long unsigned int'} [-Wformat=]
+ 8687 |     Serial.printf("| Min Free Heap:   %8d bytes                     |\n",
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 8688 |                   ESP.getMinFreeHeap());
+      |                   ~~~~~~~~~~~~~~~~~~~~
+      |                                     |
+      |                                     uint32_t {aka long unsigned int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1683:22: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1683 |       (dt) = rtc.now(); \
+      |                      ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8694:24: note: in expansion of macro 'RTC_NOW_SAFE'
+ 8694 |       DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                        ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:1692:32: warning: implicitly-declared 'constexpr DateTime& DateTime::operator=(const DateTime&)' is 
+deprecated [-Wdeprecated-copy]
+ 1692 |     (dt) = DateTime((uint32_t)0); \
+      |                                ^
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8694:24: note: in expansion of macro 'RTC_NOW_SAFE'
+ 8694 |       DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
+      |                        ^~~~~~~~~~~~
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib\src/RTClib.h:148:3: note: because 'DateTime' has user-provided 
+'DateTime::DateTime(const DateTime&)'
+  148 |   DateTime(const DateTime &copy);
+      |   ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:8719:23: warning: format '%d' expects argument of type 'int', but argument 3 has type 'int32_t' {aka 
+'long int'} [-Wformat=]
+ 8719 |         Serial.printf("| Last Drift:  %+d seconds                            |\n",
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 8720 |                       g_timeSync.lastDriftSec);
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~
+      |                                  |
+      |                                  int32_t {aka long int}
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: At global scope:
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:2480:13: warning: 'void saveFaultLatchNVS()' defined but not used [-Wunused-function]
+ 2480 | static void saveFaultLatchNVS() {
+      |             ^~~~~~~~~~~~~~~~~
+In file included from C:\Users\HP\AppData\Local\Arduino15\user\libraries\ModbusMaster\src/ModbusMaster.h:58,
+                 from C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S
+3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino:118:
+C:\Users\HP\AppData\Local\Arduino15\user\libraries\ModbusMaster\src/util/crc16.h:71:17: warning: 'uint16_t crc16_update(uint16_t, 
+uint8_t)' defined but not used [-Wunused-function]
+   71 | static uint16_t crc16_update(uint16_t crc, uint8_t a)
+      |                 ^~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskModbusRead(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4800:28: warning: 'raw_x' may be used uninitialized [-Wmaybe-uninitialized]
+ 4800 |         bool allZero = (abs(raw_x) <= STUCK_MIN_RAW) &&
+      |                         ~~~^~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4450:11: note: 'raw_x' was declared here
+ 4450 |   int16_t raw_x, raw_y, raw_z, raw_temp;
+      |           ^~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4801:28: warning: 'raw_y' may be used uninitialized [-Wmaybe-uninitialized]
+ 4801 |                        (abs(raw_y) <= STUCK_MIN_RAW) &&
+      |                         ~~~^~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4450:18: note: 'raw_y' was declared here
+ 4450 |   int16_t raw_x, raw_y, raw_z, raw_temp;
+      |                  ^~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4802:28: warning: 'raw_z' may be used uninitialized [-Wmaybe-uninitialized]
+ 4802 |                        (abs(raw_z) <= STUCK_MIN_RAW);
+      |                         ~~~^~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4450:25: note: 'raw_z' was declared here
+ 4450 |   int16_t raw_x, raw_y, raw_z, raw_temp;
+      |                         ^~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4993:40: warning: 'raw_temp' may be used uninitialized [-Wmaybe-uninitialized]
+ 4993 |       localData.temperature = raw_temp / 100.0f;
+      |                               ~~~~~~~~~^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4450:32: note: 'raw_temp' was declared here
+ 4450 |   int16_t raw_x, raw_y, raw_z, raw_temp;
+      |                                ^~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskDisplayUpdate(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5492:61: warning: 'localState' is used uninitialized [-Wuninitialized]
+ 5492 |     uint32_t blinkInterval = (localState == STATE_CRITICAL) ? 300 : 1000;
+      |                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5481:18: note: 'localState' was declared here
+ 5481 |   MachineState_t localState;
+      |                  ^~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5523:14: warning: 'localPage' may be used uninitialized [-Wmaybe-uninitialized]
+ 5523 |       } else if (localPage == PAGE_MACHINE) {
+      |              ^~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5482:17: note: 'localPage' was declared here
+ 5482 |   DisplayPage_t localPage;
+      |                 ^~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'bool syncRTCFromModem()':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4249:16: warning: 'snprintf' output may be truncated before the last format character 
+[-Wformat-truncation=]
+ 4249 |                "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4248:15: note: 'snprintf' output between 21 and 26 bytes into a destination of size 25
+ 4248 |       snprintf(g_timeSync.lastSyncTime, sizeof(g_timeSync.lastSyncTime),
+
+Used library   Version Path
+Wire           3.3.11  C:\Users\HP\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.11\libraries\Wire
+U8g2           2.36.19 C:\Users\HP\AppData\Local\Arduino15\user\libraries\U8g2
+      |       ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4249 |                "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4250 |                networkUTC.year(), networkUTC.month(), networkUTC.day(),
+      |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4251 |                networkUTC.hour(), networkUTC.minute(), networkUTC.second());
+      |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4262:16: warning: 'snprintf' output may be truncated before the last format character 
+[-Wformat-truncation=]
+ 4262 |                "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TinyGSM        0.12.0  C:\Users\HP\AppData\Local\Arduino15\user\libraries\TinyGSM
+MQTT           2.5.3   C:\Users\HP\AppData\Local\Arduino15\user\libraries\MQTT
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4261:15: note: 'snprintf' output between 21 and 26 bytes into a destination of size 25
+ 4261 |       snprintf(g_timeSync.lastSyncTime, sizeof(g_timeSync.lastSyncTime),
+      |       ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4262 |                "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4263 |                networkUTC.year(), networkUTC.month(), networkUTC.day(),
+      |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4264 |                networkUTC.hour(), networkUTC.minute(), networkUTC.second());
+      |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4295:12: warning: 'snprintf' output may be truncated before the last format character 
+[-Wformat-truncation=]
+ModbusMaster   2.0.1   C:\Users\HP\AppData\Local\Arduino15\user\libraries\ModbusMaster
+ArduinoJson    7.4.3   C:\Users\HP\AppData\Local\Arduino15\user\libraries\ArduinoJson
+RTClib         2.1.4   C:\Users\HP\AppData\Local\Arduino15\user\libraries\RTClib
+Adafruit BusIO 1.17.4  C:\Users\HP\AppData\Local\Arduino15\user\libraries\Adafruit_BusIO
+Preferences    3.3.11  C:\Users\HP\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.11\libraries\Preferences
+SPI            3.3.11  C:\Users\HP\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.11\libraries\SPI
+ 4295 |            "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:4294:11: note: 'snprintf' output between 21 and 26 bytes into a destination of size 25
+ 4294 |   snprintf(g_timeSync.lastSyncTime, sizeof(g_timeSync.lastSyncTime),
+      |   ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4295 |            "%04d-%02d-%02dT%02d:%02d:%02dZ",
+
+Used platform Version Path
+esp32:esp32   3.3.11  C:\Users\HP\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.11
+      |            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4296 |            networkUTC.year(), networkUTC.month(), networkUTC.day(),
+      |            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 4297 |            networkUTC.hour(), networkUTC.minute(), networkUTC.second());
+      |            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino: In function 'void taskNetwork(void*)':
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5913:44: warning: 'snprintf' output may be truncated before the last format character 
+[-Wformat-truncation=]
+ 5913 |             snprintf(tsBuf, sizeof(tsBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |                                            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5\WTVB02_ESP32S3_V16_CM_fault_latch_v
+3_hardened_patched_v16_5.ino:5913:21: note: 'snprintf' output between 21 and 26 bytes into a destination of size 25
+ 5913 |             snprintf(tsBuf, sizeof(tsBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+      |             ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 5914 |                      rtcNow.year(), rtcNow.month(),  rtcNow.day(),
+      |                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 5915 |                      rtcNow.hour(), rtcNow.minute(), rtcNow.second());
+      |                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Error during build: exit status 1

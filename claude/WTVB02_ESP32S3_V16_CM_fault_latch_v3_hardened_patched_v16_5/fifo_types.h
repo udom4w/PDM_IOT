@@ -118,15 +118,18 @@ enum class FifoError {
 
 // ----------------------------------------------------------------------------
 // FifoTriggerSource -- what caused a capture to be requested (SS19.1).
-// REMOTE_ON_DEMAND is intentionally absent: no inbound MQTT channel exists
-// to carry it (CN-8, G-2) -- adding the enumerator without a caller that can
-// ever set it would be dead, untestable code.
+// [Commit 7B] REMOTE_ON_DEMAND added: the inbound MQTT channel that made it
+// dead code now exists (Commit 7A's subscribe/callback, Commit 7B's Trigger
+// Broker producer wiring in mqttCommandCallback()) -- this enumerator has a
+// caller that can set it, per this comment's own previously-stated condition
+// for adding it (CN-8, G-2).
 // ----------------------------------------------------------------------------
 enum class FifoTriggerSource {
   FAULT_LATCH,
   OPERATOR_BUTTON,
   SCHEDULED,
   COMMISSIONING,
+  REMOTE_ON_DEMAND,
 };
 
 // ----------------------------------------------------------------------------
