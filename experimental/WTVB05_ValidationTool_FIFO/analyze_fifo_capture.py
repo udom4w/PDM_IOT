@@ -59,6 +59,12 @@ line:
       in the summary CSV. Pure calculation only -- no plot, no overlay, no
       peak search, no diagnosis. RPM is never guessed: without a valid
       --shaft-rpm these columns are left blank (Phase 7C-2).
+  11. Overlays those same characteristic frequencies as dashed vertical
+      lines (distinct color + Hz-labeled legend entry each) on the
+      Envelope FFT plot from step 8, capped to below Nyquist (sr_hz/2).
+      Plot-only: does not touch the envelope-FFT calculation, the FFT
+      algorithm, or any CSV column. Draws nothing if --shaft-rpm wasn't
+      supplied (Phase 7C-3).
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -311,7 +317,7 @@ def _parse_captures_phase7a(lines):
     return captures
 
 
-def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None):
+def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearing_freqs=None):
     n = len(cap['index'])
     is_phase7a = cap.get('format') == 'phase7a'
     unit_label = 'Raw Counts' if is_phase7a else 'g'
@@ -438,6 +444,24 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None):
     # as the waveform FFT above; no window function in this phase.
     fig, axs = plt.subplots(3, 1, figsize=(11, 8))
     envelope_fft_summary = {}
+
+    # --- Bearing characteristic frequency overlay, Phase 7C-3 -- plot-only,
+    # does not touch the envelope-FFT calculation above or below. Only
+    # drawn when a bearing was selected AND --shaft-rpm produced real
+    # frequencies (bearing_freqs values non-None) AND the axis is actually
+    # in Hz (sr_hz given); RPM is never estimated, no peak search is done.
+    # Each line is capped to below Nyquist (sr_hz/2) since a line at or
+    # above it would fall outside (or alias on) this rfft axis.
+    overlay_freqs = []
+    if sr_hz and bearing_freqs:
+        nyquist = sr_hz / 2.0
+        freq_colors = {'FTF': 'tab:green', 'BPFO': 'tab:red', 'BPFI': 'tab:purple',
+                        'BSF': 'tab:orange', 'shaft_hz': 'tab:gray'}
+        for freq_name in ('FTF', 'BPFO', 'BPFI', 'BSF', 'shaft_hz'):
+            freq_value = bearing_freqs.get(freq_name)
+            if freq_value is not None and 0 < freq_value < nyquist:
+                overlay_freqs.append((freq_name, freq_value, freq_colors[freq_name]))
+
     for ax, label in zip(axs, ['X', 'Y', 'Z']):
         envelope = envelope_per_axis[label]
         envelope_ac = envelope - envelope.mean()
@@ -449,6 +473,11 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None):
         envelope_fft_summary[label] = dominant_envelope_freq
 
         ax.plot(freqs, mag, linewidth=0.8)
+        for freq_name, freq_value, color in overlay_freqs:
+            ax.axvline(freq_value, color=color, linestyle='--', linewidth=1.2,
+                       label=f'{freq_name} {freq_value:.1f} Hz')
+        if overlay_freqs:
+            ax.legend(fontsize=7, loc='upper right')
         ax.set_ylabel(f'{label} Envelope FFT ({unit_label})' if is_phase7a else f'{label} Envelope FFT')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
@@ -599,7 +628,8 @@ def main():
     print(f"Found {len(captures)} FIFO capture(s) in {args.logfile}")
     summary_rows = []
     for cap in captures:
-        _, row = analyze_one(cap, args.sr_hz, args.out_prefix, bearing_model=bearing_model, bearing=bearing)
+        _, row = analyze_one(cap, args.sr_hz, args.out_prefix, bearing_model=bearing_model, bearing=bearing,
+                              bearing_freqs=bearing_freqs)
         for freq_key in ('shaft_hz', 'FTF', 'BPFO', 'BPFI', 'BSF'):
             row[freq_key] = bearing_freqs[freq_key] if bearing_freqs[freq_key] is not None else ''
         summary_rows.append(row)
