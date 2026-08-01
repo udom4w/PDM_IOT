@@ -53,6 +53,12 @@ line:
      database and prints/records it (Z, ball diameter, pitch diameter,
      contact angle) in the summary CSV (Phase 7C-1, revised to an external
      JSON database instead of a hard-coded dict).
+  10. If a bearing was selected AND --shaft-rpm was given (and is > 0),
+      computes the standard characteristic frequencies (shaft_hz, FTF,
+      BPFO, BPFI, BSF) via compute_bearing_frequencies() and records them
+      in the summary CSV. Pure calculation only -- no plot, no overlay, no
+      peak search, no diagnosis. RPM is never guessed: without a valid
+      --shaft-rpm these columns are left blank (Phase 7C-2).
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -74,6 +80,7 @@ import os
 import re
 import csv
 import json
+import math
 import argparse
 import numpy as np
 from scipy.signal import spectrogram as scipy_spectrogram
@@ -93,6 +100,7 @@ SUMMARY_CSV_FIELDS = [
     'dominant_envelope_freq_x_hz', 'dominant_envelope_freq_y_hz', 'dominant_envelope_freq_z_hz',
     'envelope_fft_png',
     'bearing_model', 'rolling_elements', 'ball_diameter_mm', 'pitch_diameter_mm', 'contact_angle_deg',
+    'shaft_hz', 'FTF', 'BPFO', 'BPFI', 'BSF',
 ]
 
 # External bearing geometry database, Phase 7C-1 (revised architecture --
@@ -140,6 +148,43 @@ def load_bearing_database(path):
                 sys.exit(1)
 
     return db
+
+
+def compute_bearing_frequencies(shaft_rpm, rolling_elements, ball_diameter_mm,
+                                 pitch_diameter_mm, contact_angle_deg):
+    """Pure calculation of standard bearing characteristic frequencies, Phase 7C-2.
+
+    Geometry (rolling_elements=Z, ball_diameter_mm=Bd, pitch_diameter_mm=Pd,
+    contact_angle_deg) is passed in from the Phase 7C-1 JSON database --
+    this function does not duplicate or hard-code any bearing geometry.
+
+    Never guesses shaft RPM: if shaft_rpm is None or <= 0, every frequency
+    is returned as None instead of being computed from an assumed value.
+
+    Uses the standard rolling-element-bearing equations:
+        shaft_hz = shaft_rpm / 60
+        FTF  = (shaft_hz / 2) * (1 - (Bd/Pd) * cos(contact_angle))
+        BPFO = (Z / 2) * shaft_hz * (1 - (Bd/Pd) * cos(contact_angle))
+        BPFI = (Z / 2) * shaft_hz * (1 + (Bd/Pd) * cos(contact_angle))
+        BSF  = (Pd / (2*Bd)) * shaft_hz * (1 - ((Bd/Pd) * cos(contact_angle)) ** 2)
+
+    This function only computes and returns numbers -- no plotting, no
+    overlay onto any existing plot, no peak search, no diagnosis.
+    """
+    if shaft_rpm is None or shaft_rpm <= 0:
+        return {'shaft_hz': None, 'FTF': None, 'BPFO': None, 'BPFI': None, 'BSF': None}
+
+    shaft_hz = shaft_rpm / 60.0
+    Z = rolling_elements
+    bd_over_pd = ball_diameter_mm / pitch_diameter_mm
+    cos_angle = math.cos(math.radians(contact_angle_deg))
+
+    ftf = (shaft_hz / 2.0) * (1 - bd_over_pd * cos_angle)
+    bpfo = (Z / 2.0) * shaft_hz * (1 - bd_over_pd * cos_angle)
+    bpfi = (Z / 2.0) * shaft_hz * (1 + bd_over_pd * cos_angle)
+    bsf = (pitch_diameter_mm / (2.0 * ball_diameter_mm)) * shaft_hz * (1 - (bd_over_pd * cos_angle) ** 2)
+
+    return {'shaft_hz': shaft_hz, 'FTF': ftf, 'BPFO': bpfo, 'BPFI': bpfi, 'BSF': bsf}
 
 
 def _spectrogram_nperseg(n):
@@ -488,6 +533,10 @@ def main():
     ap.add_argument('--bearing', default=None,
                      help='Bearing model, e.g. 6205 (Phase 7C-1; must be given together '
                           'with --manufacturer)')
+    ap.add_argument('--shaft-rpm', type=float, default=None,
+                     help='Shaft speed in RPM (Phase 7C-2). Together with a selected bearing, '
+                          'used to compute shaft_hz/FTF/BPFO/BPFI/BSF for the summary CSV. '
+                          'Never guessed -- omitted or <=0 leaves those columns blank.')
     args = ap.parse_args()
 
     if bool(args.manufacturer) != bool(args.bearing):
@@ -518,6 +567,27 @@ def main():
         print(f"  Pd: {bearing['pitch_diameter_mm']} mm")
         print(f"  Angle: {bearing['contact_angle_deg']} deg")
 
+    # Bearing characteristic frequencies, Phase 7C-2 -- pure calculation
+    # only, no plotting. Left as all-None (-> blank CSV columns) unless a
+    # bearing was selected AND a valid --shaft-rpm was given; RPM is never
+    # guessed.
+    bearing_freqs = {'shaft_hz': None, 'FTF': None, 'BPFO': None, 'BPFI': None, 'BSF': None}
+    if bearing is not None:
+        bearing_freqs = compute_bearing_frequencies(
+            shaft_rpm=args.shaft_rpm,
+            rolling_elements=bearing['rolling_elements'],
+            ball_diameter_mm=bearing['ball_diameter_mm'],
+            pitch_diameter_mm=bearing['pitch_diameter_mm'],
+            contact_angle_deg=bearing['contact_angle_deg'],
+        )
+        if bearing_freqs['shaft_hz'] is not None:
+            print("Bearing Frequencies:")
+            print(f"  shaft_hz: {bearing_freqs['shaft_hz']:.4f} Hz")
+            print(f"  FTF:  {bearing_freqs['FTF']:.4f} Hz")
+            print(f"  BPFO: {bearing_freqs['BPFO']:.4f} Hz")
+            print(f"  BPFI: {bearing_freqs['BPFI']:.4f} Hz")
+            print(f"  BSF:  {bearing_freqs['BSF']:.4f} Hz")
+
     captures = parse_captures(args.logfile)
     if not captures:
         print("No FIFO captures found in this file. Expected either a legacy header line "
@@ -530,6 +600,8 @@ def main():
     summary_rows = []
     for cap in captures:
         _, row = analyze_one(cap, args.sr_hz, args.out_prefix, bearing_model=bearing_model, bearing=bearing)
+        for freq_key in ('shaft_hz', 'FTF', 'BPFO', 'BPFI', 'BSF'):
+            row[freq_key] = bearing_freqs[freq_key] if bearing_freqs[freq_key] is not None else ''
         summary_rows.append(row)
 
     summary_csv_path = f"{args.out_prefix}_summary.csv"
