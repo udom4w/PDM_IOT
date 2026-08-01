@@ -1618,11 +1618,6 @@ FifoError FifoDriver_Request(const FifoCaptureRequest* req, uint32_t* outHandle)
   // pending window (Task 3.5's s_retryPending), closing the exact race
   // flagged as remaining work in that task's own delivery.
   if (s_state != FifoState::S1_IDLE || s_retryPending) {
-    // [TRACE] ERR_BUSY path attribution -- observational only, via the
-    // existing DiagLog() hook (no-op unless FifoDriver_SetDiagLogger() is
-    // registered), same as every other diagnostic line in this file.
-    DiagLog("[FIFO-BUSY]\nreason=STATE\nstate=%d\nretryPending=%d",
-            static_cast<int>(s_state), (int)s_retryPending);
     return FifoError::ERR_BUSY;
   }
 
@@ -1635,10 +1630,6 @@ FifoError FifoDriver_Request(const FifoCaptureRequest* req, uint32_t* outHandle)
   if (s_transport) {
     uint32_t sinceLastSession = s_transport->nowMs(s_transport->ctx) - s_cooldownEnteredAtMs;
     if (s_cooldownEnteredAtMs != 0 && sinceLastSession < T_COOLDOWN_MS) {
-      // [TRACE] ERR_BUSY path attribution -- observational only, same
-      // DiagLog() hook as above.
-      DiagLog("[FIFO-BUSY]\nreason=COOLDOWN\nelapsedMs=%lu\ncooldownMs=%lu",
-              (unsigned long)sinceLastSession, (unsigned long)T_COOLDOWN_MS);
       return FifoError::ERR_BUSY;
     }
   }

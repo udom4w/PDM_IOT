@@ -1866,13 +1866,6 @@ static volatile uint32_t g_sensorErrors = 0;
 static volatile uint32_t g_deglitchCount = 0;  // [v16.3y] จำนวนครั้งที่ VRMS de-glitch ทำงาน (cumulative)
 static volatile uint32_t g_displayUpdates = 0;
 
-// [TRACE] Starvation-hypothesis instrumentation (read-only counters, no
-// behavior change). Single-word volatile uint32_t, same cross-core
-// convention as g_sensorReads above -- written by exactly one task each,
-// read only by the periodic [TRACE] print in taskBuzzerControl().
-static volatile uint32_t g_traceModbusIterations = 0;  // taskModbusRead() loop-top tick count
-static volatile uint32_t g_traceStateIterations  = 0;  // taskStateMachine() successful xQueueReceive count
-
 // v15.3: Reset reason (อ่านจาก hardware ตอน boot, persistent via NVS)
 static char     g_resetReasonStr[24] = "UNKNOWN";  // human-readable string
 static uint8_t  g_resetReasonCode    = 0;           // esp_reset_reason_t value
@@ -3531,30 +3524,6 @@ static void processRPM(VibrationData_t* data) {
 
   uint32_t timeSincePulseMs = millis() - g_rpmLastPulseMillis;
 
-  // [TRACE] processRPM() execution-timing instrumentation. Observational
-  // only -- reads existing values (newPulse, pulseCopy, timeSincePulseMs
-  // above), writes only its own two dedicated statics below, never
-  // influences any decision in this function. timeSinceLastCall is
-  // measured against EVERY actual invocation of processRPM() (updated
-  // unconditionally, not gated) so it reflects the true call cadence even
-  // on cycles where the Serial print itself is skipped; only the print is
-  // separately rate-limited to <=1 per 200ms.
-  {
-    static uint32_t s_lastProcessRpmCallMs  = 0;
-    static uint32_t s_lastProcessRpmPrintMs = 0;
-    uint32_t nowTraceMs = millis();
-    uint32_t timeSinceLastCall = (s_lastProcessRpmCallMs == 0)
-                                   ? 0 : (nowTraceMs - s_lastProcessRpmCallMs);
-    s_lastProcessRpmCallMs = nowTraceMs;
-    if (nowTraceMs - s_lastProcessRpmPrintMs >= 200) {
-      s_lastProcessRpmPrintMs = nowTraceMs;
-      Serial.printf("[PROCESS_RPM]\nnow=%lu\ntimeSinceLastCall=%lu\nnewPulse=%d\npulseCount=%lu\ntimeSincePulseMs=%lu\n",
-                    (unsigned long)nowTraceMs, (unsigned long)timeSinceLastCall,
-                    (int)newPulse, (unsigned long)pulseCopy,
-                    (unsigned long)timeSincePulseMs);
-    }
-  }
-
   // ---------- RPM Calculation (EMA filtered) ----------
   // [v16.5.4] Improvement 1: EMA invalidation after long idle.
   // A pulse whose measured interval spans a gap > MAX_EMA_INTERVAL_US is a
@@ -4936,7 +4905,6 @@ void taskModbusRead(void* parameter) {
 
   while (1) {
     g_sensorReads++;
-    g_traceModbusIterations++;  // [TRACE] loop-top tick count, no behavior change
 
     // [Broker, Commit 1] Drain at most one pending FIFO trigger intent,
     // before FifoDriver_Service() advances the driver this tick, so an
@@ -5605,7 +5573,6 @@ void taskStateMachine(void* parameter) {
   while (1) {
     // Wait for new sensor data (blocking on queue)
     if (xQueueReceive(queueSensorData, &sensorData, portMAX_DELAY) == pdPASS) {
-      g_traceStateIterations++;  // [TRACE] successful receive count, no behavior change
 
       // -- ???????: sensor offline (valid = false) --
       if (!sensorData.valid) {
@@ -6933,30 +6900,10 @@ void taskButtonHandler(void* parameter) {
 void taskBuzzerControl(void* parameter) {
   bool beepState = false;
   uint32_t lastBeep = 0;
-  static uint32_t s_lastTraceMs = 0;  // [TRACE] 5s gate, Core 1 so it keeps
-                                       // ticking even if Core 0 is starved
 
   Serial.println("[CORE 1] Buzzer task started");
 
   while (1) {
-    // [TRACE] Starvation-hypothesis instrumentation. Read-only counters,
-    // gated to print at most once every 5000ms -- never inside a fast
-    // loop. Placed on Core 1 (independent of Core 0 scheduling) so the
-    // trace keeps firing even if taskModbusRead/taskStateMachine
-    // contention on Core 0 is exactly what's being observed.
-    {
-      uint32_t nowTraceMs = millis();
-      if (nowTraceMs - s_lastTraceMs >= 5000) {
-        s_lastTraceMs = nowTraceMs;
-        UBaseType_t qWaiting = uxQueueMessagesWaiting(queueSensorData);
-        UBaseType_t qSpaces  = uxQueueSpacesAvailable(queueSensorData);
-        Serial.printf("[TRACE]\nmodbus_iterations=%lu\nstate_iterations=%lu\nqueue_waiting=%u\nqueue_spaces=%u\n",
-                      (unsigned long)g_traceModbusIterations,
-                      (unsigned long)g_traceStateIterations,
-                      (unsigned)qWaiting, (unsigned)qSpaces);
-      }
-    }
-
     bool buzzerActive = false;
     bool acknowledged = false;
     MachineState_t state;
