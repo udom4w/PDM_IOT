@@ -80,28 +80,86 @@ altered or invented — `-dirty` is only ever an appended flag on a genuine hash
 Arduino IDE / `arduino-cli` has **no native git-integration hook** — there is
 no built-in mechanism to inject a commit hash into a `.ino` at compile time.
 
-**What was added to bridge this**, without touching the actual build
-configuration (no changes to `boards.txt`, no `boards.local.txt`, no
-compiler flags, no `arduino-cli` invocation changes):
+**What was added to bridge this:**
 
 1. **`build_info.h`** — a small header, checked into the sketch folder,
    `#define`-ing `GIT_COMMIT_HASH`. Its checked-in default is `"UNKNOWN"`.
 2. **`generate_build_info.ps1`** — a standalone PowerShell script (matching
    this project's existing convention of `capture_*.ps1` helper scripts
    already present in this sketch folder) that resolves the hash and dirty
-   state and overwrites `build_info.h`.
+   state and overwrites `build_info.h`. Fails fast (non-zero exit) on any
+   real error — an unresolvable git repo is not an error (that's the
+   legitimate `"UNKNOWN"` path); a header that can't be written is.
+3. **`platform.local.txt`** (added `2026-08-01`, in the installed esp32 core,
+   `Arduino15/packages/esp32/hardware/esp32/3.3.11/platform.local.txt` —
+   *outside* this git repo) — wires step 2 into an automatic pre-build hook.
 
-**This is a manual step, not an automatic hook.** The developer (or a CI
-pipeline, if one is ever added) must run `generate_build_info.ps1` **before**
-compiling for `GIT_COMMIT_HASH` to reflect the commit actually being built.
-If it is never run, the checked-in `"UNKNOWN"` default remains — the build
-still succeeds and reports honestly.
+### [v16.5-autohook] Now implemented: automatic pre-build hook
 
-**Not implemented, offered only as a future option, pending approval:**
-wiring `generate_build_info.ps1` into an automatic pre-compile hook. Left out
-because it would touch the build invocation itself, which is exactly the
-kind of "build-system change" this document flags for explicit, separate
-review rather than doing silently.
+Previously this was a manual step (see history below). It is now wired in as
+`recipe.hooks.prebuild.9` in `platform.local.txt`:
+
+```
+recipe.hooks.prebuild.9.pattern.windows=cmd /c if exist "{build.source.path}\generate_build_info.ps1" powershell -NoProfile -ExecutionPolicy Bypass -File "{build.source.path}\generate_build_info.ps1"
+recipe.hooks.prebuild.9.pattern=/usr/bin/env bash -c "[ ! -f '{build.source.path}/generate_build_info.ps1' ] || pwsh -NoProfile -ExecutionPolicy Bypass -File '{build.source.path}/generate_build_info.ps1'"
+```
+
+**How it works:**
+- `{build.source.path}` is an Arduino build property resolving to the sketch
+  folder actually being compiled (the same property already used by this
+  core's own `recipe.hooks.prebuild.3/4/5` for `partitions.csv`/
+  `bootloader.bin`/`build_opt.h`) — so the hook always targets the right
+  sketch, whichever one is open.
+- Pre-build hooks run **before** sources are compiled/preprocessed, so
+  `build_info.h` is always fresh by the time `#include "build_info.h"` is
+  resolved.
+- The `if exist` guard makes this a no-op for any other esp32 sketch on this
+  machine that doesn't have a `generate_build_info.ps1` of its own — this
+  file is scoped to the *core install*, not to this one project, so it
+  must not affect unrelated sketches.
+- If `generate_build_info.ps1` exits non-zero, the `cmd /c` wrapper's exit
+  code is non-zero too, and arduino-builder/arduino-cli **aborts the whole
+  compile** with `Error during build: exit status 1` — verified by
+  temporarily making `build_info.h` read-only and confirming the build
+  failed, then confirming it succeeded again after clearing it.
+- Applies identically to Arduino IDE and `arduino-cli`: both resolve boards
+  from the same `Arduino15` data directory and therefore load the same
+  `platform.local.txt` — no per-tool configuration needed.
+
+**Requirements satisfied:**
+1. `BUILD_ID`/`Git Commit`/`Build Date`/`Build Time` always reflect the
+   source actually being compiled — `Build Date`/`Build Time` always did
+   (from `__DATE__`/`__TIME__`, compiler-supplied); `Git Commit`/`BUILD_ID`
+   now do too, since `build_info.h` is regenerated on every compile.
+2. Dirty working trees are still detected automatically (`git status
+   --porcelain` against the whole repo, unchanged from before).
+3. The build fails if `build_info.h` cannot be regenerated (fail-fast
+   contract in `generate_build_info.ps1`, verified above).
+4. No manual step before compiling, from either Arduino IDE or
+   `arduino-cli`.
+5. This section documents the pipeline.
+6. Compatible with both Arduino IDE and `arduino-cli` (same underlying core
+   install, same hook).
+
+**Caveat — not committed to this repo:** `platform.local.txt` lives inside
+the Boards Manager package directory, not this git repo. If the esp32 core
+is ever updated via Boards Manager (e.g. `3.3.11` → `3.3.12`), a new version
+directory is installed without this file, and the hook must be re-added at:
+`Arduino15/packages/esp32/hardware/esp32/<new-version>/platform.local.txt`
+using the same two `recipe.hooks.prebuild.9.*` lines above (confirm the slot
+number is still free in that version's `platform.txt` first).
+
+### History: original manual-step design (superseded 2026-08-01)
+
+Originally this was a manual step: the developer (or a CI pipeline) had to
+run `generate_build_info.ps1` **before** compiling for `GIT_COMMIT_HASH` to
+reflect the commit actually being built; if skipped, whatever was last
+generated silently remained. This is exactly what caused a real incident:
+the script was run once against commit `6160c05` on `2026-07-27` and never
+again, so every build afterward — across 40 further commits — kept
+reporting `Git Commit: 6160c05-dirty` on the serial banner even though the
+actual compiled source was current. The automatic hook above closes that
+gap.
 
 ---
 
