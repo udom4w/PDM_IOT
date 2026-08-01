@@ -4658,7 +4658,6 @@ static const char* fifoTriggerSourceStr(FifoTriggerSource src) {
     case FifoTriggerSource::FAULT_LATCH:     return "FAULT_LATCH";
     case FifoTriggerSource::OPERATOR_BUTTON: return "OPERATOR_BUTTON";
     case FifoTriggerSource::SCHEDULED:       return "SCHEDULED";
-    case FifoTriggerSource::COMMISSIONING:   return "COMMISSIONING";
     case FifoTriggerSource::REMOTE_ON_DEMAND: return "REMOTE_ON_DEMAND";  // [Commit 7B]
     default:                                 return "UNKNOWN";
   }
@@ -5013,44 +5012,11 @@ void taskModbusRead(void* parameter) {
       s_fifoOwnedBusLastTick = fifoOwnsBusNow;
     }
 
-    // [Task 4.4 -- TEMPORARY DIAGNOSTIC ONLY, one-shot commissioning
-    // trigger, not a permanent production feature. Restored: release
-    // cleanup had deleted this block, leaving it as the sole firmware
-    // producer of FIFO capture requests -- removing it left the qualified
-    // H4 receive path (ADR-0005) unreachable by any caller. Gated on the
-    // same real runtime conditions the driver's own admission gate
-    // re-checks -- g_motorRunState == MOTOR_RUNNING, mqttClient.connected(),
-    // g_modbusConsecErrors == 0 -- with millis() > 45000 kept only as an
-    // additional floor, not the sole gate. [Broker, Commit 1] This block no
-    // longer calls FifoDriver_Request() itself: it only enqueues an intent
-    // onto queueFifoTrigger (SDS SS14.1's specified request-submission
-    // mechanism); taskModbusRead()'s drain block, above, performs the
-    // actual call on the next tick using freshly-read admission state.
-    // Intended to be replaced by a real production trigger, not removed
-    // until one lands.
-    {
-      static bool s_fifoOneShotTriggered = false;
-      bool fifoMotorReady  = (g_motorRunState == MOTOR_RUNNING);
-      bool fifoMqttReady   = mqttClient.connected();
-      bool fifoSensorReady = (g_modbusConsecErrors == 0);
-      if (!s_fifoOneShotTriggered && millis() > 45000 &&
-          fifoMotorReady && fifoMqttReady && fifoSensorReady) {
-        s_fifoOneShotTriggered = true;
-        FifoTriggerIntent_t fifoIntent{};
-        fifoIntent.source = FifoTriggerSource::COMMISSIONING;
-        const char* fifoTag = "task4_4";
-        for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && fifoTag[ti] != '\0'; ti++) {
-          fifoIntent.tag[ti] = fifoTag[ti];
-        }
-        fifoIntent.requirePermissive = true;
-        // [ARCH-INVARIANT] producer #2/3 -- enqueue only, never FifoDriver_Request().
-        if (xQueueSend(queueFifoTrigger, &fifoIntent, 0) != pdTRUE) {
-          Serial.println("[Task4.4] FifoTriggerIntent enqueue FAILED (queue full)");
-        } else {
-          Serial.println("[Task4.4] FifoTriggerIntent enqueued source=COMMISSIONING tag=task4_4");
-        }
-      }
-    }
+    // [Commissioning Removal] The Task 4.4 one-shot auto-trigger that used to
+    // sit here (self-armed ~45s after boot, no operator action) and its
+    // FifoTriggerSource::COMMISSIONING source have both been removed --
+    // neither had a legitimate production caller. FAULT_LATCH,
+    // OPERATOR_BUTTON, and REMOTE_ON_DEMAND remain the active producers.
 
 #ifdef VERIFY_TEST
     // [VERIFY_TEST] Producer-side snapshot: one currentPollSeq per acquisition attempt.

@@ -124,11 +124,14 @@ enum class FifoError {
 // caller that can set it, per this comment's own previously-stated condition
 // for adding it (CN-8, G-2).
 // ----------------------------------------------------------------------------
+// [Commissioning Removal] COMMISSIONING removed -- its only producer (the
+// Task 4.4 one-shot auto-trigger in taskModbusRead()) has been deleted and
+// no other production caller ever set this source. Do not re-add without a
+// real caller.
 enum class FifoTriggerSource {
   FAULT_LATCH,
   OPERATOR_BUTTON,
   SCHEDULED,
-  COMMISSIONING,
   REMOTE_ON_DEMAND,
 };
 
