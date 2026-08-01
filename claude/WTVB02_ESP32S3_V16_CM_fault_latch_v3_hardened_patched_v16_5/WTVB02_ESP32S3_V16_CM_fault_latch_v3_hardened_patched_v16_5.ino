@@ -372,6 +372,10 @@ static constexpr const char* GPRS_PASS = "";
 #define MAX_EMA_INTERVAL_US   2000000UL   // 2.0 s, in microseconds
 #define FAULT_WINDOW_MS       3000    // RUNNING but no pulse > 3 s -> prox=0 (Fault)
 #define RUNNING_WARMUP_MS     2500    // [v16.3z] ต้อง in-band ต่อเนื่อง 2.5s ก่อนเป็น RUNNING (กัน bounce/spurious)
+// [vNext] TEMPORARY startup-settling suppression for FAULT_LATCH ONLY -- does not
+// affect newState (STATE_WARNING/CRITICAL, buzzer, live telemetry all still see the
+// real transient), DEGLITCH, or the FIFO Broker. See g_motorRunFaultLatchHoldoff.
+#define MOTOR_RUN_FAULT_LATCH_HOLDOFF_READS  4   // suppress FAULT_LATCH for N reads (~1s @ 250ms) immediately after STARTING->RUNNING -- mechanical/vibration settling transient, not a real fault
 // [Commit 3A] Confirmed-absence timeouts -- deliberately separate from
 // NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS above, which are calibrated for
 // "no signal at all" (sub-second/2s). These instead bound "evidence is fresh
@@ -1875,6 +1879,10 @@ static uint32_t g_rebootCount        = 0;           // สะสมข้าม�
 static volatile uint8_t  g_modbusConsecErrors = 0;  // ??? error ?????????
 static volatile bool     g_sensorOffline      = false; // true = sensor ?????/??????????
 static volatile uint8_t  g_sensorWarmupReads  = 0;   // [v16.3b] suppress spike N reads หลัง sensor กลับ online
+// [vNext] TEMPORARY: reads remaining to suppress FAULT_LATCH after RUNNING transition
+// (settling transient, distinct from the sensor-reconfig warmup above) -- FAULT_LATCH
+// qualification only, nothing else reads this.
+static volatile uint8_t  g_motorRunFaultLatchHoldoff = 0;
 
 // -- Velocity Peak Holding (Core 0 only -- taskModbusRead writes, taskNetwork reads+resets) --
 // v15.0: เก็บ vel_peak_overall (true peak mm/s = raw/100) แทน rms_overall (ที่แปลงแล้ว)
@@ -3480,6 +3488,9 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
                         (int)diagOldState, (int)MOTOR_RUNNING, "warmup_complete",
                         (int)evidence.signalPresent,
                         (unsigned long)evidence.ageMs, (unsigned long)absentMs);
+          // [vNext] arm once, only on the actual STARTING->RUNNING transition --
+          // TEMPORARY startup-settling suppression for FAULT_LATCH only.
+          g_motorRunFaultLatchHoldoff = MOTOR_RUN_FAULT_LATCH_HOLDOFF_READS;
         }
         g_motorRunState = MOTOR_RUNNING;
       } else {
@@ -5838,6 +5849,11 @@ void taskStateMachine(void* parameter) {
       if (g_sensorWarmupReads > 0) {
         g_sensorWarmupReads--;
       }
+      // [vNext] TEMPORARY: tick down the FAULT_LATCH startup-settling holdoff, same
+      // cadence as g_sensorWarmupReads above. FAULT_LATCH qualification only.
+      if (g_motorRunFaultLatchHoldoff > 0) {
+        g_motorRunFaultLatchHoldoff--;
+      }
 
       if (g_motorRunState != MOTOR_RUNNING) {
         newState = STATE_NORMAL;  // STOPPED/STARTING/STOPPING → ไม่ประเมิน alarm
@@ -5895,10 +5911,18 @@ void taskStateMachine(void* parameter) {
           latchHealth = (int)max(0.0f, min(100.0f, roundf(100.0f - norm)));
         }
         // [v16.3m] suppress latch ถ้า rms garbage หรืออยู่ใน warmup suppress
-        const bool suppressLatch = (!rmsValid || g_sensorWarmupReads > 0);
+        // [vNext] TEMPORARY: added g_motorRunFaultLatchHoldoff term -- suppresses
+        // FAULT_LATCH only, for a short window right after STARTING->RUNNING, so the
+        // mechanical/vibration settling transient at motor start-up cannot create a
+        // latch. Does not alter newState (STATE_WARNING/CRITICAL, buzzer, live
+        // /vibration telemetry still reflect the real spike exactly as before),
+        // DEGLITCH, or the FIFO Broker -- this function already returns before evCode/
+        // the FIFO-enqueue block are evaluated whenever suppressed.
+        const bool suppressLatch = (!rmsValid || g_sensorWarmupReads > 0 || g_motorRunFaultLatchHoldoff > 0);
         if (suppressLatch) {
-          Serial.printf("[LATCH] Suppressed -- rmsValid=%d warmup=%u\n",
-                        (int)rmsValid, (unsigned)g_sensorWarmupReads);
+          Serial.printf("[LATCH] Suppressed -- rmsValid=%d warmup=%u runHoldoff=%u\n",
+                        (int)rmsValid, (unsigned)g_sensorWarmupReads,
+                        (unsigned)g_motorRunFaultLatchHoldoff);
         }
         const bool latchBearing = false;  // [v16.3l] ปิดถาวร
 
