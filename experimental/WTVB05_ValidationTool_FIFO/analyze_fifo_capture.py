@@ -35,6 +35,12 @@ line:
      capture (tag, format, RMS/Peak/dominant-frequency per axis, and the
      paths to the waveform/FFT PNGs generated in step 1-2), so downstream
      tooling doesn't have to scrape stdout (Phase 7B-1).
+  6. Plots a Short-Time Fourier Transform (STFT) spectrogram per axis via
+     scipy.signal.spectrogram() (explicit Hann window, 50% overlap, window
+     length auto-sized to the capture length, one shared colorbar for the
+     whole figure) and records its path/window/overlap in the summary CSV
+     (Phase 7B-2). This is independent of, and does not alter, the whole-
+     capture FFT in step 2.
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -56,6 +62,8 @@ import re
 import csv
 import argparse
 import numpy as np
+from scipy.signal import spectrogram as scipy_spectrogram
+from scipy.signal.windows import hann
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -65,8 +73,22 @@ SUMMARY_CSV_FIELDS = [
     'rms_x', 'rms_y', 'rms_z',
     'peak_x', 'peak_y', 'peak_z',
     'dominant_freq_x_hz', 'dominant_freq_y_hz', 'dominant_freq_z_hz',
-    'waveform_png', 'fft_png',
+    'waveform_png', 'fft_png', 'spectrogram_png',
+    'spectrogram_window', 'spectrogram_overlap',
 ]
+
+
+def _spectrogram_nperseg(n):
+    """Pick an STFT window length for an n-sample capture.
+
+    Targets ~8 windows across the block (n // 8), rounded down to the
+    nearest power of two, clamped to [16, 256] (and to n itself for very
+    short captures) -- a reasonable time/frequency tradeoff for the 1024-
+    sample FIFO blocks this tool normally sees, without hard-coding 1024.
+    """
+    target = max(16, n // 8)
+    nperseg = 1 << (target.bit_length() - 1)
+    return max(2, min(nperseg, 256, n))
 
 
 def parse_captures(path):
@@ -242,6 +264,37 @@ def analyze_one(cap, sr_hz, out_prefix):
     plt.close()
     print(f"  saved: {fft_path}")
 
+    # --- Spectrogram (STFT) per axis, Phase 7B-2 -- independent of the
+    # whole-capture FFT above; does not read or modify its results.
+    nperseg = _spectrogram_nperseg(n)
+    noverlap = nperseg // 2
+    fs = sr_hz if sr_hz else 1.0
+    window = hann(nperseg, sym=False)
+
+    spec_per_axis = {}
+    vmin, vmax = None, None
+    for label, data in axes.items():
+        ac = data - data.mean()   # mean-removed so DC doesn't swamp the color scale
+        f_spec, t_spec, Sxx = scipy_spectrogram(ac, fs=fs, window=window, nperseg=nperseg,
+                                                 noverlap=noverlap, detrend=False, mode='magnitude')
+        spec_per_axis[label] = (f_spec, t_spec, Sxx)
+        vmin = Sxx.min() if vmin is None else min(vmin, Sxx.min())
+        vmax = Sxx.max() if vmax is None else max(vmax, Sxx.max())
+
+    fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
+    mesh = None
+    for ax, label in zip(axs, ['X', 'Y', 'Z']):
+        f_spec, t_spec, Sxx = spec_per_axis[label]
+        mesh = ax.pcolormesh(t_spec, f_spec, Sxx, shading='auto', cmap='viridis', vmin=vmin, vmax=vmax)
+        ax.set_ylabel(f'{label} Freq ({"Hz" if sr_hz else "cycles/sample"})')
+    axs[-1].set_xlabel(f"Time ({'s' if sr_hz else 'samples -- pass --sr-hz for seconds'})")
+    fig.suptitle(f"FIFO-derived Spectrogram (STFT, Hann window={nperseg}, 50% overlap) — tag='{cap['tag']}'")
+    fig.colorbar(mesh, ax=axs, label=f'Magnitude ({unit_label})')
+    spectrogram_path = f"{out_prefix}_{cap['tag']}_spectrogram.png"
+    plt.savefig(spectrogram_path, dpi=150)
+    plt.close()
+    print(f"  saved: {spectrogram_path}")
+
     # --- Gravity-vector magnitude check (RFC-0006 §1, §4 Experiment 1) ---
     # Only meaningful for g-scaled DC values -- raw ADC counts have no fixed
     # reference magnitude, so this is skipped for Phase 7A input.
@@ -279,6 +332,9 @@ def analyze_one(cap, sr_hz, out_prefix):
         'dominant_freq_z_hz': summary['Z']['dominant_freq'] if sr_hz else '',
         'waveform_png': ts_path,
         'fft_png': fft_path,
+        'spectrogram_png': spectrogram_path,
+        'spectrogram_window': nperseg,
+        'spectrogram_overlap': noverlap / nperseg,
     }
 
     return summary, row
