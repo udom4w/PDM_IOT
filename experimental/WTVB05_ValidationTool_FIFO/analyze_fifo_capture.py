@@ -41,6 +41,10 @@ line:
      whole figure) and records its path/window/overlap in the summary CSV
      (Phase 7B-2). This is independent of, and does not alter, the whole-
      capture FFT in step 2.
+  7. Plots the envelope of the mean-removed waveform per axis via
+     scipy.signal.hilbert() (envelope = abs(hilbert(signal)); no band-pass
+     filter yet -- that's a later phase) and records its path in the
+     summary CSV (Phase 7B-3).
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -64,6 +68,7 @@ import argparse
 import numpy as np
 from scipy.signal import spectrogram as scipy_spectrogram
 from scipy.signal.windows import hann
+from scipy.signal import hilbert
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -74,7 +79,7 @@ SUMMARY_CSV_FIELDS = [
     'peak_x', 'peak_y', 'peak_z',
     'dominant_freq_x_hz', 'dominant_freq_y_hz', 'dominant_freq_z_hz',
     'waveform_png', 'fft_png', 'spectrogram_png',
-    'spectrogram_window', 'spectrogram_overlap',
+    'spectrogram_window', 'spectrogram_overlap', 'envelope_png', 'envelope_method',
 ]
 
 
@@ -295,6 +300,28 @@ def analyze_one(cap, sr_hz, out_prefix):
     plt.close()
     print(f"  saved: {spectrogram_path}")
 
+    # --- Envelope (Hilbert transform) per axis, Phase 7B-3 -- uses the
+    # mean-removed waveform directly, no band-pass filter yet (that's a
+    # later phase). Independent of FFT/spectrogram; does not read or
+    # modify their results.
+    envelope_x = np.array(cap['index']) / sr_hz if sr_hz else cap['index']
+    fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
+    for ax, (label, data) in zip(axs, axes.items()):
+        ac = data - data.mean()
+        envelope = np.abs(hilbert(ac))
+        ax.plot(envelope_x, envelope, linewidth=0.8)
+        ax.set_ylabel(f'{label} Envelope ({unit_label})')
+        ax.grid(alpha=0.2)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+    axs[-1].set_xlabel('Time (s)' if sr_hz else 'Sample index (0-1023 within this FIFO block)')
+    fig.suptitle(f"FIFO-derived Envelope (Hilbert) — tag='{cap['tag']}' (all {n} samples)")
+    plt.tight_layout()
+    envelope_path = f"{out_prefix}_{cap['tag']}_envelope.png"
+    plt.savefig(envelope_path, dpi=150)
+    plt.close()
+    print(f"  saved: {envelope_path}")
+
     # --- Gravity-vector magnitude check (RFC-0006 §1, §4 Experiment 1) ---
     # Only meaningful for g-scaled DC values -- raw ADC counts have no fixed
     # reference magnitude, so this is skipped for Phase 7A input.
@@ -335,6 +362,8 @@ def analyze_one(cap, sr_hz, out_prefix):
         'spectrogram_png': spectrogram_path,
         'spectrogram_window': nperseg,
         'spectrogram_overlap': noverlap / nperseg,
+        'envelope_png': envelope_path,
+        'envelope_method': 'hilbert_raw',
     }
 
     return summary, row
