@@ -48,6 +48,11 @@ line:
   8. Computes a plain np.fft.rfft() of that same envelope signal (DC-
      removed, no window function yet) per axis, plots it, and records its
      dominant frequency and PNG path in the summary CSV (Phase 7B-4).
+  9. Optionally, if --manufacturer and --bearing are both given, looks up
+     the bearing's geometry in the external bearing_database/bearing_db.json
+     database and prints/records it (Z, ball diameter, pitch diameter,
+     contact angle) in the summary CSV (Phase 7C-1, revised to an external
+     JSON database instead of a hard-coded dict).
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -65,8 +70,10 @@ instruction to distinguish hypotheses experimentally.
 """
 
 import sys
+import os
 import re
 import csv
+import json
 import argparse
 import numpy as np
 from scipy.signal import spectrogram as scipy_spectrogram
@@ -85,7 +92,54 @@ SUMMARY_CSV_FIELDS = [
     'spectrogram_window', 'spectrogram_overlap', 'envelope_png', 'envelope_method',
     'dominant_envelope_freq_x_hz', 'dominant_envelope_freq_y_hz', 'dominant_envelope_freq_z_hz',
     'envelope_fft_png',
+    'bearing_model', 'rolling_elements', 'ball_diameter_mm', 'pitch_diameter_mm', 'contact_angle_deg',
 ]
+
+# External bearing geometry database, Phase 7C-1 (revised architecture --
+# replaces the earlier hard-coded BEARING_DB dict). Structure:
+# {"<manufacturer>": {"<model>": {rolling_elements, ball_diameter_mm,
+# pitch_diameter_mm, contact_angle_deg}}}. No fault-frequency math is done
+# with these values yet, that's a later phase.
+BEARING_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bearing_database', 'bearing_db.json')
+
+BEARING_DB_REQUIRED_KEYS = {'rolling_elements', 'ball_diameter_mm', 'pitch_diameter_mm', 'contact_angle_deg'}
+
+
+def load_bearing_database(path):
+    """Read the bearing geometry JSON database once and validate its shape.
+
+    Expected shape: {manufacturer: {model: {rolling_elements,
+    ball_diameter_mm, pitch_diameter_mm, contact_angle_deg}}}. On any
+    problem -- missing file, invalid JSON, or a shape that doesn't match --
+    prints a clear, specific error and exits cleanly (sys.exit(1)) rather
+    than letting a traceback surface.
+    """
+    try:
+        with open(path, encoding='utf-8') as f:
+            db = json.load(f)
+    except FileNotFoundError:
+        print(f"Bearing database not found: {path}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"Bearing database is not valid JSON ({path}): {e}")
+        sys.exit(1)
+
+    if not isinstance(db, dict):
+        print(f"Bearing database malformed ({path}): top level must be an "
+              f"object mapping manufacturer -> {{model: geometry}}")
+        sys.exit(1)
+    for manufacturer, models in db.items():
+        if not isinstance(models, dict):
+            print(f"Bearing database malformed ({path}): manufacturer "
+                  f"'{manufacturer}' must map to an object of bearing models")
+            sys.exit(1)
+        for model, geometry in models.items():
+            if not isinstance(geometry, dict) or not BEARING_DB_REQUIRED_KEYS.issubset(geometry):
+                print(f"Bearing database malformed ({path}): '{manufacturer}/{model}' "
+                      f"is missing one of {sorted(BEARING_DB_REQUIRED_KEYS)}")
+                sys.exit(1)
+
+    return db
 
 
 def _spectrogram_nperseg(n):
@@ -212,7 +266,7 @@ def _parse_captures_phase7a(lines):
     return captures
 
 
-def analyze_one(cap, sr_hz, out_prefix):
+def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None):
     n = len(cap['index'])
     is_phase7a = cap.get('format') == 'phase7a'
     unit_label = 'Raw Counts' if is_phase7a else 'g'
@@ -410,6 +464,11 @@ def analyze_one(cap, sr_hz, out_prefix):
         'dominant_envelope_freq_y_hz': envelope_fft_summary['Y'] if sr_hz else '',
         'dominant_envelope_freq_z_hz': envelope_fft_summary['Z'] if sr_hz else '',
         'envelope_fft_png': envelope_fft_path,
+        'bearing_model': bearing_model if bearing_model else '',
+        'rolling_elements': bearing['rolling_elements'] if bearing else '',
+        'ball_diameter_mm': bearing['ball_diameter_mm'] if bearing else '',
+        'pitch_diameter_mm': bearing['pitch_diameter_mm'] if bearing else '',
+        'contact_angle_deg': bearing['contact_angle_deg'] if bearing else '',
     }
 
     return summary, row
@@ -422,7 +481,42 @@ def main():
                      help='True sample rate in Hz for correct FFT frequency-axis labeling '
                           '(look up SR index -> Hz from the firmware SAMPLE_RATE_HZ table)')
     ap.add_argument('--out-prefix', default='fifo_analysis', help='Output filename prefix for plots')
+    ap.add_argument('--manufacturer', default=None,
+                     help='Bearing manufacturer, e.g. SKF (Phase 7C-1; must be given together '
+                          f'with --bearing, no fault-frequency calculation yet). '
+                          f'Looked up in {BEARING_DB_PATH}')
+    ap.add_argument('--bearing', default=None,
+                     help='Bearing model, e.g. 6205 (Phase 7C-1; must be given together '
+                          'with --manufacturer)')
     args = ap.parse_args()
+
+    if bool(args.manufacturer) != bool(args.bearing):
+        print("Both --manufacturer and --bearing are required together "
+              "(e.g. --manufacturer SKF --bearing 6205).")
+        sys.exit(1)
+
+    bearing = None
+    bearing_model = None
+    if args.manufacturer and args.bearing:
+        # manufacturer -> bearing model -> JSON lookup -> bearing geometry
+        bearing_db = load_bearing_database(BEARING_DB_PATH)
+        manufacturer_db = bearing_db.get(args.manufacturer)
+        if manufacturer_db is None:
+            print(f"Unknown manufacturer '{args.manufacturer}'. "
+                  f"Known manufacturers: {', '.join(sorted(bearing_db))}")
+            sys.exit(1)
+        bearing = manufacturer_db.get(args.bearing)
+        if bearing is None:
+            print(f"Unknown bearing model '{args.bearing}' for manufacturer '{args.manufacturer}'. "
+                  f"Known models: {', '.join(sorted(manufacturer_db))}")
+            sys.exit(1)
+        bearing_model = f"{args.manufacturer}{args.bearing}"
+        print("Bearing:")
+        print(f"  Model: {args.manufacturer} {args.bearing}")
+        print(f"  Z: {bearing['rolling_elements']}")
+        print(f"  Bd: {bearing['ball_diameter_mm']} mm")
+        print(f"  Pd: {bearing['pitch_diameter_mm']} mm")
+        print(f"  Angle: {bearing['contact_angle_deg']} deg")
 
     captures = parse_captures(args.logfile)
     if not captures:
@@ -435,7 +529,7 @@ def main():
     print(f"Found {len(captures)} FIFO capture(s) in {args.logfile}")
     summary_rows = []
     for cap in captures:
-        _, row = analyze_one(cap, args.sr_hz, args.out_prefix)
+        _, row = analyze_one(cap, args.sr_hz, args.out_prefix, bearing_model=bearing_model, bearing=bearing)
         summary_rows.append(row)
 
     summary_csv_path = f"{args.out_prefix}_summary.csv"

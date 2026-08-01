@@ -1,0 +1,16 @@
+{
+  "SKF": {
+    "6205": {
+      "rolling_elements": 9,
+      "ball_diameter_mm": 7.94,
+      "pitch_diameter_mm": 39.04,
+      "contact_angle_deg": 0.0
+    },
+    "6206": {
+      "rolling_elements": 9,
+      "ball_diameter_mm": 9.53,
+      "pitch_diameter_mm": 46.00,
+      "contact_angle_deg": 0.0
+    }
+  }
+}
