@@ -5,7 +5,25 @@ analyze_fifo_capture.py — RFC-0006 experiment analysis tool
 Reads a Serial Monitor log (or a plain CSV) containing one or more `FIFO`
 command captures from WTVB05_ValidationTool v3.0, and for each capture:
 
-  1. Plots the full 1024-sample time series per axis (X, Y, Z) in g.
+Supports two input formats, auto-detected from the file's first non-blank
+line:
+
+  - legacy 9-column format:
+      FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g
+    (one or more blocks per file, each terminated by a 'FIFO_CAPTURE_END'
+    sentinel line; may be embedded in a raw serial log with surrounding
+    boot/debug noise)
+
+  - Phase 7A 4-column format:
+      Index,X,Y,Z
+    (X/Y/Z are raw ADC counts, NOT g -- no Tag/SR fields, no g-conversion
+    available. A block runs from its header line to the next header line
+    or end of file. Time waveform / FFT axes are labeled "Raw Counts" and
+    the gravity-vector sanity check, which assumes g-scaled DC values, is
+    skipped for this format.)
+
+  1. Plots the full 1024-sample time series per axis (X, Y, Z) in g
+     (legacy format) or raw ADC counts (Phase 7A format).
   2. Computes an FFT independently from the raw samples and plots the
      magnitude spectrum per axis.
   3. Computes RMS (mean-removed) and Peak per axis from the raw samples.
@@ -39,57 +57,134 @@ import matplotlib.pyplot as plt
 
 
 def parse_captures(path):
-    """Parse one or more FIFO CSV blocks out of a raw serial log file.
-    Returns a list of dicts: {tag, sr, index, x_raw, y_raw, z_raw, x_g, y_g, z_g}
+    """Parse one or more FIFO capture blocks out of a file.
+
+    Auto-detects the CSV format from the file's first non-blank line and
+    dispatches to the matching parser. Both parsers return the same shape:
+    a list of dicts {format, tag, sr, index, x_raw, y_raw, z_raw, x_g, y_g, z_g}.
+    'format' is 'legacy' (X/Y/Z_g are g-scaled) or 'phase7a' (X/Y/Z_raw are
+    raw ADC counts, X/Y/Z_g unavailable).
+    """
+    with open(path, encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+
+    first_line = ''
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped:
+            first_line = stripped
+            break
+
+    if re.match(r'^Index,X,Y,Z\s*$', first_line):
+        return _parse_captures_phase7a(lines)
+    return _parse_captures_legacy(lines)
+
+
+def _parse_captures_legacy(lines):
+    """Legacy 9-column format: FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g
+
+    One or more blocks per file, each terminated by a 'FIFO_CAPTURE_END'
+    sentinel line; may be embedded in a raw serial log with surrounding
+    boot/debug noise.
     """
     captures = []
     current = None
     header_re = re.compile(r'^FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g\s*$')
 
-    with open(path, encoding='utf-8', errors='replace') as f:
-        for line in f:
-            line = line.rstrip('\r\n')
-            if header_re.match(line):
-                current = {'tag': None, 'sr': None, 'index': [], 'x_raw': [], 'y_raw': [], 'z_raw': [],
-                           'x_g': [], 'y_g': [], 'z_g': []}
+    for raw_line in lines:
+        line = raw_line.rstrip('\r\n')
+        if header_re.match(line):
+            current = {'format': 'legacy', 'tag': None, 'sr': None, 'index': [],
+                       'x_raw': [], 'y_raw': [], 'z_raw': [], 'x_g': [], 'y_g': [], 'z_g': []}
+            continue
+        if line.strip() == 'FIFO_CAPTURE_END':
+            if current is not None and len(current['index']) > 0:
+                captures.append(current)
+            current = None
+            continue
+        if current is not None:
+            parts = line.split(',')
+            if len(parts) != 9:
                 continue
-            if line.strip() == 'FIFO_CAPTURE_END':
-                if current is not None and len(current['index']) > 0:
-                    captures.append(current)
-                current = None
+            try:
+                idx = int(parts[0])
+                tag = parts[1]
+                sr = int(parts[2])
+                x_raw, y_raw, z_raw = int(parts[3]), int(parts[4]), int(parts[5])
+                x_g, y_g, z_g = float(parts[6]), float(parts[7]), float(parts[8])
+            except ValueError:
                 continue
-            if current is not None:
-                parts = line.split(',')
-                if len(parts) != 9:
-                    continue
-                try:
-                    idx = int(parts[0])
-                    tag = parts[1]
-                    sr = int(parts[2])
-                    x_raw, y_raw, z_raw = int(parts[3]), int(parts[4]), int(parts[5])
-                    x_g, y_g, z_g = float(parts[6]), float(parts[7]), float(parts[8])
-                except ValueError:
-                    continue
-                current['tag'] = tag
-                current['sr'] = sr
-                current['index'].append(idx)
-                current['x_raw'].append(x_raw); current['y_raw'].append(y_raw); current['z_raw'].append(z_raw)
-                current['x_g'].append(x_g); current['y_g'].append(y_g); current['z_g'].append(z_g)
+            current['tag'] = tag
+            current['sr'] = sr
+            current['index'].append(idx)
+            current['x_raw'].append(x_raw); current['y_raw'].append(y_raw); current['z_raw'].append(z_raw)
+            current['x_g'].append(x_g); current['y_g'].append(y_g); current['z_g'].append(z_g)
 
+    return captures
+
+
+def _parse_captures_phase7a(lines):
+    """Phase 7A 4-column format: Index,X,Y,Z (X/Y/Z are raw ADC counts).
+
+    Unlike the legacy format, this CSV carries no separate raw/g pair --
+    X/Y/Z are the raw counts, full stop. There is no g-conversion available,
+    so x_g/y_g/z_g are left empty; downstream code must not treat this
+    format as g-scaled. This format also carries no Tag/SR fields, so those
+    are synthesized (tag = 'phase7a_N' per block, sr = None). A block runs
+    from its header line to the next header line or end of file -- there is
+    no END sentinel.
+    """
+    header_re = re.compile(r'^Index,X,Y,Z\s*$')
+    captures = []
+    current = None
+    block_num = 0
+
+    def finalize():
+        if current is not None and len(current['index']) > 0:
+            captures.append(current)
+
+    for raw_line in lines:
+        line = raw_line.rstrip('\r\n')
+        if header_re.match(line):
+            finalize()
+            block_num += 1
+            current = {'format': 'phase7a', 'tag': f'phase7a_{block_num}', 'sr': None, 'index': [],
+                       'x_raw': [], 'y_raw': [], 'z_raw': [], 'x_g': [], 'y_g': [], 'z_g': []}
+            continue
+        if current is not None:
+            parts = line.split(',')
+            if len(parts) != 4:
+                continue
+            try:
+                idx = int(parts[0])
+                x_raw, y_raw, z_raw = float(parts[1]), float(parts[2]), float(parts[3])
+            except ValueError:
+                continue
+            current['index'].append(idx)
+            current['x_raw'].append(x_raw); current['y_raw'].append(y_raw); current['z_raw'].append(z_raw)
+
+    finalize()
     return captures
 
 
 def analyze_one(cap, sr_hz, out_prefix):
     n = len(cap['index'])
+    is_phase7a = cap.get('format') == 'phase7a'
+    unit_label = 'Raw Counts' if is_phase7a else 'g'
+    unit_suffix = ' counts' if is_phase7a else 'g'
+    num_fmt = '.1f' if is_phase7a else '.4f'
     print(f"\n=== Capture tag='{cap['tag']}' SR_index={cap['sr']} samples={n} ===")
 
-    axes = {'X': np.array(cap['x_g']), 'Y': np.array(cap['y_g']), 'Z': np.array(cap['z_g'])}
+    if is_phase7a:
+        axes = {'X': np.array(cap['x_raw']), 'Y': np.array(cap['y_raw']), 'Z': np.array(cap['z_raw'])}
+    else:
+        axes = {'X': np.array(cap['x_g']), 'Y': np.array(cap['y_g']), 'Z': np.array(cap['z_g'])}
 
     # --- Time-series plot, all 1024 points per axis ---
     fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
     for ax, (label, data) in zip(axs, axes.items()):
         ax.plot(cap['index'], data, linewidth=0.7)
-        ax.set_ylabel(f'{label} (g)')
+        ax.set_ylabel(f'{label} ({unit_label})')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -118,13 +213,14 @@ def analyze_one(cap, sr_hz, out_prefix):
         summary[label] = dict(dc=mean_val, rms=rms, peak=peak, dominant_freq=dominant_freq)
 
         ax.plot(freqs, mag, linewidth=0.8)
-        ax.set_ylabel(f'{label} magnitude')
+        ax.set_ylabel(f'{label} magnitude ({unit_label})' if is_phase7a else f'{label} magnitude')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         xunit = 'Hz' if sr_hz else 'cycles/1024-sample-block'
-        ax.set_title(f'{label}: DC={mean_val:.4f}g  RMS(AC)={rms:.4f}g  Peak(AC)={peak:.4f}g  '
-                      f'dominant~{dominant_freq:.1f}{xunit}', fontsize=9, loc='left')
+        ax.set_title(f'{label}: DC={mean_val:{num_fmt}}{unit_suffix}  RMS(AC)={rms:{num_fmt}}{unit_suffix}  '
+                      f'Peak(AC)={peak:{num_fmt}}{unit_suffix}  dominant~{dominant_freq:.1f}{xunit}',
+                      fontsize=9, loc='left')
     axs[-1].set_xlabel(f"Frequency ({'Hz' if sr_hz else 'cycles per 1024-sample block -- pass --sr-hz for real Hz'})")
     fig.suptitle(f"FIFO-derived FFT — tag='{cap['tag']}'")
     plt.tight_layout()
@@ -134,15 +230,21 @@ def analyze_one(cap, sr_hz, out_prefix):
     print(f"  saved: {fft_path}")
 
     # --- Gravity-vector magnitude check (RFC-0006 §1, §4 Experiment 1) ---
-    dc_vec = np.array([summary['X']['dc'], summary['Y']['dc'], summary['Z']['dc']])
-    mag_g = np.linalg.norm(dc_vec)
-    print(f"  DC vector magnitude |X,Y,Z| = {mag_g:.4f} g  "
-          f"({'consistent with gravity' if 0.9 <= mag_g <= 1.1 else 'DOES NOT look like gravity -- re-examine hypothesis'})")
+    # Only meaningful for g-scaled DC values -- raw ADC counts have no fixed
+    # reference magnitude, so this is skipped for Phase 7A input.
+    if is_phase7a:
+        print("  (Phase 7A raw-count input -- skipping gravity-vector interpretation, "
+              "which requires g-scaled DC values)")
+    else:
+        dc_vec = np.array([summary['X']['dc'], summary['Y']['dc'], summary['Z']['dc']])
+        mag_g = np.linalg.norm(dc_vec)
+        print(f"  DC vector magnitude |X,Y,Z| = {mag_g:.4f} g  "
+              f"({'consistent with gravity' if 0.9 <= mag_g <= 1.1 else 'DOES NOT look like gravity -- re-examine hypothesis'})")
 
     print("  --- Compare these numbers against the SAME-moment register readout ---")
     for label in ['X', 'Y', 'Z']:
         s = summary[label]
-        print(f"  {label}: FIFO-derived RMS={s['rms']:.4f}g  Peak={s['peak']:.4f}g  "
+        print(f"  {label}: FIFO-derived RMS={s['rms']:{num_fmt}}{unit_suffix}  Peak={s['peak']:{num_fmt}}{unit_suffix}  "
               f"dominant_freq~{s['dominant_freq']:.1f}"
               f"{'Hz' if sr_hz else ' (cycles/block, pass --sr-hz)'}"
               f"   <-- compare to register RRAX/VRMSX-type & HZX for this axis")
@@ -161,9 +263,10 @@ def main():
 
     captures = parse_captures(args.logfile)
     if not captures:
-        print("No FIFO captures found in this file. Expected a header line "
-              "'FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g' followed by 1024 "
-              "data rows and a 'FIFO_CAPTURE_END' sentinel line.")
+        print("No FIFO captures found in this file. Expected either a legacy header line "
+              "'FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g' followed by data rows and a "
+              "'FIFO_CAPTURE_END' sentinel line, or a Phase 7A header line 'Index,X,Y,Z' "
+              "followed by data rows.")
         sys.exit(1)
 
     print(f"Found {len(captures)} FIFO capture(s) in {args.logfile}")
