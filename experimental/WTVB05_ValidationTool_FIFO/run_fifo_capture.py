@@ -3,10 +3,11 @@
 run_fifo_capture.py
 
 Opens COM5 @ 115200, sends "SETPOINT 30" (metadata log only -- no Modbus,
-does not drive the motor), then "SR 5" (1000 Hz per firmware
-SAMPLE_RATE_HZ table), waits 1s, then sends "FIFO test1" and "FIFO test2"
-in turn, listening after each until the "FIFO_CAPTURE_END" sentinel line
-(or ~25s timeout). Everything received is appended to serial_log.txt.
+does not drive the motor), then "SR <SR_INDEX>" (see SR_TABLE/SR_INDEX
+below -- the Validation Tool firmware's own SAMPLE_RATE_HZ table, mirrored
+here), waits 1s, then sends "FIFO test1" and "FIFO test2" in turn,
+listening after each until the "FIFO_CAPTURE_END" sentinel line (or ~25s
+timeout). Everything received is appended to serial_log.txt.
 
 If a "CRC MISMATCH" or "FIFO capture FAILED" line is seen before the next
 CSV header ("FIFOIndex,Tag,SR,...") in the capture window, automatically
@@ -16,7 +17,14 @@ discarded once a fresh header line appears, so they don't poison the
 verdict for the capture that actually follows it.
 
 On completion (success or exhausted retries for both tags), runs:
-    analyze_fifo_capture.py serial_log.txt --sr-hz 1000
+    analyze_fifo_capture.py serial_log.txt --sr-hz <Hz for SR_INDEX>
+
+SR_INDEX below is the single owner of the sample rate for this whole
+pipeline (Phase 1.1 refactor). The "SR <n>" command sent to the firmware
+and the "--sr-hz" value passed to analyze_fifo_capture.py are both derived
+from it via SR_TABLE -- there is no second, independently-hardcoded rate
+value anywhere in this file. To run at a different rate, change SR_INDEX
+only.
 """
 
 import subprocess
@@ -33,6 +41,32 @@ CSV_HEADER_MARKER = "FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g"
 FAILURE_MARKERS = ("CRC MISMATCH", "FIFO capture FAILED")
 CAPTURE_TIMEOUT_S = 25
 MAX_ATTEMPTS = 5
+
+# Single source of truth for sample rate (Phase 1.1). Mirrors the firmware's
+# own SR index -> (label, Hz) table (WTVB05_ValidationTool_v3_11_TRUEPOLL.ino
+# SAMPLE_RATE_NAMES/SAMPLE_RATE_HZ, SR_TABLE_SIZE=10). Index is what actually
+# gets sent to the sensor over serial; Hz is derived from it below, never
+# hardcoded separately.
+SR_TABLE = {
+    0: ("32 kHz", 32000),
+    1: ("16 kHz", 16000),
+    2: ("8 kHz", 8000),
+    3: ("4 kHz", 4000),
+    4: ("2 kHz", 2000),
+    5: ("1 kHz", 1000),
+    6: ("512 Hz", 512),
+    7: ("256 Hz", 256),
+    8: ("128 Hz", 128),
+    9: ("64 Hz", 64),
+}
+
+# THE single variable to change to run this pipeline at a different sample
+# rate. Everything else (the "SR <n>" command and the --sr-hz passed to
+# analyze_fifo_capture.py) is derived from this via SR_TABLE -- do not
+# hardcode a rate anywhere else in this file.
+SR_INDEX = 5
+
+SR_LABEL, SR_HZ = SR_TABLE[SR_INDEX]
 
 
 def send_command(ser, log, cmd):
@@ -117,7 +151,7 @@ def main():
 
         send_command(ser, log, "SETPOINT 30")
         time.sleep(0.5)
-        send_command(ser, log, "SR 5")
+        send_command(ser, log, f"SR {SR_INDEX}")
         time.sleep(1)
 
         success_test1 = capture_tag(ser, log, "test1")
@@ -126,9 +160,9 @@ def main():
     if not (success_test1 and success_test2):
         print(f"[ERROR] Not all captures succeeded (test1={success_test1}, test2={success_test2}).")
 
-    print("[INFO] Running analyze_fifo_capture.py...")
+    print(f"[INFO] Running analyze_fifo_capture.py (SR_INDEX={SR_INDEX} -> {SR_LABEL} / --sr-hz {SR_HZ})...")
     result = subprocess.run(
-        [sys.executable, "analyze_fifo_capture.py", LOG_FILE, "--sr-hz", "1000"]
+        [sys.executable, "analyze_fifo_capture.py", LOG_FILE, "--sr-hz", str(SR_HZ)]
     )
     sys.exit(result.returncode)
 
