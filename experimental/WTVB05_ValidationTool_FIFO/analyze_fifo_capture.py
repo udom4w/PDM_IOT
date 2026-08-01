@@ -31,6 +31,10 @@ line:
      directly against the *register-reported* RRAX/VRMSX/HZX-type values
      from the same test session (RFC-0006 Experiment 3 — the single most
      decisive test proposed in that review).
+  5. Writes a machine-readable `<out-prefix>_summary.csv` with one row per
+     capture (tag, format, RMS/Peak/dominant-frequency per axis, and the
+     paths to the waveform/FFT PNGs generated in step 1-2), so downstream
+     tooling doesn't have to scrape stdout (Phase 7B-1).
 
 Usage:
     python3 analyze_fifo_capture.py serial_log.txt
@@ -49,11 +53,20 @@ instruction to distinguish hypotheses experimentally.
 
 import sys
 import re
+import csv
 import argparse
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+SUMMARY_CSV_FIELDS = [
+    'tag', 'input_format', 'sample_count', 'sample_rate_hz',
+    'rms_x', 'rms_y', 'rms_z',
+    'peak_x', 'peak_y', 'peak_z',
+    'dominant_freq_x_hz', 'dominant_freq_y_hz', 'dominant_freq_z_hz',
+    'waveform_png', 'fft_png',
+]
 
 
 def parse_captures(path):
@@ -249,7 +262,26 @@ def analyze_one(cap, sr_hz, out_prefix):
               f"{'Hz' if sr_hz else ' (cycles/block, pass --sr-hz)'}"
               f"   <-- compare to register RRAX/VRMSX-type & HZX for this axis")
 
-    return summary
+    # --- Structured summary row (Phase 7B-1) -- reports the same numbers
+    # already computed above; does not alter the analysis itself. Dominant
+    # frequency is left blank when --sr-hz wasn't given, since without it
+    # the value above is in cycles/block, not Hz (same "don't guess" rule
+    # the module docstring already applies to the frequency axis).
+    row = {
+        'tag': cap['tag'],
+        'input_format': cap.get('format', 'legacy'),
+        'sample_count': n,
+        'sample_rate_hz': sr_hz if sr_hz else '',
+        'rms_x': summary['X']['rms'], 'rms_y': summary['Y']['rms'], 'rms_z': summary['Z']['rms'],
+        'peak_x': summary['X']['peak'], 'peak_y': summary['Y']['peak'], 'peak_z': summary['Z']['peak'],
+        'dominant_freq_x_hz': summary['X']['dominant_freq'] if sr_hz else '',
+        'dominant_freq_y_hz': summary['Y']['dominant_freq'] if sr_hz else '',
+        'dominant_freq_z_hz': summary['Z']['dominant_freq'] if sr_hz else '',
+        'waveform_png': ts_path,
+        'fft_png': fft_path,
+    }
+
+    return summary, row
 
 
 def main():
@@ -270,8 +302,17 @@ def main():
         sys.exit(1)
 
     print(f"Found {len(captures)} FIFO capture(s) in {args.logfile}")
+    summary_rows = []
     for cap in captures:
-        analyze_one(cap, args.sr_hz, args.out_prefix)
+        _, row = analyze_one(cap, args.sr_hz, args.out_prefix)
+        summary_rows.append(row)
+
+    summary_csv_path = f"{args.out_prefix}_summary.csv"
+    with open(summary_csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=SUMMARY_CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(summary_rows)
+    print(f"\nSummary CSV saved: {summary_csv_path} ({len(summary_rows)} row(s))")
 
     print("\nDone. Remember (RFC-0006 discipline): a match here is EVIDENCE, "
           "not proof -- run this across multiple experiments (idle, tap, "
