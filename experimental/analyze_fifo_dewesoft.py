@@ -1,0 +1,878 @@
+#!/usr/bin/env python3
+"""
+analyze_fifo_dewesoft.py -- Dewesoft-compatible FFT/waveform analysis tool.
+
+Standalone tool that reproduces Dewesoft's FFT processing (Hann window,
+single-sided rFFT, Peak-Auto amplitude scaling) as closely as possible for
+a 3-axis acceleration CSV exported from Dewesoft (e.g.
+experimental/dewesoft_data/3Axis_acc_0009.csv).
+
+This tool is intentionally independent from analyze_fifo_capture.py (which
+targets WTVB05 FIFO captures in raw ADC counts): this one reads acceleration
+already expressed in m/s^2 from a Dewesoft export and does not touch the
+counts<->g<->m/s^2 conversion logic used there.
+
+Usage:
+    python experimental/analyze_fifo_dewesoft.py experimental/dewesoft_data/3Axis_acc_0009.csv --sr-hz 1000
+    python experimental/analyze_fifo_dewesoft.py capture.csv --sr-hz 1000 --fft-size 4096
+
+Output: waveform.png, fft.png, and summary.json are written to --out-dir,
+which defaults to experimental/output/ (created automatically if it does
+not exist) -- NOT the project root or the current working directory. Pass
+--out-dir to write elsewhere.
+
+--------------------------------------------------------------------------
+DEWESOFT FFT CONVENTION (FFT preview panel, "Amplitude display: Peak (Auto)")
+--------------------------------------------------------------------------
+This tool follows Dewesoft's own documented FFT pipeline as closely as a
+from-scratch numpy implementation allows:
+
+  1. DC offset is removed from the time-domain signal before windowing.
+  2. A Hann (Hanning) window is applied to reduce spectral leakage.
+  3. The window's amplitude attenuation (coherent gain = mean of the window
+     samples) is corrected for after the FFT, so windowed peak amplitudes
+     read the same as they would from an unwindowed signal -- this is what
+     Dewesoft's "Peak (Auto)" amplitude display means.
+  4. A real FFT (np.fft.rfft) is used and only the non-negative-frequency
+     half is kept (single-sided spectrum); all bins except DC and Nyquist
+     are doubled to fold the discarded negative-frequency energy back in.
+  5. If the input is longer than --fft-size, it is split into consecutive
+     (non-overlapping) blocks of --fft-size samples and the resulting
+     amplitude spectra are averaged bin-by-bin (matches Dewesoft's "Line
+     resolution" FFT preview, which recomputes/averages FFT blocks across
+     a long recorder capture rather than computing one huge FFT).
+  6. If the input (or its final block) is shorter than --fft-size, it is
+     zero-padded to --fft-size before windowing+FFT.
+
+FFT resolution (dF = SR / fft_size) is reported once and reused verbatim
+across the console report, fft.png, and summary.json.
+
+ASSUMPTIONS (flag explicitly since Dewesoft's internal implementation is
+closed-source):
+  - "Peak (Auto)" is taken to mean 0-to-peak amplitude of a single spectral
+    line for a sinusoidal component, i.e. the same convention documented in
+    analyze_fifo_capture.py's FFT_CONVENTION constant, just with the added
+    Hann coherent-gain correction that a rectangular (unwindowed) FFT does
+    not need.
+  - Noise floor is estimated as the median amplitude of all non-dominant
+    bins (excluding DC); this is a reasonable broadband estimate but is not
+    guaranteed to match Dewesoft's own (undocumented) noise-floor algorithm
+    bin-for-bin.
+
+--------------------------------------------------------------------------
+V2: PEAK SPECTRUM vs ENERGY SPECTRUM  (--spectrum peak | --spectrum energy)
+--------------------------------------------------------------------------
+Both paths share the same DC-removal -> Hann window -> zero-pad/block-split
+-> rFFT -> single-sided-fold steps described above; they differ ONLY in how
+the windowed FFT magnitude is corrected and averaged afterward. Peak
+Spectrum is the ORIGINAL V1 implementation and is UNCHANGED (bit-for-bit
+identical numeric output) -- it remains the default.
+
+  Peak Spectrum (--spectrum peak, DEFAULT, UNCHANGED from V1):
+    - Purpose: read the true 0-to-peak amplitude of an ISOLATED SINUSOIDAL
+      component off a windowed spectrum -- this is what Dewesoft's own
+      "Peak (Auto)" display means, and is why this is the default.
+    - Correction: divide by Coherent Gain, CG = mean(window).
+      For this tool's 2048-point np.hanning window, CG ~= 0.499756.
+    - Block combination: averages MAGNITUDE across blocks
+      (mean(|X_b|) over b), matching how Dewesoft's live FFT preview
+      settles as more blocks accumulate.
+    - Does NOT preserve Parseval / signal energy by design -- reconstructing
+      RMS from this spectrum (sum bin peaks/sqrt(2)) overstates true RMS
+      by ~sqrt(NPG)/CG (~22.5% for a 2048-pt Hann window), confirmed
+      empirically in validation_report.md Sec 4.2(B). This is an accepted,
+      documented trade-off of the Peak convention, not a defect.
+    - Use when: comparing against Dewesoft's Peak/Peak-Auto readout, or
+      picking out a specific tonal peak's true amplitude.
+
+  Energy Spectrum (--spectrum energy, NEW in V2):
+    - Purpose: an RMS (not peak) amplitude-per-bin spectrum whose bins,
+      summed in POWER, are Parseval-CONSISTENT with the time-domain AC RMS
+      -- i.e. it is built to be energy-consistent, not peak-reading-accurate
+      for a single tone. This is an approximate (typically within ~2% on
+      real vibration data, see validation_report.md), not bit-exact,
+      recovery of time-domain energy -- see compute_overall_rms() for why
+      windowing makes exact recovery impossible in general.
+    - Correction: divide by Noise Power Gain, NPG = mean(window**2).
+      For the same 2048-point np.hanning window, NPG ~= 0.374817.
+      NPG (not CG) is the factor that keeps a windowed signal's average
+      POWER consistent with the unwindowed signal's power -- the standard
+      normalization behind Welch/periodogram-style PSD estimation.
+    - Block combination: averages POWER (mean-square) across blocks, i.e.
+      mean(|X_b|^2) over b, NOT mean(|X_b|) -- summing power (not
+      magnitude) across bins is what Parseval's theorem actually relates
+      to time-domain mean-square, so power-domain averaging is required
+      for Overall RMS / Band RMS to stay energy-consistent block-to-block.
+    - Supports:
+        Overall RMS = sqrt(sum of all bins' mean-square) -- see
+          compute_overall_rms(); measured within ~0.3-1.6% of time-domain
+          AC RMS on this tool's validation file (Parseval-consistent, not
+          bit-exact -- see compute_overall_rms()'s docstring for why a
+          Hann-windowed spectrum cannot recover time-domain energy exactly,
+          unlike validation_report.md Sec 4.2(A)'s rectangular/no-window
+          check, which is exact by construction).
+        Band RMS = sqrt(sum of mean-square in [--band-hz LO HI]) -- see
+          compute_band_rms(); this is the building block ISO 20816 (and
+          any other banded velocity/acceleration RMS limit) needs, since
+          those standards define pass/fail bands in Hz, not single tones.
+    - Use when: computing Overall/Band RMS, energy-based severity
+      thresholds (ISO 20816), or any calculation that needs the spectrum
+      to sum back to a physically meaningful energy quantity.
+
+  Numeric summary (2048-pt np.hanning window, this tool's default):
+        Coherent Gain      CG  = mean(w)     ~= 0.499756
+        Noise Power Gain   NPG = mean(w**2)  ~= 0.374817
+        sqrt(NPG) / CG          ~= 1.225  (Peak Spectrum overstates RMS by
+                                            ~22.5% if summed as if it were
+                                            an Energy Spectrum -- exactly
+                                            why the two paths are kept
+                                            separate rather than merged
+                                            into one "corrected" spectrum.)
+
+This tool NEVER mixes the two: Peak Spectrum output is never fed into
+Overall RMS/Band RMS, and Energy Spectrum's "Dominant Amplitude" is an RMS
+value, not a peak value -- console/summary label it "(RMS)" explicitly in
+that mode to avoid ambiguity with the Peak Spectrum's dominant amplitude.
+
+--------------------------------------------------------------------------
+V2.1 STABILITY RELEASE -- fixes confirmed in code_review_v2.md
+--------------------------------------------------------------------------
+No new analysis features. No change to Peak Spectrum's per-block formula
+(Hann window, Coherent Gain correction, single-sided fold -- all
+byte-for-byte unchanged). Two fixes were made, both to confirmed defects:
+
+  1. FIXED -- equal-weight averaging of a zero-padded final block
+     (code_review_v2.md Possible Bugs #1, HIGH SEVERITY). Previously,
+     split_into_blocks()'s trailing partial block (zero-padded up to
+     fft_size) was averaged with the SAME weight as every full block --
+     confirmed to cut the reported amplitude in HALF in the worst case (a
+     signal exactly fft_size+1 samples long). Method chosen: a
+     REAL-SAMPLE-COUNT-WEIGHTED mean (np.average(..., weights=weights),
+     weights = number of real, non-padded samples per block -- see
+     split_into_blocks()) replaces the previous plain np.mean() in both
+     compute_fft_spectrum() and compute_energy_spectrum(). A block with
+     only 1 real sample out of 2048 now contributes ~0.05% of the average
+     instead of 50%. This is numerically IDENTICAL to the pre-fix
+     behavior whenever there is only one block, or every block is exactly
+     full (signal length an exact multiple of fft_size) -- it only changes
+     output for a signal with a genuine partial trailing block, which is
+     exactly the confirmed-wrong case. Alternatives considered: dropping a
+     short final block entirely (rejected -- silently discards real data
+     the user supplied) and requiring exact-multiple input lengths
+     (rejected -- overly restrictive for a Dewesoft export whose row count
+     is set by recording duration, not by --fft-size). See
+     release_notes_v2_1.md for the exact before/after numbers this
+     produced on the validation file.
+
+  2. FIXED -- no input validation on --fft-size / --sr-hz / --band-hz /
+     CSV size (code_review_v2.md Possible Bugs #3, #4, #5). --fft-size<=0,
+     --sr-hz<=0, an invalid --band-hz range (LO<0 or HI<=LO), an
+     empty/unreadable CSV, and fewer than 2 samples per axis are now all
+     rejected up front with a specific, clear error message instead of
+     producing a cryptic traceback, a silent NaN, or plausible-looking but
+     wrong (mislabeled-units) output. See main() for the exact checks.
+
+DOCUMENTED (not a code defect -- a fundamental, previously-undiscussed-in-
+this-tool's-own-docs property of ANY windowed FFT, confirmed numerically
+in code_review_v2.md Possible Bugs #2):
+
+  HANN WINDOW SCALLOPING LOSS -- Peak Spectrum's Coherent-Gain correction
+  (coherent_gain(), used in compute_fft_spectrum()) reads a sinusoid's true
+  peak amplitude EXACTLY only when that sinusoid's frequency falls exactly
+  on an FFT bin center. For a frequency that falls between bins, the Hann
+  window's main-lobe droop causes the reported peak to read LOW by up to
+  ~1.42 dB (~15.1%) in the worst case (exactly half a bin off-center) --
+  this is textbook behavior (Harris, 1978, "On the Use of Windows for
+  Harmonic Analysis with the DFT"), confirmed by direct measurement in
+  code_review_v2.md:
+        bin-aligned tone      (f = exactly bin 100 * dF): reported peak
+                              matches true peak to 0.00% error
+        half-bin-offset tone  (f = bin 100.5 * dF):        reported peak
+                              reads ~15.10% LOW
+  This is independent of, and can be LARGER than, the ~22.5% CG-vs-NPG
+  distinction documented at length above -- it applies ONLY to Peak
+  Spectrum (Energy Spectrum's Overall/Band RMS sum power across many bins,
+  so a single bin's scalloping loss washes out in that sum and does not
+  bias the Parseval-consistency result the same way). No fix is possible
+  without changing Peak Spectrum's numerical behavior (a different window,
+  zero-padding to interpolate the spectrum more finely, or a parabolic
+  peak-interpolation estimator would all change output values) -- V2.1
+  intentionally leaves Peak Spectrum's math untouched and instead documents
+  this limitation here and in validation_report.md.
+
+NOT changed in V2.1 (explicitly out of scope for this stability release,
+listed here so a future contributor doesn't assume otherwise): the
+duplicated `if sr_hz else ...` / rfftfreq pattern (compute_fft_resolution_hz,
+compute_fft_spectrum, compute_energy_spectrum), the redundant
+list(band_range_hz) conversion in build_summary_dict(), and the
+print-alignment cosmetic difference between Peak and Energy mode's
+"Dominant Amplitude" line -- all still present, all still harmless, none
+of them were on the confirmed-bug list this release targets.
+"""
+
+import os
+import sys
+import json
+import argparse
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+AXIS_LABELS = ['X', 'Y', 'Z']
+DEFAULT_FFT_SIZE = 2048
+DEFAULT_OUTPUT_DIR = 'experimental/output'
+
+
+# ==========================================================================
+# INPUT -- Dewesoft CSV column detection
+# ==========================================================================
+
+def find_acceleration_columns(df):
+    """Locate the three acceleration (m/s^2) columns in a Dewesoft export.
+
+    Dewesoft column headers look like 'AI 1/AI 1 (m/s2)' (unit suffix may
+    render as m/s2, m/s^2, or m/s²). Velocity channels ('.../v (m/s)',
+    no square/superscript on the unit) are excluded on purpose -- this tool
+    only analyzes acceleration. The first three matching columns are taken,
+    in file order, as X/Y/Z (Dewesoft does not label axis identity itself;
+    this is the same "trust column order" convention used for
+    AI 1/AI 2/AI 3 in the source recording).
+    """
+    candidates = []
+    for col in df.columns:
+        lowered = col.lower().replace('^', '').replace('²', '2')
+        if 'm/s2' in lowered and '/v' not in lowered:
+            candidates.append(col)
+
+    if len(candidates) < 3:
+        raise ValueError(
+            f"Expected at least 3 acceleration (m/s^2) columns, found "
+            f"{len(candidates)}: {candidates}. Available columns: {list(df.columns)}"
+        )
+
+    return candidates[:3]
+
+
+def load_axes(csv_path):
+    """Read the Dewesoft CSV and return {'X': array, 'Y': array, 'Z': array}
+    of acceleration in m/s^2, in file row order (no resampling/decimation).
+
+    [V2.1] Raises ValueError (instead of letting a raw pandas exception
+    escape) if the file is completely empty/unreadable as CSV -- one of the
+    input-validation gaps confirmed in code_review_v2.md ("Error messages
+    are asymmetric"). A header-only CSV (0 data rows) is NOT rejected here
+    -- it produces zero-length axis arrays, which main() rejects with a
+    clearer, sample-count-specific message (see "fewer than two samples"
+    check in main()) since that message applies uniformly regardless of
+    whether the shortfall is 0, 1, empty file, or header-only file.
+    """
+    try:
+        df = pd.read_csv(csv_path)
+    except pd.errors.EmptyDataError as e:
+        raise ValueError(f"CSV file '{csv_path}' is empty or unreadable: {e}")
+
+    accel_cols = find_acceleration_columns(df)
+    return {
+        label: df[col].to_numpy(dtype=float)
+        for label, col in zip(AXIS_LABELS, accel_cols)
+    }
+
+
+# ==========================================================================
+# TIME-DOMAIN STATISTICS
+# ==========================================================================
+
+def compute_time_domain_stats(signal):
+    """Mean(DC)/AC-RMS/Peak/Peak-to-Peak/StdDev/CrestFactor for one axis.
+
+    DC = signal.mean(); everything else is computed on the mean-removed
+    (AC) signal, per standard vibration-analysis convention (matches
+    Dewesoft's own Peak/RMS math widgets, which report AC quantities on an
+    AC-coupled or DC-removed channel).
+    """
+    signal = np.asarray(signal, dtype=float)
+    dc = signal.mean()
+    ac = signal - dc
+
+    ac_rms = np.sqrt(np.mean(ac ** 2))
+    peak = np.max(np.abs(ac))
+    peak_to_peak = np.max(ac) - np.min(ac)
+    std_dev = np.std(ac)
+    crest_factor = peak / ac_rms if ac_rms > 0 else float('nan')
+
+    return {
+        'dc': dc,
+        'ac_rms': ac_rms,
+        'peak': peak,
+        'peak_to_peak': peak_to_peak,
+        'std_dev': std_dev,
+        'crest_factor': crest_factor,
+        'ac': ac,
+    }
+
+
+# ==========================================================================
+# FFT -- Hann window, coherent-gain correction, block-averaging
+# ==========================================================================
+
+def hann_window(n):
+    """Hann (Hanning) window of length n, matching np.hanning's symmetric
+    (non-periodic) definition -- the conventional choice for a
+    single, non-overlapped analysis block (as opposed to the periodic/DFT
+    variant used for overlapped STFT processing).
+    """
+    return np.hanning(n)
+
+
+def coherent_gain(window):
+    """Hann coherent gain = mean of the window samples.
+
+    Applying a window attenuates signal amplitude (a Hann window's samples
+    average ~0.5 of full scale); dividing by this factor after the FFT
+    restores true amplitude, which is what lets windowed peak readings be
+    compared directly against an unwindowed time-domain Peak figure -- this
+    is the correction Dewesoft's own "Peak (Auto)" display applies.
+    """
+    return np.mean(window)
+
+
+def noise_power_gain(window):
+    """Hann noise power gain, NPG = mean of the SQUARED window samples.
+
+    This is the factor (not Coherent Gain) that keeps a windowed signal's
+    average POWER consistent with the unwindowed signal's power -- the
+    standard normalization used by Welch/periodogram-style PSD estimation.
+    Used only by the Energy Spectrum path (compute_energy_spectrum()); the
+    Peak Spectrum path (compute_fft_spectrum()) uses coherent_gain()
+    instead and is unaffected by this function's existence.
+    """
+    return np.mean(window ** 2)
+
+
+def split_into_blocks(signal, fft_size):
+    """Split a signal into consecutive, non-overlapping fft_size blocks.
+
+    - If the signal is shorter than fft_size, returns a single zero-padded
+      block.
+    - If longer, splits into as many full fft_size blocks as fit; a
+      shorter final remainder block is zero-padded and included (matches
+      Dewesoft's FFT preview, which keeps recomputing FFT blocks across the
+      whole capture rather than discarding the tail).
+
+    Returns (blocks, weights): weights[i] is the number of REAL
+    (non-zero-padded) samples block i actually contains. [V2.1 fix] A
+    zero-padded trailing block must NOT count the same as a full block when
+    blocks are later averaged together (code_review_v2.md Possible Bugs
+    #1 -- confirmed a signal of length fft_size+1 got its reported
+    amplitude cut in half, because a 1-real-sample straggler block was
+    averaged at equal (50%) weight against a full block). Callers must use
+    these weights (e.g. np.average(..., weights=weights)) instead of a
+    plain np.mean() across blocks -- see compute_fft_spectrum() /
+    compute_energy_spectrum().
+    """
+    n = len(signal)
+    if n <= fft_size:
+        padded = np.zeros(fft_size)
+        padded[:n] = signal
+        return [padded], [n]
+
+    blocks = []
+    weights = []
+    for start in range(0, n, fft_size):
+        block = signal[start:start + fft_size]
+        real_len = len(block)
+        if real_len < fft_size:
+            padded = np.zeros(fft_size)
+            padded[:real_len] = block
+            block = padded
+        blocks.append(block)
+        weights.append(real_len)
+    return blocks, weights
+
+
+def compute_fft_spectrum(ac_signal, fft_size, sr_hz):
+    """Hann-windowed, coherent-gain-corrected, single-sided PEAK amplitude
+    spectrum, averaged across consecutive fft_size blocks (see module
+    docstring DEWESOFT FFT CONVENTION for the full step-by-step rationale).
+
+    [V2.1] Block combination is a REAL-SAMPLE-COUNT-WEIGHTED mean
+    (np.average(..., weights=weights)), not a plain np.mean() -- see
+    split_into_blocks()'s docstring and code_review_v2.md Possible Bugs #1.
+    For a signal whose length is an exact multiple of fft_size (all blocks
+    full) or that fits in a single block, every weight is equal/there is
+    only one block, so this is numerically IDENTICAL to the old plain
+    mean -- this only changes output for a signal with a genuine partial
+    trailing block, which is exactly the case that was confirmed wrong.
+
+    Returns (freqs, peak_amplitude_spectrum, n_blocks).
+    """
+    window = hann_window(fft_size)
+    gain = coherent_gain(window)
+
+    blocks, weights = split_into_blocks(ac_signal, fft_size)
+    spectra = []
+    for block in blocks:
+        windowed = block * window
+        spectrum = np.fft.rfft(windowed)
+        mag = np.abs(spectrum) / fft_size  # normalize by FFT length
+        mag = mag / gain                   # correct for Hann coherent gain
+
+        # Single-sided: double all bins except DC and (if present) Nyquist,
+        # to fold the discarded negative-frequency half back onto the
+        # positive side -- see FFT_CONVENTION note in analyze_fifo_capture.py
+        # for the same rationale applied to the unwindowed case.
+        mag = mag * 2.0
+        mag[0] /= 2.0
+        if fft_size % 2 == 0:
+            mag[-1] /= 2.0
+
+        spectra.append(mag)
+
+    avg_spectrum = np.average(spectra, axis=0, weights=weights)
+    freqs = np.fft.rfftfreq(fft_size, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(fft_size, d=1.0)
+
+    return freqs, avg_spectrum, len(blocks)
+
+
+def compute_energy_spectrum(ac_signal, fft_size, sr_hz):
+    """Hann-windowed, Noise-Power-Gain-corrected, single-sided RMS-amplitude
+    spectrum that preserves signal energy (Parseval) -- see module
+    docstring "V2: PEAK SPECTRUM vs ENERGY SPECTRUM" for the full
+    rationale. Independent of, and does not alter, compute_fft_spectrum()
+    (the unchanged Peak Spectrum path) -- both start from the same
+    Hann-windowed rFFT but diverge at the correction/averaging step.
+
+    Averages per-bin POWER (mean-square) across blocks, not magnitude --
+    summing power (not magnitude) across bins is what Parseval's theorem
+    relates to time-domain mean-square, so power-domain averaging is what
+    keeps Overall RMS / Band RMS energy-consistent block-to-block (see
+    compute_overall_rms() / compute_band_rms()).
+
+    Returns (freqs, rms_spectrum, mean_square_per_bin, n_blocks):
+      - rms_spectrum[k]        = sqrt(mean_square_per_bin[k]), an RMS
+                                 (not peak) amplitude-per-bin spectrum.
+      - mean_square_per_bin[k] = block-averaged mean-square contribution of
+                                 bin k; sum(mean_square_per_bin) is the
+                                 Parseval-consistent estimate of the AC
+                                 signal's mean-square (== AC RMS**2).
+
+    [V2.1] Block combination is a REAL-SAMPLE-COUNT-WEIGHTED mean, same fix
+    and same rationale as compute_fft_spectrum() -- see that function's
+    docstring and code_review_v2.md Possible Bugs #1. This bug affected
+    Energy Spectrum identically to Peak Spectrum (both consumed
+    split_into_blocks()'s output with equal per-block weight); fixed here
+    the same way, for the same reason.
+    """
+    window = hann_window(fft_size)
+    npg = noise_power_gain(window)
+
+    blocks, weights = split_into_blocks(ac_signal, fft_size)
+    power_spectra = []
+    for block in blocks:
+        windowed = block * window
+        spectrum = np.fft.rfft(windowed)
+
+        # Windowed one-sided Parseval: mean(x**2) ~= (1/(NPG*M^2)) *
+        # [ |X0|^2 + 2*sum(|Xk|^2, k=1..M/2-1) + |X_{M/2}|^2 ] (module
+        # docstring derivation -- note the M^2, not M: mean-square is a
+        # POWER quantity, so it scales with the square of the amplitude
+        # normalization compute_fft_spectrum() uses for its M-scaled AMPLITUDE
+        # spectrum). ms[k] is bin k's own contribution to that sum -- same
+        # fold-then-undo-DC/Nyquist pattern as compute_fft_spectrum(), just
+        # in the power domain (|.|^2) and normalized by NPG instead of CG.
+        ms = (np.abs(spectrum) ** 2) / (npg * fft_size ** 2)
+        ms = ms * 2.0
+        ms[0] /= 2.0
+        if fft_size % 2 == 0:
+            ms[-1] /= 2.0
+
+        power_spectra.append(ms)
+
+    ms_avg = np.average(power_spectra, axis=0, weights=weights)
+    rms_spectrum = np.sqrt(ms_avg)
+    freqs = np.fft.rfftfreq(fft_size, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(fft_size, d=1.0)
+
+    return freqs, rms_spectrum, ms_avg, len(blocks)
+
+
+def compute_overall_rms(ms_avg):
+    """Overall RMS from an Energy Spectrum's block-averaged mean-square
+    array (see compute_energy_spectrum()). Summing power across all bins
+    and taking the square root is what Parseval's theorem relates to the
+    signal's own time-domain AC RMS.
+
+    NOTE (honest limitation, not the Peak Spectrum's ~20%+ systematic
+    overstatement -- see module docstring): because this path applies a
+    Hann window, the NPG correction is only an approximate energy-recovery
+    factor (exact in expectation for a stationary/broadband signal whose
+    energy is uncorrelated with the window's shape; not an exact identity
+    for an arbitrary finite real signal, since windowing permanently
+    tapers/discards information at the block edges). Measured against
+    validation_report.md's test file this Overall RMS is typically within
+    ~0.3-1.6% of the time-domain AC RMS -- Parseval-*consistent*, not
+    bit-exact. Bit-exact equality (~1e-14%) is only achievable with a
+    rectangular/no-window transform (see validation_report.md Sec 4.2(A)).
+    """
+    return float(np.sqrt(np.sum(ms_avg)))
+
+
+def compute_band_rms(freqs, ms_avg, band_hz):
+    """RMS energy within [band_hz[0], band_hz[1]] Hz (inclusive), same
+    Parseval-consistent power-summation as compute_overall_rms() but
+    restricted to the bins whose frequency falls in the given band -- the
+    building block ISO 20816 (and any other banded RMS/velocity-limit
+    calculation) needs, since those standards define pass/fail bands in
+    Hz, not single tones.
+    """
+    lo, hi = band_hz
+    mask = (freqs >= lo) & (freqs <= hi)
+    return float(np.sqrt(np.sum(ms_avg[mask])))
+
+
+def compute_fft_resolution_hz(sr_hz, fft_size):
+    """FFT bin spacing dF = SR / fft_size (Hz per bin)."""
+    return sr_hz / fft_size if sr_hz else None
+
+
+def find_dominant_and_noise_floor(freqs, spectrum):
+    """Dominant frequency/amplitude (largest bin, DC excluded) plus a
+    broadband noise-floor estimate and the resulting SNR (dB).
+
+    Noise floor = median amplitude of all non-DC bins (see module docstring
+    ASSUMPTIONS -- this is a reasonable broadband estimate, not a
+    guaranteed match to Dewesoft's own undocumented algorithm).
+    """
+    non_dc = spectrum[1:]
+    dominant_idx = int(np.argmax(non_dc)) + 1
+    dominant_freq = freqs[dominant_idx]
+    dominant_amp = spectrum[dominant_idx]
+
+    noise_floor = float(np.median(non_dc))
+    if noise_floor > 0 and dominant_amp > 0:
+        snr_db = 20.0 * np.log10(dominant_amp / noise_floor)
+    else:
+        snr_db = float('nan')
+
+    return dominant_freq, dominant_amp, noise_floor, snr_db
+
+
+# ==========================================================================
+# PER-AXIS ANALYSIS (pure computation, no plotting)
+# ==========================================================================
+
+def analyze_axis(signal, sr_hz, fft_size, spectrum_mode='peak', band_hz=None):
+    """Run the full time-domain + FFT pipeline for one axis and return a
+    single dict with everything the plots/console-report/summary.json need.
+
+    spectrum_mode='peak' (default) is the ORIGINAL V1 Peak Spectrum path
+    (compute_fft_spectrum) -- UNCHANGED, byte-for-byte identical return
+    shape/values to V1. spectrum_mode='energy' instead uses
+    compute_energy_spectrum() and additionally reports Overall RMS (and
+    Band RMS if band_hz is given) -- see module docstring "V2: PEAK
+    SPECTRUM vs ENERGY SPECTRUM".
+    """
+    time_stats = compute_time_domain_stats(signal)
+
+    if spectrum_mode == 'energy':
+        freqs, spectrum, ms_avg, n_blocks = compute_energy_spectrum(time_stats['ac'], fft_size, sr_hz)
+        dominant_freq, dominant_amp, noise_floor, snr_db = find_dominant_and_noise_floor(freqs, spectrum)
+        result = {
+            **time_stats,
+            'freqs': freqs,
+            'spectrum': spectrum,
+            'n_fft_blocks': n_blocks,
+            'dominant_freq_hz': dominant_freq,
+            'dominant_amplitude': dominant_amp,
+            'noise_floor': noise_floor,
+            'snr_db': snr_db,
+            'overall_rms': compute_overall_rms(ms_avg),
+        }
+        if band_hz is not None:
+            result['band_rms'] = compute_band_rms(freqs, ms_avg, band_hz)
+            result['band_range_hz'] = tuple(band_hz)
+        return result
+
+    # --- Peak Spectrum (default) -- UNCHANGED from the V1 implementation ---
+    freqs, spectrum, n_blocks = compute_fft_spectrum(time_stats['ac'], fft_size, sr_hz)
+    dominant_freq, dominant_amp, noise_floor, snr_db = find_dominant_and_noise_floor(freqs, spectrum)
+
+    return {
+        **time_stats,
+        'freqs': freqs,
+        'spectrum': spectrum,
+        'n_fft_blocks': n_blocks,
+        'dominant_freq_hz': dominant_freq,
+        'dominant_amplitude': dominant_amp,
+        'noise_floor': noise_floor,
+        'snr_db': snr_db,
+    }
+
+
+# ==========================================================================
+# PLOTTING -- Dewesoft-style dark theme (V1 visual-only release, see
+# release_notes_v1_visual.md). Cosmetic constants/helper only: nothing here
+# reads or writes any computed value (RMS/FFT/Peak/Energy/stats/JSON) --
+# every function in this section only receives already-computed numbers to
+# draw, exactly as before this change.
+# ==========================================================================
+
+# Bright, high-contrast-on-black per-axis trace colors, matching Dewesoft's
+# own AI1(red)/AI2(blue)/AI3(green) convention (see the reference screenshot
+# this tool was originally built to match).
+AXIS_COLORS = {'X': '#FF3030', 'Y': '#3399FF', 'Z': '#33CC33'}
+
+DARK_FIGURE_BG = '#000000'   # figure background: black
+DARK_AXES_BG = '#101010'     # axes background: very dark gray
+GRID_COLOR = '#404040'       # thin gray grid, similar to Dewesoft
+TEXT_COLOR = 'white'         # axis labels / tick labels / titles
+# Dominant-frequency marker/annotation color in fft.png: deliberately NOT
+# reused from AXIS_COLORS -- on the X subplot the trace itself is now red,
+# so an annotation in the old 'tab:red' would blend into its own trace and
+# become illegible. A color outside the X/Y/Z set keeps it visible on every
+# subplot regardless of that subplot's axis color.
+ANNOTATION_COLOR = '#FFD400'
+
+
+def _apply_dark_theme(fig, axs):
+    """Apply the black-figure / dark-gray-axes / white-text Dewesoft-style
+    theme to an already-built figure. Purely cosmetic (colors, grid style,
+    text color) -- does not touch axis limits, data, or any plotted value.
+    """
+    fig.patch.set_facecolor(DARK_FIGURE_BG)
+    for ax in axs:
+        ax.set_facecolor(DARK_AXES_BG)
+        ax.grid(True, color=GRID_COLOR, linewidth=0.5, alpha=0.6)
+        ax.tick_params(colors=TEXT_COLOR, labelcolor=TEXT_COLOR)
+        ax.xaxis.label.set_color(TEXT_COLOR)
+        ax.yaxis.label.set_color(TEXT_COLOR)
+        # NOTE: per-axes titles (loc='left' in plot_waveform()) are NOT
+        # colored here -- ax.title refers only to the CENTER title, a
+        # separate (unused, empty) Text artist from the left/right title
+        # matplotlib creates for loc='left'/'right'. Each ax.set_title(...)
+        # call passes color=TEXT_COLOR directly at the call site instead.
+        # Only recolor spines -- visibility (top/right hidden, bottom/left
+        # shown) is unchanged from before this release; a hidden spine's
+        # color has no visual effect regardless.
+        for spine in ax.spines.values():
+            spine.set_color(TEXT_COLOR)
+
+
+def plot_waveform(axes_data, sample_rate_hz, out_path):
+    """waveform.png -- time-domain X/Y/Z with DC/AC-RMS/Peak in each title."""
+    fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
+    for ax, label in zip(axs, AXIS_LABELS):
+        stats = axes_data[label]
+        signal = stats['dc'] + stats['ac']
+        t = (np.arange(len(signal)) / sample_rate_hz) if sample_rate_hz else np.arange(len(signal))
+
+        ax.plot(t, signal, linewidth=0.5, color=AXIS_COLORS[label])
+        ax.set_ylabel(f'{label} Accel (m/s^2)')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_title(
+            f"{label}: DC={stats['dc']:.4f}  AC RMS={stats['ac_rms']:.4f}  "
+            f"Peak={stats['peak']:.4f} m/s^2",
+            fontsize=9, loc='left', color=TEXT_COLOR,
+        )
+    axs[-1].set_xlabel('Time (s)' if sample_rate_hz else 'Sample index')
+    fig.suptitle('Time Waveform — X / Y / Z (m/s^2)', color=TEXT_COLOR)
+    _apply_dark_theme(fig, axs)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def plot_fft(axes_data, out_path, spectrum_mode='peak'):
+    """fft.png -- single-sided amplitude spectrum X/Y/Z, dominant frequency
+    annotated on each subplot.
+
+    spectrum_mode='peak' (default) reproduces the ORIGINAL, UNCHANGED Peak
+    Spectrum plot (identical labels/title/values to V1). 'energy' instead
+    plots the RMS-amplitude Energy Spectrum -- see module docstring.
+    """
+    amp_unit = 'RMS' if spectrum_mode == 'energy' else 'Peak'
+
+    fig, axs = plt.subplots(3, 1, figsize=(11, 8))
+    for ax, label in zip(axs, AXIS_LABELS):
+        stats = axes_data[label]
+        ax.plot(stats['freqs'], stats['spectrum'], linewidth=0.8, color=AXIS_COLORS[label])
+        ax.axvline(stats['dominant_freq_hz'], color=ANNOTATION_COLOR, linestyle='--', linewidth=1.0)
+        ax.annotate(
+            f"{stats['dominant_freq_hz']:.2f} Hz\n{stats['dominant_amplitude']:.4f} m/s^2",
+            xy=(stats['dominant_freq_hz'], stats['dominant_amplitude']),
+            xytext=(10, 10), textcoords='offset points',
+            fontsize=8, color=ANNOTATION_COLOR,
+        )
+        ax.set_ylabel(f'{label} {amp_unit} Amplitude (m/s^2)')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+    axs[-1].set_xlabel('Frequency (Hz)')
+    if spectrum_mode == 'energy':
+        fig.suptitle('FFT — Energy Spectrum (RMS Amplitude), Hann window, single-sided, Parseval-consistent',
+                     color=TEXT_COLOR)
+    else:
+        fig.suptitle('FFT — Peak (Auto) Amplitude, Hann window, single-sided', color=TEXT_COLOR)
+    _apply_dark_theme(fig, axs)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+# ==========================================================================
+# CONSOLE REPORT + summary.json
+# ==========================================================================
+
+def print_axis_report(label, stats, spectrum_mode='peak'):
+    print(f"\nAxis {label}")
+    print("-------")
+    print(f"Mean (DC)          : {stats['dc']:.6f} m/s^2")
+    print(f"AC RMS             : {stats['ac_rms']:.6f} m/s^2")
+    print(f"Peak               : {stats['peak']:.6f} m/s^2")
+    print(f"Peak-to-Peak       : {stats['peak_to_peak']:.6f} m/s^2")
+    print(f"Std Dev            : {stats['std_dev']:.6f} m/s^2")
+    print(f"Crest Factor       : {stats['crest_factor']:.4f}")
+    print(f"Dominant Frequency : {stats['dominant_freq_hz']:.4f} Hz")
+    if spectrum_mode == 'energy':
+        print(f"Dominant Amplitude (RMS) : {stats['dominant_amplitude']:.6f} m/s^2")
+    else:
+        print(f"Dominant Amplitude : {stats['dominant_amplitude']:.6f} m/s^2")
+    print(f"Noise Floor        : {stats['noise_floor']:.6f} m/s^2")
+    print(f"SNR                : {stats['snr_db']:.2f} dB")
+    if spectrum_mode == 'energy':
+        print(f"Overall RMS (Energy Spectrum, Parseval-consistent) : {stats['overall_rms']:.6f} m/s^2")
+        if 'band_rms' in stats:
+            lo, hi = stats['band_range_hz']
+            print(f"Band RMS [{lo:g}-{hi:g} Hz] : {stats['band_rms']:.6f} m/s^2")
+
+
+def build_summary_dict(axes_data, sample_rate_hz, fft_size, fft_resolution_hz, spectrum_mode='peak'):
+    def axis_summary(stats):
+        base = {
+            'mean_dc': stats['dc'],
+            'ac_rms': stats['ac_rms'],
+            'peak': stats['peak'],
+            'peak_to_peak': stats['peak_to_peak'],
+            'std_dev': stats['std_dev'],
+            'crest_factor': stats['crest_factor'],
+            'dominant_frequency_hz': stats['dominant_freq_hz'],
+            'dominant_amplitude': stats['dominant_amplitude'],
+            'noise_floor': stats['noise_floor'],
+            'snr_db': stats['snr_db'],
+            'n_fft_blocks_averaged': stats['n_fft_blocks'],
+        }
+        if spectrum_mode == 'energy':
+            base['overall_rms'] = stats['overall_rms']
+            if 'band_rms' in stats:
+                base['band_rms'] = stats['band_rms']
+                base['band_range_hz'] = list(stats['band_range_hz'])
+        return base
+
+    return {
+        'sampling_rate': sample_rate_hz,
+        'fft_size': fft_size,
+        'fft_resolution': fft_resolution_hz,
+        'spectrum_mode': spectrum_mode,
+        'axes': {label: axis_summary(axes_data[label]) for label in AXIS_LABELS},
+    }
+
+
+# ==========================================================================
+# MAIN
+# ==========================================================================
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('csv_path', help='Dewesoft-exported CSV with Time + 3 acceleration (m/s^2) columns')
+    ap.add_argument('--sr-hz', type=float, required=True, help='Sample rate in Hz')
+    ap.add_argument('--fft-size', type=int, default=DEFAULT_FFT_SIZE,
+                     help=f'FFT block size (default {DEFAULT_FFT_SIZE}); shorter input is zero-padded, '
+                          'longer input is split into consecutive blocks and averaged')
+    ap.add_argument('--out-dir', default=DEFAULT_OUTPUT_DIR,
+                     help=f'Output directory for waveform.png / fft.png / summary.json '
+                          f'(default: {DEFAULT_OUTPUT_DIR}; created automatically if missing)')
+    ap.add_argument('--spectrum', choices=['peak', 'energy'], default='peak',
+                     help="Spectrum processing path (default: peak). 'peak' is the ORIGINAL, "
+                          "UNCHANGED Dewesoft-matching Peak (Auto) amplitude spectrum. 'energy' is "
+                          "a Parseval-consistent RMS amplitude spectrum supporting Overall RMS / "
+                          "Band RMS -- the foundation for future ISO 20816 work. See module "
+                          "docstring 'V2: PEAK SPECTRUM vs ENERGY SPECTRUM'.")
+    ap.add_argument('--band-hz', type=float, nargs=2, metavar=('LO', 'HI'), default=None,
+                     help='Frequency band [LO HI] Hz for Band RMS (energy mode only; ignored in peak mode)')
+    args = ap.parse_args()
+
+    # --- [V2.1] Argument validation -------------------------------------
+    # Reject nonsensical inputs up front with a clear message instead of
+    # letting them silently produce NaN/mislabeled output or crash deep in
+    # the pipeline with an unrelated traceback (code_review_v2.md Possible
+    # Bugs #3, #4, #5). ap.error() prints usage + the message to stderr and
+    # exits with status 2, matching argparse's own convention for bad args.
+    if args.fft_size <= 0:
+        ap.error(f"--fft-size must be a positive integer (got {args.fft_size})")
+    if args.sr_hz <= 0:
+        ap.error(f"--sr-hz must be a positive number (got {args.sr_hz})")
+    if args.band_hz is not None:
+        lo, hi = args.band_hz
+        if lo < 0 or hi <= lo:
+            ap.error(f"--band-hz LO HI must satisfy 0 <= LO < HI (got LO={lo:g}, HI={hi:g})")
+
+    if args.band_hz is not None and args.spectrum != 'energy':
+        print("Note: --band-hz is ignored outside --spectrum energy mode.")
+
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    # empty/unreadable CSV -> clear message instead of a raw pandas traceback
+    try:
+        raw_axes = load_axes(args.csv_path)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # fewer than two samples (includes a header-only/empty-data CSV, where
+    # every axis array has length 0) -- DC/RMS/FFT are not meaningful below
+    # this, and split_into_blocks()/compute_time_domain_stats() do not
+    # themselves guard against it.
+    for label in AXIS_LABELS:
+        if len(raw_axes[label]) < 2:
+            print(f"Error: axis {label} has only {len(raw_axes[label])} sample(s) in "
+                  f"'{args.csv_path}'; at least 2 samples per axis are required.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    fft_resolution_hz = compute_fft_resolution_hz(args.sr_hz, args.fft_size)
+
+    print(f"Loaded {len(raw_axes['X'])} samples per axis from {args.csv_path}")
+    print(f"Sample rate: {args.sr_hz:g} Hz   FFT size: {args.fft_size}   "
+          f"FFT Resolution (dF=SR/FFT size): {fft_resolution_hz:.4f} Hz   "
+          f"Spectrum mode: {args.spectrum}")
+
+    band_hz = args.band_hz if args.spectrum == 'energy' else None
+    axes_data = {
+        label: analyze_axis(raw_axes[label], args.sr_hz, args.fft_size,
+                             spectrum_mode=args.spectrum, band_hz=band_hz)
+        for label in AXIS_LABELS
+    }
+
+    for label in AXIS_LABELS:
+        print_axis_report(label, axes_data[label], spectrum_mode=args.spectrum)
+
+    waveform_path = os.path.join(args.out_dir, 'waveform.png')
+    fft_path = os.path.join(args.out_dir, 'fft.png')
+    summary_path = os.path.join(args.out_dir, 'summary.json')
+
+    plot_waveform(axes_data, args.sr_hz, waveform_path)
+    plot_fft(axes_data, fft_path, spectrum_mode=args.spectrum)
+
+    summary = build_summary_dict(axes_data, args.sr_hz, args.fft_size, fft_resolution_hz,
+                                  spectrum_mode=args.spectrum)
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\nSaved: {waveform_path}")
+    print(f"Saved: {fft_path}")
+    print(f"Saved: {summary_path}")
+
+
+if __name__ == '__main__':
+    main()
