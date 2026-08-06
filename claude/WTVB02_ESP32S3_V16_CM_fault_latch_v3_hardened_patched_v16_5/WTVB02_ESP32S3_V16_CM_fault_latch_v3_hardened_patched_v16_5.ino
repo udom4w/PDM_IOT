@@ -110,6 +110,24 @@
 #define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_RX_BUFFER 4096
 
+// ============================================================================
+// [Phase 13] MQTT PUBLISH TIMING INSTRUMENTATION -- diagnostic build only.
+//
+// Purpose: measure where the ~1000ms lwmqtt command-timer budget is consumed
+// during a QoS-1 publish, to confirm or refute the err=-4
+// (LWMQTT_NETWORK_TIMEOUT) hypothesis. Adds ONLY timestamps + Serial output.
+// No firmware logic, timeout value, reconnect behavior, TinyGSM behavior, or
+// MQTT behavior is altered by anything under this macro.
+//
+// MUST be defined before <TinyGsmClient.h> below: the TinyGSM headers are
+// textually #include-d into this translation unit, so modemSend()'s timing
+// block in TinyGsmClientSIM7600.h is compiled in only if this is already set.
+//
+// COMMENT OUT BOTH THIS AND LWMQTT_DEBUG_TIMING (in
+// .arduino/libraries/MQTT/src/lwmqtt/client.c) TO RETURN TO A PRODUCTION BUILD.
+// ============================================================================
+#define DEBUG_MQTT_TIMING
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -899,7 +917,14 @@ public:
 
   size_t write(const uint8_t* buf, size_t sz) override {
     if (!_connected) return 0;
+#ifdef DEBUG_MQTT_TIMING
+    uint32_t t0_tlsw = millis();
+#endif
     int ret = mbedtls_ssl_write(&_ssl, buf, sz);
+#ifdef DEBUG_MQTT_TIMING
+    Serial.printf("[TLS-WRITE] requested=%u written=%d elapsed=%lums\n",
+                  (unsigned)sz, ret, (unsigned long)(millis() - t0_tlsw));
+#endif
     return ret > 0 ? (size_t)ret : 0;
   }
 
@@ -2808,6 +2833,51 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
                 (unsigned long)g_telemBufOverflowCount);
 }
 
+#ifdef DEBUG_MQTT_TIMING
+// ============================================================================
+// [Phase 13] Timing-instrumentation support. Observational only.
+//
+// PLACEMENT IS DELIBERATE -- do not move these earlier in the file. The Arduino
+// .ino preprocessor emits its auto-generated forward prototypes immediately
+// before the FIRST function definition in the sketch (currently
+// trendClearThresholdMs()). Defining a function above that point drags the
+// whole prototype block above the typedefs it depends on (VibrationData_t,
+// AnalysisReason_t, MqttOutboundTopic_t, ...) and the build fails with a
+// cascade of "does not name a type". These helpers therefore live here: after
+// the prototype anchor, and before their first consumer (replayTelemBuf()).
+// See CLAUDE.md "Coding Style & Conventions" -- .ino auto-prototype rule.
+// ============================================================================
+#include <stdarg.h>
+
+// Shared formatter for every mqttClient.publish() call site, so the same block
+// is emitted at all 8 sites without duplicating the format string 8 times.
+static void dbgLogMqttPublish(const char* topic, size_t payloadLen, int qos,
+                               bool result, int err, uint32_t elapsedMs) {
+  Serial.printf("[MQTT-TIMING] topic=%s payload=%u qos=%d result=%s err=%d elapsed=%lums\n",
+                topic ? topic : "(null)", (unsigned)payloadLen, qos,
+                result ? "OK" : "FAIL", err, (unsigned long)elapsedMs);
+}
+
+// C-linkage sink for lwmqtt/client.c's timing output.
+//
+// WHY THIS EXISTS instead of client.c calling printf() directly: client.c is a
+// separately-compiled C translation unit. Its printf() writes to the ESP-IDF
+// stdout console, which on this board is NOT guaranteed to be the same stream
+// as Serial -- the FQBN sets CDCOnBoot=cdc / USBMode=hwcdc, so Serial is the
+// USB CDC while the IDF console may still be UART0. Timing lines split across
+// two physical interfaces would be unusable (and easy to mistake for "no
+// output"). Routing them through this hook guarantees the [LWMQTT] lines land
+// in the same capture, correctly interleaved with [MQTT-TIMING]/[MODEMSEND].
+extern "C" void lwmqtt_dbg_log(const char* fmt, ...) {
+  char buf[192];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  Serial.print(buf);
+}
+#endif  // DEBUG_MQTT_TIMING
+
 // ============================================================================
 // replayTelemBuf() — ส่ง ONE slot ที่เก่าที่สุดออก MQTT แล้ว pop ออก
 // ============================================================================
@@ -2945,7 +3015,15 @@ static bool replayTelemBuf() {
     return false;  // ไม่ pop — จะ retry รอบหน้า
   }
 
-  if (!mqttClient.publish(g_mqttTopicSensor, buf, (int)sz, false, MQTT_QOS)) {
+#ifdef DEBUG_MQTT_TIMING
+  uint32_t t0_pub1 = millis();
+#endif
+  bool pubOk1 = mqttClient.publish(g_mqttTopicSensor, buf, (int)sz, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+  dbgLogMqttPublish(g_mqttTopicSensor, sz, MQTT_QOS, pubOk1,
+                    mqttClient.lastError(), millis() - t0_pub1);
+#endif
+  if (!pubOk1) {
     Serial.printf("[TelemBuf] replay publish FAILED (err=%d) — keeping slot\n",
                   mqttClient.lastError());
     return false;  // ไม่ pop ออก — จะ retry เมื่อ MQTT reconnect อีกครั้ง
@@ -6329,7 +6407,15 @@ void taskNetwork(void* parameter) {
                               : (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_EVENT) ? g_mqttTopicEvent
                               : NULL;
         if (outTopic != NULL) {
-          if (mqttClient.publish(outTopic, outMsg.payload, (int)outMsg.len, false, outMsg.qos)) {
+#ifdef DEBUG_MQTT_TIMING
+          uint32_t t0_pub2 = millis();
+#endif
+          bool pubOk2 = mqttClient.publish(outTopic, outMsg.payload, (int)outMsg.len, false, outMsg.qos);
+#ifdef DEBUG_MQTT_TIMING
+          dbgLogMqttPublish(outTopic, outMsg.len, outMsg.qos, pubOk2,
+                            mqttClient.lastError(), millis() - t0_pub2);
+#endif
+          if (pubOk2) {
             g_network.publishCount++;
             Serial.printf("[MQTT] Outbound queue published -> %s (%u B)\n", outTopic, (unsigned)outMsg.len);
           } else {
@@ -6388,7 +6474,15 @@ void taskNetwork(void* parameter) {
           // receive offline alerts on the same topic as normal sensor data.
           // Explicit length avoids relying on strlen()/null-termination --
           // safe even if the document were ever truncated to fit the buffer.
-          if (mqttClient.publish(g_mqttTopicSensor, offlineJson, (int)szOffline, false, MQTT_QOS)) {
+#ifdef DEBUG_MQTT_TIMING
+          uint32_t t0_pub3 = millis();
+#endif
+          bool pubOk3 = mqttClient.publish(g_mqttTopicSensor, offlineJson, (int)szOffline, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+          dbgLogMqttPublish(g_mqttTopicSensor, szOffline, MQTT_QOS, pubOk3,
+                            mqttClient.lastError(), millis() - t0_pub3);
+#endif
+          if (pubOk3) {
             lastOfflinePublish = now;
             g_network.publishCount++;
             Serial.printf("[MQTT] ! Offline alert published: %s\n", offlineJson);
@@ -6439,7 +6533,15 @@ void taskNetwork(void* parameter) {
 
           size_t szEvt = serializeJson(evDoc, evBuf, sizeof(evBuf));
 
-          if (mqttClient.publish(g_mqttTopicEvent, evBuf, (int)szEvt, false, MQTT_QOS)) {
+#ifdef DEBUG_MQTT_TIMING
+          uint32_t t0_pub4 = millis();
+#endif
+          bool pubOk4 = mqttClient.publish(g_mqttTopicEvent, evBuf, (int)szEvt, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+          dbgLogMqttPublish(g_mqttTopicEvent, szEvt, MQTT_QOS, pubOk4,
+                            mqttClient.lastError(), millis() - t0_pub4);
+#endif
+          if (pubOk4) {
             g_network.publishCount++;
             Serial.println("[MAINT] MQTT audit event published +");
           } else {
@@ -6565,8 +6667,16 @@ void taskNetwork(void* parameter) {
         if (flSz == 0 || flSz >= sizeof(flBuf) - 1) {
           Serial.printf("[LATCH] JSON overflow sz=%u — skipping\n", (unsigned)flSz);
         } else {
-          if (mqttClient.publish(g_mqttTopicDecision, flBuf, (int)flSz,
-                                 false, MQTT_QOS)) {
+#ifdef DEBUG_MQTT_TIMING
+          uint32_t t0_pub5 = millis();
+#endif
+          bool pubOk5 = mqttClient.publish(g_mqttTopicDecision, flBuf, (int)flSz,
+                                 false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+          dbgLogMqttPublish(g_mqttTopicDecision, flSz, MQTT_QOS, pubOk5,
+                            mqttClient.lastError(), millis() - t0_pub5);
+#endif
+          if (pubOk5) {
             g_network.publishCount++;
             clearFaultLatchNVS();
             Serial.printf("[LATCH] PUBLISH+CLEAR %s\n", flBuf);
@@ -7741,7 +7851,15 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       Serial.printf("[WARN] /sensor JSON truncated! sz=%u buf=%u\n",
                     (unsigned)szSensor, (unsigned)sizeof(buf));
     }
-    if (mqttClient.publish(g_mqttTopicSensor, buf, (int)szSensor, false, MQTT_QOS))
+#ifdef DEBUG_MQTT_TIMING
+    uint32_t t0_pub6 = millis();
+#endif
+    bool pubOk6 = mqttClient.publish(g_mqttTopicSensor, buf, (int)szSensor, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+    dbgLogMqttPublish(g_mqttTopicSensor, szSensor, MQTT_QOS, pubOk6,
+                      mqttClient.lastError(), millis() - t0_pub6);
+#endif
+    if (pubOk6)
       Serial.printf("[MQTT] /sensor %u B\n", (unsigned)szSensor);
     else
       Serial.printf("[MQTT] /sensor FAILED (err=%d)\n", mqttClient.lastError());
@@ -7805,7 +7923,15 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     size_t szStatus = serializeJson(d, buf, sizeof(buf));
     if (szStatus == 0 || szStatus >= sizeof(buf) - 1)
       Serial.printf("[WARN] /status JSON truncated! sz=%u\n", (unsigned)szStatus);
-    if (mqttClient.publish(g_mqttTopicDecision, buf, (int)szStatus, false, MQTT_QOS))
+#ifdef DEBUG_MQTT_TIMING
+    uint32_t t0_pub7 = millis();
+#endif
+    bool pubOk7 = mqttClient.publish(g_mqttTopicDecision, buf, (int)szStatus, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+    dbgLogMqttPublish(g_mqttTopicDecision, szStatus, MQTT_QOS, pubOk7,
+                      mqttClient.lastError(), millis() - t0_pub7);
+#endif
+    if (pubOk7)
       Serial.printf("[MQTT] /status %u B\n", (unsigned)szStatus);
     else
       Serial.printf("[MQTT] /status FAILED (err=%d)\n", mqttClient.lastError());
@@ -7911,7 +8037,14 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 
     char   jsonBuffer[2048];
     size_t jsonSize = serializeJson(doc, jsonBuffer, sizeof(jsonBuffer));
+#ifdef DEBUG_MQTT_TIMING
+    uint32_t t0_pub8 = millis();
+#endif
     success = mqttClient.publish(g_mqttTopic, jsonBuffer, (int)jsonSize, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+    dbgLogMqttPublish(g_mqttTopic, jsonSize, MQTT_QOS, success,
+                      mqttClient.lastError(), millis() - t0_pub8);
+#endif
 
     if (success) {
       // [v16.5] ใช้ reportedRms (ค่าที่ gate แล้ว) แทน data->rms_overall (raw)
