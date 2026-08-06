@@ -15,4 +15,4 @@
 // unmodified short commit hash; "-dirty" is only ever an appended flag, never
 // a fabricated value.
 // ============================================================================
-#define GIT_COMMIT_HASH "bda5208-dirty"
+#define GIT_COMMIT_HASH "6b3cad6-dirty"

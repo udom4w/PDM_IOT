@@ -841,10 +841,19 @@ public:
         while (!_tcp.available()) {
           _modem.maintain();
           vTaskDelay(pdMS_TO_TICKS(5));
-          if (!_tcp.connected()) {
-            Serial.println("[TLS] TCP lost during handshake");
-            return 0;
-          }
+          // [v16.5a] Do NOT abort here on !_tcp.connected(). That check was a
+          // false-trigger source: _tcp.connected() resolves to TinyGSM's
+          // modemGetConnected(), which sends AT+CIPCLOSE? and -- when its
+          // waitResponse() does not see the expected reply -- falls through
+          // an intentionally-disabled early return (upstream TinyGSM
+          // "TODO: Why does this not read correctly?", still unfixed in
+          // v0.12.0) and stream.parseInt()s whatever is next on the wire,
+          // silently clearing sock_connected. During a handshake this UART
+          // is shared with _ciprxget()'s own raw reads, so a mid-handshake
+          // false negative aborts a healthy connection. A genuinely dead
+          // link is still caught by the 15s no-data timeout below (and the
+          // 90s overall cap), both wall-clock and independent of modem
+          // status. Do not re-add without resolving the upstream defect.
           if (millis() - tw > 15000UL) {
             Serial.println("[TLS] No data from broker (15s) -- handshake stalled");
             return 0;
