@@ -722,16 +722,35 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
   bool modemGetConnected(uint8_t mux) {
     // Read the status of all sockets at once
     sendAT(GF("+CIPCLOSE?"));
-    if (waitResponse(GF("+CIPCLOSE:")) != 1) {
+#ifdef DEBUG_MODEM
+    // [Phase 6] task 2: entering modemGetConnected(). Logic below is
+    // UNCHANGED -- the "!= 1" comparison is preserved exactly; only its
+    // already-computed result is now also captured in a named variable so
+    // it can be logged without calling waitResponse() a second time (which
+    // would itself consume different bytes and change behavior).
+    Serial.printf("[DBG modemGetConnected] enter mux=%u\n", (unsigned)mux);
+#endif
+    int8_t waitCloseResult = waitResponse(GF("+CIPCLOSE:"));
+#ifdef DEBUG_MODEM
+    Serial.printf("[DBG modemGetConnected] waitResponse(+CIPCLOSE:)=%d\n", (int)waitCloseResult);
+#endif
+    if (waitCloseResult != 1) {
       // return false;  // TODO:  Why does this not read correctly?
     }
     for (int muxNo = 0; muxNo < TINY_GSM_MUX_COUNT; muxNo++) {
       // +CIPCLOSE:<link0_state>,<link1_state>,...,<link9_state>
       bool muxState = stream.parseInt();
+#ifdef DEBUG_MODEM
+      Serial.printf("[DBG modemGetConnected]   muxNo=%d state=%d\n", muxNo, (int)muxState);
+#endif
       if (sockets[muxNo]) { sockets[muxNo]->sock_connected = muxState; }
     }
     waitResponse();  // Should be an OK at the end
     if (!sockets[mux]) return false;
+#ifdef DEBUG_MODEM
+    Serial.printf("[DBG modemGetConnected] exit mux=%u final sock_connected=%d\n",
+                  (unsigned)mux, (int)sockets[mux]->sock_connected);
+#endif
     return sockets[mux]->sock_connected;
   }
 
@@ -759,11 +778,32 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
     data.reserve(64);
     uint8_t  index       = 0;
     uint32_t startMillis = millis();
+#ifdef DEBUG_MODEM
+    // [Phase 6] task 1: log which token(s) this call is waiting for. The
+    // AT command text itself isn't available here (sendAT() already sent it
+    // before this call) -- r1/r2 are the closest available proxy for
+    // "what response is expected."
+    // [Phase 7 fix] Skip logging when r1==NULL && r2==NULL: that is exactly
+    // maintainImpl()'s internal drain/pump signature
+    // (waitResponse(15,NULL,NULL) / waitResponse(100,NULL,NULL)), called at
+    // high frequency during active data transfer (Phase 7 review Bug 2).
+    // Every real AT-command wait -- including modemGetConnected()'s
+    // waitResponse(GF("+CIPCLOSE:")) -- always passes a non-null r1, so no
+    // meaningful command exchange is ever skipped by this gate.
+    if (r1 || r2) {
+      Serial.printf("[DBG waitResponse] enter timeout=%lu r1=%s r2=%s\n",
+                    (unsigned long)timeout_ms, r1 ? r1 : "(null)", r2 ? r2 : "(null)");
+    }
+#endif
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
         TINY_GSM_YIELD();
         int8_t a = stream.read();
+#if defined(DEBUG_TLS) || defined(DEBUG_MODEM)
+        g_dbgUartBytesTotal++;
+        g_dbgUartBytesWaitResponse++;
+#endif
         // putchar(a);
         if (a <= 0) continue;  // Skip 0x00 bytes, just in case
         data += static_cast<char>(a);
@@ -826,6 +866,19 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
       }
     } while (millis() - startMillis < timeout_ms);
   finish:
+#ifdef DEBUG_MODEM
+    // [Phase 6] task 1: return value, timeout, elapsed time, matched token.
+    // [Phase 7 fix] Same r1||r2 gate as the entry log -- see that comment.
+    if (r1 || r2) {
+      const char* dbgMatched = (index == 1) ? r1 : (index == 2) ? r2
+                              : (index == 3) ? r3 : (index == 4) ? r4
+                              : (index == 5) ? r5 : "(none/timeout)";
+      Serial.printf("[DBG waitResponse] exit index=%u timeout=%lu elapsed=%lums matched=%s\n",
+                    (unsigned)index, (unsigned long)timeout_ms,
+                    (unsigned long)(millis() - startMillis),
+                    dbgMatched ? dbgMatched : "(null)");
+    }
+#endif
     if (!index) {
       data.trim();
       if (data.length()) { DBG("### Unhandled:", data); }

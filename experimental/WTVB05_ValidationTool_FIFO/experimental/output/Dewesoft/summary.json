@@ -1,0 +1,47 @@
+{
+  "sampling_rate": 1000.0,
+  "fft_size": 2048,
+  "fft_resolution": 0.48828125,
+  "spectrum_mode": "peak",
+  "axes": {
+    "X": {
+      "mean_dc": -0.00011935630709522452,
+      "ac_rms": 0.49064772824876174,
+      "peak": 1.6787965575781552,
+      "peak_to_peak": 3.24447846412659,
+      "std_dev": 0.49064772824876174,
+      "crest_factor": 3.4215924397941855,
+      "dominant_frequency_hz": 29.78515625,
+      "dominant_amplitude": 0.4750133988005509,
+      "noise_floor": 0.003917658706193883,
+      "snr_db": 41.67358522121874,
+      "n_fft_blocks_averaged": 7
+    },
+    "Y": {
+      "mean_dc": 0.0002166198757213979,
+      "ac_rms": 0.3813582226161252,
+      "peak": 1.2446459365817986,
+      "peak_to_peak": 2.4587417840957597,
+      "std_dev": 0.3813582226161252,
+      "crest_factor": 3.2637186319033638,
+      "dominant_frequency_hz": 60.05859375,
+      "dominant_amplitude": 0.25349392691737577,
+      "noise_floor": 0.002701911448067298,
+      "snr_db": 39.445928954927204,
+      "n_fft_blocks_averaged": 7
+    },
+    "Z": {
+      "mean_dc": 0.0006111677955930123,
+      "ac_rms": 0.6156695142306912,
+      "peak": 1.8309662524390868,
+      "peak_to_peak": 3.5570018291473398,
+      "std_dev": 0.6156695142306912,
+      "crest_factor": 2.9739433415457768,
+      "dominant_frequency_hz": 29.78515625,
+      "dominant_amplitude": 0.48347966592774866,
+      "noise_floor": 0.003207276978640167,
+      "snr_db": 43.56483492747617,
+      "n_fft_blocks_averaged": 7
+    }
+  }
+}

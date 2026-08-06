@@ -16,17 +16,15 @@ line:
 
   - Phase 7A 4-column format:
       Index,X,Y,Z
-    (X/Y/Z are raw ADC counts, NOT g -- no Tag/SR fields, no g-conversion
-    available. A block runs from its header line to the next header line
-    or end of file. Time waveform / FFT axes are labeled "Raw Counts" and
-    the gravity-vector sanity check, which assumes g-scaled DC values, is
-    skipped for this format.)
+    (X/Y/Z are raw ADC counts -- no Tag/SR fields. A block runs from its
+    header line to the next header line or end of file.)
 
-  1. Plots the full 1024-sample time series per axis (X, Y, Z) in g
-     (legacy format) or raw ADC counts (Phase 7A format).
+  1. Plots the full 1024-sample time series per axis (X, Y, Z) in g.
   2. Computes an FFT independently from the raw samples and plots the
-     magnitude spectrum per axis.
-  3. Computes RMS (mean-removed) and Peak per axis from the raw samples.
+     peak-amplitude magnitude spectrum per axis, in g.
+  3. Computes DC offset, RMS (mean-removed/AC) and Peak (AC) per axis from
+     the raw samples, each reported in raw counts, g, and (RMS/Peak only)
+     m/s^2.
   4. Prints a summary table so these FIFO-derived numbers can be compared
      directly against the *register-reported* RRAX/VRMSX/HZX-type values
      from the same test session (RFC-0006 Experiment 3 — the single most
@@ -41,7 +39,7 @@ line:
      whole figure) and records its path/window/overlap in the summary CSV
      (Phase 7B-2). This is independent of, and does not alter, the whole-
      capture FFT in step 2.
-  7. Plots the envelope of the mean-removed waveform per axis via
+  7. Plots the envelope of the mean-removed (g) waveform per axis via
      scipy.signal.hilbert() (envelope = abs(hilbert(signal)); no band-pass
      filter yet -- that's a later phase) and records its path in the
      summary CSV (Phase 7B-3).
@@ -79,6 +77,47 @@ the firmware's SAMPLE_RATE_HZ table, not in the capture itself. Pass
 This script deliberately does NOT reference any vendor claim about what the
 FIFO contains — it only computes what the numbers say, per RFC-0006's
 instruction to distinguish hypotheses experimentally.
+
+--------------------------------------------------------------------------
+ENGINEERING UNITS (WTVB05 Data Sheet & User Manual V260403, wit-motion.com)
+--------------------------------------------------------------------------
+Both capture formats carry raw FIFO accelerometer ADC counts. Per the
+manual:
+
+  Sec 6.1.4.8  AX~AZ (acceleration):
+    "Acceleration X = AX[15:0]/32768*16g (g is the acceleration due to
+     gravity, which can be taken as 9.8m/s2)"
+  Sec 6.1.4.16 Original Acceleration FIFO (the RAWFIFO register this
+  tool's captures come from):
+    "The acceleration XYZ data is converted to g, as described in
+     [AX~AZ] acceleration data calculation."
+
+i.e. the manual states the FIFO raw samples use the *exact same* 16-bit
+signed, +-16g-full-scale mapping as the AX~AZ registers. That is why this
+tool now converts raw counts to g the same way for BOTH the legacy and
+Phase 7A capture formats (see counts_to_g() below), instead of only
+trusting a pre-computed g column that was only ever present in the legacy
+format. This was cross-checked against a real legacy-format capture line
+(serial_log_backup_20260719_202918_4.txt: X_raw=2015, X_g=0.98389; and
+2015/2048 = 0.983887, matching to 5 decimal places), confirming the
+firmware's own g column already uses this formula.
+
+ASSUMPTIONS (flagged per the manual's own wording):
+  - The manual says gravity "can be taken as 9.8m/s2" -- it does not commit
+    to the standard 9.80665 m/s^2 constant. This tool uses the manual's own
+    9.8 value (STANDARD_GRAVITY_MS2 below) so m/s^2 numbers match what
+    you'd get evaluating the manual's formula by hand. If you need
+    standard-gravity precision, change STANDARD_GRAVITY_MS2 and this note
+    together.
+  - The FFT peak-amplitude scaling (|rfft|/n*2) does not special-case the
+    Nyquist bin (which, strictly, should not be doubled). For the 1024-
+    sample FIFO captures this tool targets, that bin is far from the
+    dominant peaks of interest; full-spectrum energy math should account
+    for it separately.
+  - Phase 7A's raw counts are assumed to come from the same RAWFIFO
+    acceleration path as the legacy format's X_raw/Y_raw/Z_raw (both are
+    captures of the same FIFO register per the tool's own docstring); this
+    is what makes applying the identical manual formula to Phase 7A valid.
 """
 
 import sys
@@ -98,6 +137,12 @@ import matplotlib.pyplot as plt
 
 SUMMARY_CSV_FIELDS = [
     'tag', 'input_format', 'sample_count', 'sample_rate_hz',
+    # rms_x/y/z and peak_x/y/z are AC (mean-removed) acceleration in g --
+    # for the legacy format these numerically match the old pre-Phase-7A
+    # behavior (see module docstring cross-check); for Phase 7A they are
+    # now real g values instead of raw ADC counts (see dc_offset_*/
+    # rms_ac_*/peak_ac_* columns below for the full counts/g/m-s^2
+    # breakdown of the same numbers).
     'rms_x', 'rms_y', 'rms_z',
     'peak_x', 'peak_y', 'peak_z',
     'dominant_freq_x_hz', 'dominant_freq_y_hz', 'dominant_freq_z_hz',
@@ -107,6 +152,20 @@ SUMMARY_CSV_FIELDS = [
     'envelope_fft_png',
     'bearing_model', 'rolling_elements', 'ball_diameter_mm', 'pitch_diameter_mm', 'contact_angle_deg',
     'shaft_hz', 'FTF', 'BPFO', 'BPFI', 'BSF',
+    # Full DC/RMS/Peak breakdown across all three engineering units,
+    # per-axis (added for engineering-unit-correctness pass; append-only
+    # so older summary CSV readers that key off column name are
+    # unaffected).
+    'dc_offset_counts_x', 'dc_offset_counts_y', 'dc_offset_counts_z',
+    'dc_offset_g_x', 'dc_offset_g_y', 'dc_offset_g_z',
+    'rms_ac_counts_x', 'rms_ac_counts_y', 'rms_ac_counts_z',
+    'rms_ac_ms2_x', 'rms_ac_ms2_y', 'rms_ac_ms2_z',
+    'peak_ac_counts_x', 'peak_ac_counts_y', 'peak_ac_counts_z',
+    'peak_ac_ms2_x', 'peak_ac_ms2_y', 'peak_ac_ms2_z',
+    # Engineering-polish pass: FFT resolution (dF = SR/N). sample_rate_hz
+    # and sample_count already exist above (unchanged) -- only this one
+    # column is new; see compute_fft_resolution_hz().
+    'fft_resolution_hz',
 ]
 
 # External bearing geometry database, Phase 7C-1 (revised architecture --
@@ -117,6 +176,192 @@ SUMMARY_CSV_FIELDS = [
 BEARING_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bearing_database', 'bearing_db.json')
 
 BEARING_DB_REQUIRED_KEYS = {'rolling_elements', 'ball_diameter_mm', 'pitch_diameter_mm', 'contact_angle_deg'}
+
+
+# ==========================================================================
+# ACCELERATION PROCESSING -- unit conversion (WTVB05 manual Sec 6.1.4.8 /
+# 6.1.4.16, see module docstring for the exact quoted formulas)
+#
+# Kept structurally separate from any future VELOCITY / VRMS processing:
+# adding a parallel "compute_velocity_axis_stats()" that integrates g to
+# mm/s (Sec 6.1.4.9 VX~VZ) for comparison against register VRMSX/Y/Z (Sec
+# 6.1.4.17-19), plus an Acceleration-vs-Velocity-vs-VRMS comparison step,
+# should slot in below without touching this section. No velocity
+# integration is implemented yet -- see the placeholder stub at the bottom
+# of this section.
+# ==========================================================================
+
+ACCEL_FULLSCALE_G = 16.0        # WTVB05 accelerometer full-scale range (+-16g)
+ACCEL_COUNTS_FULLSCALE = 32768  # signed 16-bit half-range (2**15), per AX[15:0]
+COUNTS_PER_G = ACCEL_COUNTS_FULLSCALE / ACCEL_FULLSCALE_G  # 2048 counts/g
+
+# ASSUMPTION: manual says gravity "can be taken as 9.8m/s2" (Sec 6.1.4.8),
+# not the standard 9.80665 m/s^2 -- see module docstring note.
+STANDARD_GRAVITY_MS2 = 9.8
+
+# --- FFT convention (engineering-polish Sec 1/5) --------------------------
+# Single source of truth for the whole-capture FFT AND the Envelope FFT
+# below -- both use this identical convention, so it is documented once
+# here and referenced from both plot titles instead of being restated
+# (and risking drifting out of sync) in two places.
+#   Type:    single-sided (np.fft.rfft on a real input -- only the
+#            non-negative frequencies 0..Nyquist are computed/plotted;
+#            there is no separate negative-frequency half to discard).
+#   Window:  none (rectangular/boxcar) -- no window function is applied
+#            before either FFT.
+#   Scaling: peak (0-to-peak) amplitude = |rfft(x)| * 2 / N. The *2
+#            accounts for the single-sided spectrum folding the (discarded)
+#            negative-frequency half back onto the positive side; dividing
+#            by N normalizes for capture length so amplitude doesn't grow
+#            just because N grew.
+#   DC:      removed from the input before the FFT (x = signal -
+#            signal.mean()); the DC bin is also excluded from the
+#            dominant-frequency search.
+# WHY peak amplitude (not RMS-per-bin or raw/unnormalized coefficients):
+# it reads directly in the same g/counts/m-s^2 units as the time-domain
+# Peak(AC) figure reported alongside it (no extra unit conversion needed
+# to sanity-check one against the other), and is the conventional
+# amplitude-spectrum convention in vibration analysis. The time-domain
+# RMS(AC) figure (a single broadband number) is a DIFFERENT quantity from
+# a per-bin RMS spectrum -- this tool does not compute the latter.
+# The STFT Spectrogram plot below uses a DIFFERENT convention (Hann
+# window, short-time magnitude, no *2/N peak normalization) -- see the
+# NOTE beside its colorbar; its color values are NOT directly comparable
+# to this FFT's amplitude numbers.
+FFT_CONVENTION = ("single-sided rFFT, no window (rectangular), "
+                   "peak (0-to-peak) amplitude = |rfft|*2/N, DC removed pre-FFT")
+
+
+def counts_to_g(raw_counts):
+    """Raw FIFO/AX~AZ ADC counts -> g, per WTVB05 manual Sec 6.1.4.8/6.1.4.16:
+    g = raw_counts / 32768 * 16.
+    """
+    return np.asarray(raw_counts, dtype=float) / ACCEL_COUNTS_FULLSCALE * ACCEL_FULLSCALE_G
+
+
+def g_to_ms2(g_values):
+    """g -> m/s^2 using the manual's own gravity constant (Sec 6.1.4.8 note)."""
+    return np.asarray(g_values, dtype=float) * STANDARD_GRAVITY_MS2
+
+
+def counts_to_ms2(raw_counts):
+    """Raw FIFO/AX~AZ ADC counts -> m/s^2 (composes counts_to_g + g_to_ms2)."""
+    return g_to_ms2(counts_to_g(raw_counts))
+
+
+def extract_raw_axes(cap):
+    """Centralized raw-count extraction: pull X/Y/Z FIFO ADC counts out of a
+    parsed capture dict, as float arrays, for both capture formats (legacy
+    and Phase 7A both carry x_raw/y_raw/z_raw -- see parse_captures()).
+    Kept as a single reusable helper so acceleration processing has exactly
+    one place that reads cap['x_raw']/'y_raw'/'z_raw'.
+    """
+    return {
+        'X': np.array(cap['x_raw'], dtype=float),
+        'Y': np.array(cap['y_raw'], dtype=float),
+        'Z': np.array(cap['z_raw'], dtype=float),
+    }
+
+
+def compute_acceleration_axis_stats(raw_counts, sr_hz, n):
+    """Pure computation (no plotting) of one axis's acceleration numbers.
+
+    Takes raw FIFO ADC counts for one axis and returns counts/g/m-s^2
+    versions of: DC offset, AC (mean-removed) signal, RMS(AC), Peak(AC),
+    and the FFT magnitude spectrum -- a single-sided PEAK (0-to-peak)
+    amplitude spectrum, i.e. |rfft(ac)| * 2 / n (see module docstring
+    ASSUMPTIONS re: the Nyquist bin). Also returns the dominant AC
+    frequency (bin with the largest peak amplitude, DC bin excluded).
+    """
+    counts = np.asarray(raw_counts, dtype=float)
+    g = counts_to_g(counts)
+    ms2 = g_to_ms2(g)
+
+    dc_counts = counts.mean()
+    dc_g = g.mean()
+    dc_ms2 = ms2.mean()
+
+    ac_counts = counts - dc_counts
+    ac_g = g - dc_g
+    ac_ms2 = ms2 - dc_ms2
+
+    rms_counts = np.sqrt(np.mean(ac_counts ** 2))
+    rms_g = np.sqrt(np.mean(ac_g ** 2))
+    rms_ms2 = np.sqrt(np.mean(ac_ms2 ** 2))
+
+    peak_counts = np.max(np.abs(ac_counts))
+    peak_g = np.max(np.abs(ac_g))
+    peak_ms2 = np.max(np.abs(ac_ms2))
+
+    freqs = np.fft.rfftfreq(n, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(n, d=1.0)
+    fft_mag_counts = np.abs(np.fft.rfft(ac_counts)) / n * 2
+    fft_mag_g = np.abs(np.fft.rfft(ac_g)) / n * 2
+    fft_mag_ms2 = np.abs(np.fft.rfft(ac_ms2)) / n * 2
+    dominant_idx = np.argmax(fft_mag_g[1:]) + 1  # skip DC bin
+    dominant_freq = freqs[dominant_idx]
+
+    return {
+        'counts': counts, 'g': g, 'ms2': ms2,
+        'dc_counts': dc_counts, 'dc_g': dc_g, 'dc_ms2': dc_ms2,
+        'ac_counts': ac_counts, 'ac_g': ac_g, 'ac_ms2': ac_ms2,
+        'rms_counts': rms_counts, 'rms_g': rms_g, 'rms_ms2': rms_ms2,
+        'peak_counts': peak_counts, 'peak_g': peak_g, 'peak_ms2': peak_ms2,
+        'freqs': freqs,
+        'fft_mag_counts': fft_mag_counts, 'fft_mag_g': fft_mag_g, 'fft_mag_ms2': fft_mag_ms2,
+        'dominant_freq': dominant_freq,
+    }
+
+
+# ==========================================================================
+# VELOCITY PROCESSING -- not implemented yet.
+#
+# Future home for integrating acceleration (g) to vibration velocity
+# (mm/s, matching WTVB05 manual Sec 6.1.4.9 VX~VZ) so it can be compared
+# against the register-reported VRMSX/VRMSY/VRMSZ (Sec 6.1.4.17-19). Left
+# unimplemented per explicit instruction -- do NOT implement velocity
+# integration yet. When it lands, it should read compute_acceleration_axis_
+# stats()'s 'ac_g' (or 'ac_ms2') array and sample rate, and return a
+# parallel counts/mm-s^2-analog dict shaped like the one above so a
+# combined Acceleration/Velocity/VRMS comparison step can consume both
+# uniformly.
+# ==========================================================================
+
+
+# ==========================================================================
+# CAPTURE METADATA (engineering-polish Sec 2/3) -- Sampling Rate, Number of
+# Samples, and FFT Resolution (dF = SR/N), computed once per capture and
+# reused verbatim in the console report, the summary CSV, and every plot's
+# footer annotation, so those three never disagree with each other about
+# what SR/N/dF were for a given capture.
+# ==========================================================================
+
+def compute_fft_resolution_hz(sr_hz, n):
+    """FFT bin spacing dF = SR/N (Hz per bin). None if sr_hz wasn't given --
+    same "never guess the sample rate" rule the module docstring already
+    applies to the frequency axis: without --sr-hz, dF is only meaningful
+    in cycles/block (1/N), not Hz.
+    """
+    return sr_hz / n if sr_hz else None
+
+
+def format_capture_metadata_line(tag, n, sr_hz, fft_resolution_hz):
+    """One-line 'Capture / Samples / SR / FFT Resolution' summary -- reused
+    for console output, the small per-plot footer annotation, and (SR/N
+    already existed; fft_resolution_hz is the new column) the summary CSV,
+    so the numbers are guaranteed to match across all three.
+    """
+    sr_part = f"{sr_hz:g} Hz" if sr_hz else "not given (pass --sr-hz)"
+    df_part = f"{fft_resolution_hz:.4f} Hz" if fft_resolution_hz else "N/A (needs --sr-hz)"
+    return f"Capture: {tag}   Samples: {n}   SR: {sr_part}   FFT Resolution (dF=SR/N): {df_part}"
+
+
+def annotate_capture_metadata(fig, metadata_line):
+    """Small, low-emphasis footer so every plot can stand alone without the
+    console log or CSV alongside it (Sec 3). Kept to one line / small font
+    / low contrast so it doesn't compete with the actual data ("do not
+    overcrowd the plots").
+    """
+    fig.text(0.995, 0.004, metadata_line, ha='right', va='bottom', fontsize=7, color='0.4')
 
 
 def load_bearing_database(path):
@@ -277,10 +522,13 @@ def _parse_captures_phase7a(lines):
     """Phase 7A 4-column format: Index,X,Y,Z (X/Y/Z are raw ADC counts).
 
     Unlike the legacy format, this CSV carries no separate raw/g pair --
-    X/Y/Z are the raw counts, full stop. There is no g-conversion available,
-    so x_g/y_g/z_g are left empty; downstream code must not treat this
-    format as g-scaled. This format also carries no Tag/SR fields, so those
-    are synthesized (tag = 'phase7a_N' per block, sr = None). A block runs
+    X/Y/Z are the raw counts, full stop. This tool now converts those raw
+    counts to g itself (see counts_to_g() / module docstring), so x_g/y_g/
+    z_g are still left empty here (this format has no *pre-computed* g
+    column from the firmware to parse) but are no longer required
+    downstream -- analyze_one() derives g from x_raw/y_raw/z_raw for both
+    formats. This format also carries no Tag/SR fields, so those are
+    synthesized (tag = 'phase7a_N' per block, sr = None). A block runs
     from its header line to the next header line or end of file -- there is
     no END sentinel.
     """
@@ -319,61 +567,62 @@ def _parse_captures_phase7a(lines):
 
 def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearing_freqs=None):
     n = len(cap['index'])
-    is_phase7a = cap.get('format') == 'phase7a'
-    unit_label = 'Raw Counts' if is_phase7a else 'g'
-    unit_suffix = ' counts' if is_phase7a else 'g'
-    num_fmt = '.1f' if is_phase7a else '.4f'
     print(f"\n=== Capture tag='{cap['tag']}' SR_index={cap['sr']} samples={n} ===")
 
-    if is_phase7a:
-        axes = {'X': np.array(cap['x_raw']), 'Y': np.array(cap['y_raw']), 'Z': np.array(cap['z_raw'])}
-    else:
-        axes = {'X': np.array(cap['x_g']), 'Y': np.array(cap['y_g']), 'Z': np.array(cap['z_g'])}
+    # --- Capture metadata (Sec 2/3): computed once, reused verbatim in the
+    # console line below, every plot's footer annotation, and the summary
+    # CSV row built at the end of this function.
+    fft_resolution_hz = compute_fft_resolution_hz(sr_hz, n)
+    metadata_line = format_capture_metadata_line(cap['tag'], n, sr_hz, fft_resolution_hz)
+    print(f"  {metadata_line}")
 
-    # --- Time-series plot, all 1024 points per axis ---
+    # --- ACCELERATION PROCESSING ------------------------------------
+    # Both capture formats carry raw FIFO ADC counts (x_raw/y_raw/z_raw).
+    # Per the manual (Sec 6.1.4.16 + 6.1.4.8, see module docstring), those
+    # raw counts use the identical +-16g / 32768-count scaling regardless
+    # of which capture format produced them, so both are converted to g
+    # here the same way -- this replaces the old per-format unit branch
+    # (Phase 7A used to be plotted/reported in unconverted raw counts).
+    raw_axes = extract_raw_axes(cap)
+    stats = {label: compute_acceleration_axis_stats(raw, sr_hz, n) for label, raw in raw_axes.items()}
+
+    # --- Time-series plot, all 1024 points per axis, in g -----------
     fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
-    for ax, (label, data) in zip(axs, axes.items()):
-        ax.plot(cap['index'], data, linewidth=0.7)
-        ax.set_ylabel(f'{label} ({unit_label})')
+    for ax, label in zip(axs, ['X', 'Y', 'Z']):
+        ax.plot(cap['index'], stats[label]['g'], linewidth=0.7)
+        ax.set_ylabel(f'{label} Acceleration (g)')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
     axs[-1].set_xlabel('Sample index (0-1023 within this FIFO block)')
-    fig.suptitle(f"FIFO raw waveform — tag='{cap['tag']}' (all {n} samples)")
+    fig.suptitle(f"FIFO acceleration waveform — tag='{cap['tag']}' (all {n} samples; "
+                 f"counts -> g per WTVB05 manual Sec 6.1.4.8/6.1.4.16)")
     plt.tight_layout()
+    annotate_capture_metadata(fig, metadata_line)
     ts_path = f"{out_prefix}_{cap['tag']}_timeseries.png"
     plt.savefig(ts_path, dpi=150)
     plt.close()
     print(f"  saved: {ts_path}")
 
-    # --- FFT + RMS/Peak per axis ---
+    # --- FFT + DC/RMS/Peak per axis ----------------------------------
     fig, axs = plt.subplots(3, 1, figsize=(11, 8))
-    summary = {}
-    for ax, (label, data) in zip(axs, axes.items()):
-        mean_val = data.mean()
-        ac = data - mean_val   # mean-removed, for RMS/FFT (DC handled separately)
-        rms = np.sqrt(np.mean(ac ** 2))
-        peak = np.max(np.abs(ac))
-
-        freqs = np.fft.rfftfreq(n, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(n, d=1.0)
-        mag = np.abs(np.fft.rfft(ac)) / n * 2
-        dominant_idx = np.argmax(mag[1:]) + 1  # skip DC bin
-        dominant_freq = freqs[dominant_idx]
-
-        summary[label] = dict(dc=mean_val, rms=rms, peak=peak, dominant_freq=dominant_freq)
-
-        ax.plot(freqs, mag, linewidth=0.8)
-        ax.set_ylabel(f'{label} magnitude ({unit_label})' if is_phase7a else f'{label} magnitude')
+    for ax, label in zip(axs, ['X', 'Y', 'Z']):
+        s = stats[label]
+        ax.plot(s['freqs'], s['fft_mag_g'], linewidth=0.8)
+        ax.set_ylabel(f'{label} FFT Peak Amplitude (g)')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         xunit = 'Hz' if sr_hz else 'cycles/1024-sample-block'
-        ax.set_title(f'{label}: DC={mean_val:{num_fmt}}{unit_suffix}  RMS(AC)={rms:{num_fmt}}{unit_suffix}  '
-                      f'Peak(AC)={peak:{num_fmt}}{unit_suffix}  dominant~{dominant_freq:.1f}{xunit}',
+        ax.set_title(f"{label}: DC={s['dc_g']:.4f}g  RMS(AC)={s['rms_g']:.4f}g  "
+                      f"Peak(AC)={s['peak_g']:.4f}g  dominant~{s['dominant_freq']:.1f}{xunit}",
                       fontsize=9, loc='left')
     axs[-1].set_xlabel(f"Frequency ({'Hz' if sr_hz else 'cycles per 1024-sample block -- pass --sr-hz for real Hz'})")
-    fig.suptitle(f"FIFO-derived FFT — tag='{cap['tag']}'")
+    # Title states type/window/scaling/DC-handling explicitly (Sec 1) --
+    # see FFT_CONVENTION above for the full rationale/comment.
+    fig.suptitle(f"FIFO-derived FFT — tag='{cap['tag']}'\n{FFT_CONVENTION}", fontsize=10)
     plt.tight_layout()
+    annotate_capture_metadata(fig, metadata_line)
     fft_path = f"{out_prefix}_{cap['tag']}_fft.png"
     plt.savefig(fft_path, dpi=150)
     plt.close()
@@ -388,9 +637,9 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearin
 
     spec_per_axis = {}
     vmin, vmax = None, None
-    for label, data in axes.items():
-        ac = data - data.mean()   # mean-removed so DC doesn't swamp the color scale
-        f_spec, t_spec, Sxx = scipy_spectrogram(ac, fs=fs, window=window, nperseg=nperseg,
+    for label in ['X', 'Y', 'Z']:
+        ac_g = stats[label]['ac_g']
+        f_spec, t_spec, Sxx = scipy_spectrogram(ac_g, fs=fs, window=window, nperseg=nperseg,
                                                  noverlap=noverlap, detrend=False, mode='magnitude')
         spec_per_axis[label] = (f_spec, t_spec, Sxx)
         vmin = Sxx.min() if vmin is None else min(vmin, Sxx.min())
@@ -403,45 +652,56 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearin
         mesh = ax.pcolormesh(t_spec, f_spec, Sxx, shading='auto', cmap='viridis', vmin=vmin, vmax=vmax)
         ax.set_ylabel(f'{label} Freq ({"Hz" if sr_hz else "cycles/sample"})')
     axs[-1].set_xlabel(f"Time ({'s' if sr_hz else 'samples -- pass --sr-hz for seconds'})")
-    fig.suptitle(f"FIFO-derived Spectrogram (STFT, Hann window={nperseg}, 50% overlap) — tag='{cap['tag']}'")
-    fig.colorbar(mesh, ax=axs, label=f'Magnitude ({unit_label})')
+    # NOTE (avoiding the ambiguous-"Magnitude" pitfall -- see module
+    # docstring ENGINEERING UNITS section): scipy.signal.spectrogram(...,
+    # mode='magnitude') returns the magnitude of each short-time (Hann-
+    # windowed) DFT frame. This is NOT the same single-sided peak-amplitude
+    # convention as the whole-capture FFT above (windowing attenuates
+    # amplitude relative to a rectangular full-block FFT, so the two
+    # numbers are not directly comparable) -- labeled distinctly as "STFT
+    # Magnitude" here rather than reusing "Peak Amplitude".
+    fig.suptitle(f"FIFO-derived Spectrogram — STFT Magnitude (g), Hann window={nperseg}, "
+                 f"50% overlap, DC removed pre-STFT — tag='{cap['tag']}'")
+    fig.colorbar(mesh, ax=axs, label='STFT Magnitude (g)')
+    annotate_capture_metadata(fig, metadata_line)
     spectrogram_path = f"{out_prefix}_{cap['tag']}_spectrogram.png"
     plt.savefig(spectrogram_path, dpi=150)
     plt.close()
     print(f"  saved: {spectrogram_path}")
 
     # --- Envelope (Hilbert transform) per axis, Phase 7B-3 -- uses the
-    # mean-removed waveform directly, no band-pass filter yet (that's a
-    # later phase). Independent of FFT/spectrogram; does not read or
-    # modify their results.
+    # mean-removed (AC) g waveform directly, no band-pass filter yet
+    # (that's a later phase). Independent of FFT/spectrogram; does not
+    # read or modify their results.
     envelope_x = np.array(cap['index']) / sr_hz if sr_hz else cap['index']
     envelope_per_axis = {}
     fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
-    for ax, (label, data) in zip(axs, axes.items()):
-        ac = data - data.mean()
-        envelope = np.abs(hilbert(ac))
+    for ax, label in zip(axs, ['X', 'Y', 'Z']):
+        envelope = np.abs(hilbert(stats[label]['ac_g']))
         envelope_per_axis[label] = envelope
         ax.plot(envelope_x, envelope, linewidth=0.8)
-        ax.set_ylabel(f'{label} Envelope ({unit_label})')
+        ax.set_ylabel(f'{label} Envelope (g)')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
     axs[-1].set_xlabel('Time (s)' if sr_hz else 'Sample index (0-1023 within this FIFO block)')
-    fig.suptitle(f"FIFO-derived Envelope (Hilbert) — tag='{cap['tag']}' (all {n} samples)")
+    fig.suptitle(f"FIFO-derived Envelope (Hilbert, g) — tag='{cap['tag']}' (all {n} samples)")
     plt.tight_layout()
+    annotate_capture_metadata(fig, metadata_line)
     envelope_path = f"{out_prefix}_{cap['tag']}_envelope.png"
     plt.savefig(envelope_path, dpi=150)
     plt.close()
     print(f"  saved: {envelope_path}")
 
     # --- FFT of the envelope per axis, Phase 7B-4 -- reuses the exact
-    # envelope arrays computed above (abs(hilbert(mean-removed waveform)));
-    # does not recompute the envelope differently. The envelope itself is a
-    # positive-only signal with a nonzero mean, so its own DC is removed
-    # here (envelope_ac = envelope - envelope.mean()) before the FFT --
-    # otherwise that DC bin would dominate and hide the modulation
-    # frequencies we're looking for. Same frequency-axis/peak-picking logic
-    # as the waveform FFT above; no window function in this phase.
+    # envelope arrays computed above (abs(hilbert(mean-removed g
+    # waveform))); does not recompute the envelope differently. The
+    # envelope itself is a positive-only signal with a nonzero mean, so
+    # its own DC is removed here (envelope_ac = envelope - envelope.mean())
+    # before the FFT -- otherwise that DC bin would dominate and hide the
+    # modulation frequencies we're looking for. Same single-sided PEAK
+    # amplitude convention as the waveform FFT above; no window function
+    # in this phase.
     fig, axs = plt.subplots(3, 1, figsize=(11, 8))
     envelope_fft_summary = {}
 
@@ -466,7 +726,7 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearin
         envelope = envelope_per_axis[label]
         envelope_ac = envelope - envelope.mean()
 
-        freqs = np.fft.rfftfreq(n, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(n, d=1.0)
+        freqs = stats[label]['freqs']
         mag = np.abs(np.fft.rfft(envelope_ac)) / n * 2
         dominant_idx = np.argmax(mag[1:]) + 1  # skip DC bin
         dominant_envelope_freq = freqs[dominant_idx]
@@ -478,36 +738,39 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearin
                        label=f'{freq_name} {freq_value:.1f} Hz')
         if overlay_freqs:
             ax.legend(fontsize=7, loc='upper right')
-        ax.set_ylabel(f'{label} Envelope FFT ({unit_label})' if is_phase7a else f'{label} Envelope FFT')
+        ax.set_ylabel(f'{label} Envelope FFT Peak Amplitude (g)')
         ax.grid(alpha=0.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         xunit = 'Hz' if sr_hz else 'cycles/1024-sample-block'
         ax.set_title(f'{label}: dominant~{dominant_envelope_freq:.1f}{xunit}', fontsize=9, loc='left')
     axs[-1].set_xlabel(f"Frequency ({'Hz' if sr_hz else 'cycles per 1024-sample block -- pass --sr-hz for real Hz'})")
-    fig.suptitle(f"FIFO-derived Envelope FFT — tag='{cap['tag']}'")
+    # Same convention as the whole-capture FFT above -- see FFT_CONVENTION;
+    # only the input signal differs (envelope, DC-removed after Hilbert,
+    # instead of the raw acceleration waveform).
+    fig.suptitle(f"FIFO-derived Envelope FFT — tag='{cap['tag']}'\n{FFT_CONVENTION}", fontsize=10)
     plt.tight_layout()
+    annotate_capture_metadata(fig, metadata_line)
     envelope_fft_path = f"{out_prefix}_{cap['tag']}_envelope_fft.png"
     plt.savefig(envelope_fft_path, dpi=150)
     plt.close()
     print(f"  saved: {envelope_fft_path}")
 
     # --- Gravity-vector magnitude check (RFC-0006 §1, §4 Experiment 1) ---
-    # Only meaningful for g-scaled DC values -- raw ADC counts have no fixed
-    # reference magnitude, so this is skipped for Phase 7A input.
-    if is_phase7a:
-        print("  (Phase 7A raw-count input -- skipping gravity-vector interpretation, "
-              "which requires g-scaled DC values)")
-    else:
-        dc_vec = np.array([summary['X']['dc'], summary['Y']['dc'], summary['Z']['dc']])
-        mag_g = np.linalg.norm(dc_vec)
-        print(f"  DC vector magnitude |X,Y,Z| = {mag_g:.4f} g  "
-              f"({'consistent with gravity' if 0.9 <= mag_g <= 1.1 else 'DOES NOT look like gravity -- re-examine hypothesis'})")
+    # Now meaningful for both formats: both are converted to g via the
+    # same manual formula (previously this was skipped for Phase 7A
+    # because no g-conversion existed for it yet -- see module docstring).
+    dc_vec_g = np.array([stats['X']['dc_g'], stats['Y']['dc_g'], stats['Z']['dc_g']])
+    mag_g = np.linalg.norm(dc_vec_g)
+    print(f"  DC vector magnitude |X,Y,Z| = {mag_g:.4f} g  "
+          f"({'consistent with gravity' if 0.9 <= mag_g <= 1.1 else 'DOES NOT look like gravity -- re-examine hypothesis'})")
 
     print("  --- Compare these numbers against the SAME-moment register readout ---")
     for label in ['X', 'Y', 'Z']:
-        s = summary[label]
-        print(f"  {label}: FIFO-derived RMS={s['rms']:{num_fmt}}{unit_suffix}  Peak={s['peak']:{num_fmt}}{unit_suffix}  "
+        s = stats[label]
+        print(f"  {label}: DC={s['dc_g']:.4f}g ({s['dc_counts']:.1f} counts)   "
+              f"RMS(AC)={s['rms_g']:.4f}g ({s['rms_counts']:.1f} counts, {s['rms_ms2']:.4f} m/s^2)   "
+              f"Peak(AC)={s['peak_g']:.4f}g ({s['peak_counts']:.1f} counts, {s['peak_ms2']:.4f} m/s^2)   "
               f"dominant_freq~{s['dominant_freq']:.1f}"
               f"{'Hz' if sr_hz else ' (cycles/block, pass --sr-hz)'}"
               f"   <-- compare to register RRAX/VRMSX-type & HZX for this axis")
@@ -522,11 +785,11 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearin
         'input_format': cap.get('format', 'legacy'),
         'sample_count': n,
         'sample_rate_hz': sr_hz if sr_hz else '',
-        'rms_x': summary['X']['rms'], 'rms_y': summary['Y']['rms'], 'rms_z': summary['Z']['rms'],
-        'peak_x': summary['X']['peak'], 'peak_y': summary['Y']['peak'], 'peak_z': summary['Z']['peak'],
-        'dominant_freq_x_hz': summary['X']['dominant_freq'] if sr_hz else '',
-        'dominant_freq_y_hz': summary['Y']['dominant_freq'] if sr_hz else '',
-        'dominant_freq_z_hz': summary['Z']['dominant_freq'] if sr_hz else '',
+        'rms_x': stats['X']['rms_g'], 'rms_y': stats['Y']['rms_g'], 'rms_z': stats['Z']['rms_g'],
+        'peak_x': stats['X']['peak_g'], 'peak_y': stats['Y']['peak_g'], 'peak_z': stats['Z']['peak_g'],
+        'dominant_freq_x_hz': stats['X']['dominant_freq'] if sr_hz else '',
+        'dominant_freq_y_hz': stats['Y']['dominant_freq'] if sr_hz else '',
+        'dominant_freq_z_hz': stats['Z']['dominant_freq'] if sr_hz else '',
         'waveform_png': ts_path,
         'fft_png': fft_path,
         'spectrogram_png': spectrogram_path,
@@ -543,9 +806,19 @@ def analyze_one(cap, sr_hz, out_prefix, bearing_model=None, bearing=None, bearin
         'ball_diameter_mm': bearing['ball_diameter_mm'] if bearing else '',
         'pitch_diameter_mm': bearing['pitch_diameter_mm'] if bearing else '',
         'contact_angle_deg': bearing['contact_angle_deg'] if bearing else '',
+        'dc_offset_counts_x': stats['X']['dc_counts'], 'dc_offset_counts_y': stats['Y']['dc_counts'],
+        'dc_offset_counts_z': stats['Z']['dc_counts'],
+        'dc_offset_g_x': stats['X']['dc_g'], 'dc_offset_g_y': stats['Y']['dc_g'], 'dc_offset_g_z': stats['Z']['dc_g'],
+        'rms_ac_counts_x': stats['X']['rms_counts'], 'rms_ac_counts_y': stats['Y']['rms_counts'],
+        'rms_ac_counts_z': stats['Z']['rms_counts'],
+        'rms_ac_ms2_x': stats['X']['rms_ms2'], 'rms_ac_ms2_y': stats['Y']['rms_ms2'], 'rms_ac_ms2_z': stats['Z']['rms_ms2'],
+        'peak_ac_counts_x': stats['X']['peak_counts'], 'peak_ac_counts_y': stats['Y']['peak_counts'],
+        'peak_ac_counts_z': stats['Z']['peak_counts'],
+        'peak_ac_ms2_x': stats['X']['peak_ms2'], 'peak_ac_ms2_y': stats['Y']['peak_ms2'], 'peak_ac_ms2_z': stats['Z']['peak_ms2'],
+        'fft_resolution_hz': fft_resolution_hz if fft_resolution_hz else '',
     }
 
-    return summary, row
+    return stats, row
 
 
 def main():

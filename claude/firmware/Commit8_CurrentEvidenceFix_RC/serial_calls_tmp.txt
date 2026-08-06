@@ -1,0 +1,422 @@
+369:#define STACK_SIZE_BUTTON    4096   // V14.7: 2048→4096 (watermark was 172B=92% used; rtc+Wire+Serial.printf depth)
+488:        Serial.printf("[TLS] CA parse failed: -0x%04X\n", -ret);
+496:        Serial.printf("[TLS] Cert parse failed: -0x%04X\n", -ret);
+505:        Serial.printf("[TLS] Key parse failed: -0x%04X\n", -ret);
+510:    Serial.println("[TLS] Certificates parsed and loaded +");
+518:      Serial.printf("[TLS] Client cert subject: %s\n", buf);
+520:      Serial.printf("[TLS] Client cert issuer:  %s\n", buf);
+522:      Serial.printf("[TLS] CA cert subject:     %s\n", buf);
+524:      Serial.printf("[TLS] Key type: %s, bitlen: %u\n",
+553:      Serial.println("[TLS] ERROR: loadCerts() not called before connect()");
+567:    Serial.printf("[TLS] TCP connecting to %s:%d ...\n", host, port);
+569:      Serial.println("[TLS] TCP connect failed");
+572:    Serial.println("[TLS] TCP OK, starting TLS handshake...");
+591:      Serial.printf("[TLS] own_cert failed: -0x%04X\n", -ret);
+609:      Serial.printf("[TLS] ssl_setup failed: -0x%04X\n", -ret);
+644:            Serial.println("[TLS] TCP lost during handshake");
+648:            Serial.println("[TLS] No data from broker (15s) -- handshake stalled");
+658:        Serial.printf("[TLS] Handshake FAILED (-0x%04X): %s\n", -ret, errbuf);
+660:          Serial.println("[TLS] -> TCP layer: connection closed by remote");
+662:          Serial.println("[TLS] -> AUTH: server cert verify failed (check CA)");
+664:          Serial.printf("[TLS] -> ALERT: broker sent fatal alert "
+668:          Serial.println("[TLS] -> CIPHER: no common cipher suite");
+673:        Serial.println("[TLS] Handshake timeout (90s)");
+679:    Serial.printf("[TLS] mTLS handshake OK + (%lus) cipher: %s\n",
+780:    Serial.println("[TLS] Context reset complete -- ready for fresh handshake");
+896:      Serial.printf("[CIPRXGET #%lu] +%d/%d bytes (modem had %d)\n",
+898:      Serial.printf("[HEX #%lu] first %d bytes:\n  ", s_fetchNo, dumpLen);
+900:        Serial.printf("%02X ", _rxBuf[_rxTail - got + i]);
+901:        if ((i + 1) % 16 == 0 && i + 1 < dumpLen) Serial.print("\n  ");
+903:      Serial.println();
+911:        Serial.printf("[HEX #%lu] TLS: %s(0x%02X) ver=%02X%02X reclen=%u\n",
+923:          Serial.printf("[HEX #%lu] Handshake: %s(0x%02X)\n",
+927:          Serial.printf("[HEX #%lu] Alert: lvl=%u desc=%u\n",
+930:        Serial.printf("[HEX #%lu] ! first byte=0x%02X '%c' -- mid-record chunk\n",
+1042:    Serial.printf("[mbedTLS L%d] %s:%d: %s", level, f, line, str);
+1307:    Serial.println("[RTC] ! Corrupt read after 3 retries -- ignored"); \
+1602:    Serial.println("[CFG] No NVS config found — using firmware defaults");
+1612:  Serial.printf("[CFG] NVS config loaded: plant=%s machine=%s rpm=%d apn=%s\n",
+1645:  Serial.println("\n+========================================================+");
+1646:  Serial.println("|           PROMLOGIX CONFIG MODE  (v16.3v)              |");
+1647:  Serial.println("+========================================================+");
+1648:  Serial.println("| Commands:                                              |");
+1649:  Serial.println("|   set plant_id    <value>                              |");
+1650:  Serial.println("|   set machine_id  <value>                              |");
+1651:  Serial.println("|   set sensor_id   <value>                              |");
+1652:  Serial.println("|   set rated_rpm   <value>                              |");
+1653:  Serial.println("|   set apn         <value>                              |");
+1654:  Serial.println("|   show     — แสดงค่าปัจจุบัน                           |");
+1655:  Serial.println("|   save     — บันทึกและ reboot                           |");
+1656:  Serial.println("|   cancel   — ออกโดยไม่บันทึก (reboot ปกติ)              |");
+1657:  Serial.println("+========================================================+");
+1658:  Serial.printf("Current: plant=%s machine=%s sensor=%s rpm=%d apn=%s\n\n",
+1663:    Serial.print("[CONFIG] > ");
+1672:          Serial.println();
+1676:          if (inputBuf.length() > 0) { inputBuf.remove(inputBuf.length()-1); Serial.print("\b \b"); }
+1679:          Serial.print(c);
+1685:        Serial.println("\n[CONFIG] Timeout — rebooting without saving");
+1695:      Serial.printf("  plant_id   = %s\n", tmpPlant);
+1696:      Serial.printf("  machine_id = %s\n", tmpMachine);
+1697:      Serial.printf("  sensor_id  = %s\n", tmpSensor);
+1698:      Serial.printf("  rated_rpm  = %d\n", tmpRpm);
+1699:      Serial.printf("  apn        = %s\n", tmpApn);
+1700:      Serial.printf("  trend_persistence = %s\n", trendPersistenceStr());
+1705:      if (sp < 0) { Serial.println("  Error: format = set <key> <value>"); continue; }
+1711:      if      (key == "plant_id")   { val.toCharArray(tmpPlant,   sizeof(tmpPlant));   Serial.printf("  plant_id   = %s\n", tmpPlant); }
+1712:      else if (key == "machine_id") { val.toCharArray(tmpMachine, sizeof(tmpMachine)); Serial.printf("  machine_id = %s\n", tmpMachine); }
+1713:      else if (key == "sensor_id")  { val.toCharArray(tmpSensor,  sizeof(tmpSensor));  Serial.printf("  sensor_id  = %s\n", tmpSensor); }
+1714:      else if (key == "rated_rpm")  { tmpRpm = val.toInt(); Serial.printf("  rated_rpm  = %d\n", tmpRpm); }
+1715:      else if (key == "apn")        { val.toCharArray(tmpApn, sizeof(tmpApn)); Serial.printf("  apn        = %s\n", tmpApn); }
+1718:        if (parseTrendPersistence(val, &tp)) { g_trendPersistence = tp; Serial.printf("  trend_persistence = %s\n", trendPersistenceStr()); }
+1719:        else Serial.println("  Error: trend_persistence = always_resume|clear_10m|clear_30m|clear_1h|always_clear");
+1721:      else { Serial.printf("  Unknown key: %s\n", key.c_str()); }
+1725:        Serial.println("\n[CONFIG] + Config saved to NVS Flash");
+1726:        Serial.printf("  plant_id   = %s\n", tmpPlant);
+1727:        Serial.printf("  machine_id = %s\n", tmpMachine);
+1728:        Serial.printf("  sensor_id  = %s\n", tmpSensor);
+1729:        Serial.printf("  rated_rpm  = %d\n", tmpRpm);
+1730:        Serial.printf("  apn        = %s\n\n", tmpApn);
+1731:        Serial.println("[CONFIG] Rebooting in 2 seconds...");
+1735:        Serial.println("[CONFIG] ! ERROR: Failed to write NVS");
+1739:      Serial.println("[CONFIG] Cancelled — rebooting with existing config");
+1744:      Serial.printf("  Unknown command: %s\n", inputBuf.c_str());
+1954:  Serial.printf("[RPM] Loaded runtime_hour = %.4f h\n", g_runtimeHour);
+2019:  Serial.printf("[LATCH] SAVE code=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f n=%lu\n",
+2039:    Serial.println("[LATCH] RECOVER — no pending latch");
+2043:    Serial.printf("[LATCH] CORRUPT — magic=0x%08lX expected=0x%08lX\n",
+2048:    Serial.printf("[LATCH] CORRUPT — code=%u out of [1,%u]\n",
+2053:    Serial.println("[LATCH] CORRUPT — ts=0xFFFFFFFF (erased cell)");
+2057:    Serial.printf("[LATCH] CORRUPT — ts=%lu below min valid\n", (unsigned long)ts);
+2061:    Serial.printf("[LATCH] CORRUPT — rms=%.3f implausible\n", rms);
+2065:    Serial.printf("[LATCH] CORRUPT — kurt=%.3f implausible\n", kurt);
+2074:  Serial.printf("[LATCH] RECOVER OK — code=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f\n",
+2086:  Serial.println("[LATCH] CORRUPT — namespace erased, system continues normally");
+2093:    Serial.println("[LATCH] CLEAR mutex timeout — will retry next replay cycle");
+2103:  Serial.println("[LATCH] CLEAR — delivered, NVS latch released");
+2115:    Serial.println("[TelemBuf] WARN: mutex timeout on push — slot dropped");
+2168:  Serial.printf("[TelemBuf] push: count=%u/%u  overflow_total=%lu\n",
+2184:      Serial.println("[TelemBuf] WARN: mutex timeout on replay peek");
+2231:      Serial.printf("[TelemBuf] DROP stale slot (buffered_at=%lu age>24h)\n",
+2262:    Serial.printf("[TelemBuf] ! buffered_at=%lu invalid timestamp — marking INVALID\n",
+2306:    Serial.printf("[TelemBuf] WARN: replay JSON truncated sz=%u\n", (unsigned)sz);
+2311:    Serial.printf("[TelemBuf] replay publish FAILED (err=%d) — keeping slot\n",
+2326:  Serial.printf("[TelemBuf] replayed 1 slot (buffered_at=%lu)  remaining=%u  total_replayed=%lu\n",
+2415:      Serial.printf("[LATCH] ts candidate=%lu < min — storing UNKNOWN\n",
+2419:    Serial.printf("[LATCH] ts=UNKNOWN (rtcValid=%d synced=%d)\n",
+2425:    Serial.println("[LATCH] mutex timeout — event dropped this cycle");
+2433:      Serial.printf("[LATCH] SKIP ev=%u(%s) sev=%u — pending ev=%u(%s) sev=%u\n",
+2439:    Serial.printf("[LATCH] OVERWRITE pending ev=%u sev=%u -> ev=%u sev=%u\n",
+2462:  Serial.printf("[LATCH] LATCHED ev=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f n=%lu\n",
+2483:    Serial.printf("[LATCH] SAVE code=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f n=%lu\n",
+2563:          Serial.printf("[MOTOR] Warm-up complete (in-band %.1fs) -> RUNNING\n",
+2590:    Serial.println("[MOTOR] STOPPED transition -- peak hold reset, freeze analytics");
+2616:      Serial.printf("[MOTOR] RUNNING -- CLEAR trend (stop=%lus, tempDrop=%.1f°C cold=%d, policy=%s)\n",
+2622:      Serial.printf("[MOTOR] RUNNING -- RESUME, trend preserved (stop=%lus, tempDrop=%.1f°C, bearing warm)\n",
+2738:  Serial.println("[SENSOR-CFG] ========================================");
+2739:  Serial.println("[SENSOR-CFG] Re-configuring sensor after restart...");
+2753:  Serial.println("[SENSOR-CFG] [v16.3] Unlock-per-step: MODE then Save");
+2758:  Serial.printf("[SENSOR-CFG] [Unlock for MODE]...");
+2761:    Serial.printf(" x FAILED (err=%d) -- ABORT\n", result);
+2762:    Serial.println("[SENSOR-CFG] ========================================");
+2765:  Serial.println(" + OK");
+2768:  Serial.printf("[SENSOR-CFG] MODE=FreqDomain (0x%02X=0x%04X)...", REG_MODE, SENSOR_MODE_FREQ);
+2771:    Serial.printf(" x FAILED (err=%d)\n", result);
+2774:    Serial.println(" + OK");
+2785:  Serial.printf("[SENSOR-CFG] [Unlock for SR]...");
+2788:    Serial.printf(" x FAILED (err=%d) -- SKIP SR\n", result);
+2791:    Serial.println(" + OK");
+2794:    Serial.printf("[SENSOR-CFG] SR5 (1 kHz) (0x%02X=0x%04X)...", REG_SAMPLE_RATE, SENSOR_SR_1K);
+2797:      Serial.printf(" x FAILED (err=%d)\n", result);
+2800:      Serial.println(" + OK");
+2822:        Serial.printf("[SR] Readback = %s\n", srLabel);
+2824:        Serial.printf("[SR] Unexpected value = 0x%04X\n", srReadback);
+2827:      Serial.println("[SR] Readback FAILED");
+2836:  Serial.printf("[SENSOR-CFG] [Unlock for Save]...");
+2839:    Serial.printf(" x FAILED (err=%d) -- SKIP Save\n", result);
+2842:    Serial.println(" + OK");
+2845:    Serial.printf("[SENSOR-CFG] Save (0x%02X=0x%04X)...", REG_CMD, SENSOR_CMD_SAVE);
+2848:      Serial.printf(" x FAILED (err=%d) -- config NOT persisted to NVM!\n", result);
+2851:      Serial.println(" + OK");
+2857:    Serial.println("[SENSOR-CFG] All config steps OK -- MODE=FreqDomain(0x02) saved (SR/DRM not written by this function)");
+2859:    Serial.println("[SENSOR-CFG] WARNING: Some config steps FAILED -- sensor may not output CF/VRMS");
+2861:  Serial.println("[SENSOR-CFG] ========================================");
+2879:    Serial.printf("[SENSOR] %s stuck -- Cooldown active (%lu s remaining)\n",
+2885:  Serial.println("[SENSOR] ========================================");
+2886:  Serial.printf("[SENSOR] ! %s STUCK -> Auto-restarting sensor...\n", axisLabel);
+2887:  Serial.println("[SENSOR] ========================================");
+2892:    Serial.printf("[SENSOR] x Unlock FAILED (err=%d)\n", result);
+2895:  Serial.printf("[SENSOR] + Unlock OK (reg 0x%02X = 0x%04X)\n", REG_UNLOCK, SENSOR_UNLOCK_KEY);
+2906:    Serial.printf("[SENSOR] Restart sent (no ACK expected -- sensor rebooting) err=%d\n", result);
+2908:    Serial.printf("[SENSOR] + Restart command sent (reg 0x%02X = 0x00FF)\n", REG_CMD);
+2910:  Serial.println("[SENSOR] Waiting 3 seconds for sensor reboot...");
+2926:  Serial.printf("[SENSOR] + Sensor restart complete (triggered by %s), resuming reads\n", axisLabel);
+2927:  Serial.println("[SENSOR] ========================================");
+2936:  Serial.println("[TLS] Parsing mTLS certificates into ESP32 mbedTLS...");
+2941:    Serial.println("[TLS] WARNING: Certificate load failed!");
+2950:  Serial.println("[Modem] Starting power on sequence...");
+2963:  Serial.println("[Modem] Power sequence completed");
+2972:      Serial.println("[Modem] Modem responded");
+2976:    Serial.print(".");
+2978:  Serial.println("\n[Modem] No response from modem");
+2983:  Serial.println("[Modem] Starting initialization...");
+3001:    Serial.printf("[Modem] Initialization attempt %d/%d\n", modemRetryCount, MAX_MODEM_RETRIES);
+3011:        Serial.println("[Modem] Initialized successfully");
+3015:        Serial.printf("[Modem] Info: %s\n", modemInfo.c_str());
+3020:        Serial.printf("[Modem] IMEI: %s\n", g_network.imei);
+3026:        Serial.println("[Modem] Library initialization failed");
+3031:      Serial.println("[Modem] Retrying...");
+3037:    Serial.println("[Modem] Init failed after all retries!");
+3050:  Serial.println("[Modem] Waiting for network registration...");
+3057:    Serial.println("[Modem] Network registered!");
+3063:    Serial.printf("[Modem] Operator: %s\n", g_network.operatorName);
+3068:    Serial.printf("[Modem] Signal: %d (%d%%)\n", g_network.signalQuality, g_network.signalPercent);
+3071:    Serial.printf("[Modem] Connecting to GPRS APN: %s\n", APN);
+3075:      Serial.println("[Modem] GPRS connected!");
+3081:      Serial.printf("[Modem] IP: %s\n", ip.c_str());
+3085:      Serial.println("[Modem] GPRS connection failed!");
+3090:    Serial.println("[Modem] Network registration failed!");
+3134:  Serial.println("[NTP] Network time auto-update enabled (CTZU=1, CLTS=1)");
+3148:    Serial.printf("[NTP] GSM time too short: '%s'\n", gsmTime.c_str());
+3160:    Serial.printf("[NTP] Cannot parse GSM time: '%s'\n", gsmTime.c_str());
+3199:    Serial.printf("[NTP] Invalid GSM time values: %04d-%02d-%02d %02d:%02d:%02d\n",
+3213:  Serial.printf("[NTP] Parsed: local=%04d-%02d-%02dT%02d:%02d:%02d (TZ=%+d quarters = %+dh)\n",
+3215:  Serial.printf("[NTP] UTC  : %04d-%02d-%02dT%02d:%02d:%02dZ\n",
+3228:    Serial.println("[NTP] Modem not ready, skip sync");
+3234:  Serial.printf("[NTP] Raw GSM time: '%s'\n", gsmDateTime.c_str());
+3241:    Serial.println("[NTP] Modem has no valid network time yet");
+3263:    Serial.printf("[NTP] RTC drift: %+d seconds\n", drift);
+3273:      Serial.printf("[NTP] ! Drift implausible (%+d s) after recent sync (%lu ms ago) -- skip\n",
+3289:      Serial.println("[NTP] RTC is accurate (drift <= 1s), no adjustment");
+3301:      Serial.printf("[NTP] ! WARNING: RTC drift = %+d seconds!\n", drift);
+3305:      Serial.printf("[NTP] ! CRITICAL: RTC drift = %+d seconds -- FORCE CORRECTION\n", drift);
+3309:    Serial.printf("[NTP] Adjusting RTC: %04d-%02d-%02dT%02d:%02d:%02dZ (was off by %+ds)\n",
+3317:    Serial.println("[NTP] RTC was invalid -- setting from network time");
+3331:  Serial.printf("[NTP] + RTC synced successfully (total syncs: %lu)\n", g_timeSync.syncCount);
+3345:    Serial.printf("[NTP] Time sync check (interval=%lus, synced=%s)\n",
+3376:  Serial.println("[CORE 0] Modbus task started");
+3478:        Serial.printf("[MODBUS] + Sensor back ONLINE (was offline for %u consecutive reads, "
+3492:        Serial.println("[MODBUS] Sensor back -- re-configuring MODE=FreqDomain...");
+3501:          Serial.println("[MODBUS] WARNING: Sensor reconfig failed -- CF/VRMS may be 0 until next restart");
+3506:          Serial.println("[MODBUS] ! Extending warmup suppress to 16 reads (4s) after reconfig fail");
+3532:            Serial.printf("[SENSOR] ! ALL-ZERO for %u reads (Vx=%d Vy=%d Vz=%d) -> restart\n",
+3540:            Serial.printf("[SENSOR] + All-zero recovered! (stuck %u reads)\n",
+3555:            Serial.printf("[SENSOR] ! Vy=0 for %u reads (Vx=%d Vz=%d) -> restart\n",
+3563:            Serial.printf("[SENSOR] + Vy recovered! (stuck %u reads, now raw_y=%d)\n",
+3578:            Serial.printf("[SENSOR] ! Vz=0 for %u reads (Vx=%d Vy=%d) -> restart\n",
+3586:            Serial.printf("[SENSOR] + Vz recovered! (stuck %u reads, now raw_z=%d)\n",
+3601:            Serial.printf("[SENSOR] ! Vx=0 for %u reads (Vy=%d Vz=%d) -> restart\n",
+3609:            Serial.printf("[SENSOR] + Vx recovered! (stuck %u reads, now raw_x=%d)\n",
+3622:          Serial.printf("[SENSOR] + Auto-restart OK (axis=%s), monitoring recovery...\n", stuckAxis);
+3624:          Serial.printf("[SENSOR] x Auto-restart FAILED (axis=%s), retry after cooldown\n", stuckAxis);
+3720:        Serial.printf("[SENSOR] ! NaN/Inf detected in derived values -- skipping cycle "
+3765:        Serial.println("[CORE 0] Sensor queue full!");
+3776:          Serial.printf("[MODBUS] ! SENSOR OFFLINE -- %u consecutive errors "
+3791:        Serial.printf("[MODBUS] x Read failed (consec=%u/%d, total=%lu)\n",
+3809:  Serial.println("[CORE 0] State machine task started");
+3834:              Serial.println("[STATE] Sensor OFFLINE -> forced STATE_NORMAL, buzzer OFF");
+3884:          Serial.printf("[DEGLITCH] #%lu %s RMS=%.2f VX=%.2f VY=%.2f VZ=%.2f freq=(%.1f,%.1f,%.1f) | "
+3982:            Serial.printf("[CORE 0] State: %d -> %d (RMS: %.2f)\n",
+4005:          Serial.printf("[LATCH] Suppressed -- rmsValid=%d warmup=%u\n",
+4037:  Serial.println("[CORE 1] Display task started");
+4099:  Serial.println("[CORE 1] Network task started (4G Modem)");
+4114:    Serial.println("[CORE 1] Modem init failed!");
+4127:      Serial.println("[CORE 1] Performing initial NTP time sync...");
+4134:  Serial.printf("[CORE 1] Client ID: %s\n", MQTT_CLIENT_ID);
+4186:          Serial.println("[CORE 1] Network not connected, waiting...");
+4195:          Serial.println("[CORE 1] Reconnecting GPRS...");
+4233:          Serial.printf("[CORE 1] Connecting MQTT (mTLS, ID=%s) backoff=%lus attempt#%u...\n",
+4243:            Serial.println("[CORE 1] MQTT Connected (mTLS) +");
+4255:            Serial.printf("[CORE 1] MQTT connect failed | err=%d rc=%d fail#%u next_retry=%lus\n",
+4261:              Serial.println("[CORE 1]   -> Layer: TCP connect failed (modem/network issue)");
+4263:              Serial.println("[CORE 1]   -> Layer: TLS handshake timed out");
+4265:              Serial.println("[CORE 1]   -> Layer: MQTT AUTH refused (check CN=client ID)");
+4267:              Serial.println("[CORE 1]   -> Layer: MQTT bad credentials");
+4269:              Serial.println("[CORE 1]   -> Layer: TLS handshake failed (see [TLS] lines above)");
+4273:              Serial.printf("[CORE 1] %u consecutive MQTT failures -- reinit modem\n",
+4306:          Serial.printf("[CORE 1] GPRS: %s\n", gprs ? "CONNECTED" : "DISCONNECTED");
+4309:            Serial.println("[CORE 1] GPRS reconnected -- scheduling NTP sync");
+4322:          Serial.printf("[CORE 1] MQTT: %s\n", nowConnected ? "CONNECTED" : "DISCONNECTED");
+4329:              Serial.printf("[TelemBuf] MQTT reconnected -- %u slot(s) pending replay\n",
+4408:            Serial.printf("[MQTT] Outbound queue published -> %s (%u B)\n", outTopic, (unsigned)outMsg.len);
+4411:            Serial.printf("[MQTT] Outbound queue publish FAILED -> %s (err=%d)\n", outTopic, mqttClient.lastError());
+4467:            Serial.printf("[MQTT] ! Offline alert published: %s\n", offlineJson);
+4516:            Serial.println("[MAINT] MQTT audit event published +");
+4519:            Serial.println("[MAINT] MQTT audit event FAILED");
+4524:          Serial.println("[MAINT] MQTT audit event dropped (not connected)");
+4559:        Serial.println("[LATCH] replay snapshot mutex timeout — retry next loop");
+4641:          Serial.printf("[LATCH] JSON overflow sz=%u — skipping\n", (unsigned)flSz);
+4647:            Serial.printf("[LATCH] PUBLISH+CLEAR %s\n", flBuf);
+4650:            Serial.println("[LATCH] PUBLISH failed — retry next loop");
+4681:  Serial.println("[CORE 1] Button task started (SELECT + ENTER)");
+4826:                  Serial.println("[MAINT] mutexI2C timeout — timestamp zeroed");
+4835:            Serial.println("[MAINT] Reset complete → WARMUP (MQTT event queued)");
+4853:          Serial.printf("[CORE 1] SELECT: Page %d\n", g_systemState.currentPage);
+4877:          Serial.println("[CORE 1] ENTER: Alarm ACK (2s)");
+4890:        Serial.println("[CORE 1] ENTER: Short press");
+4909:  Serial.println("[CORE 1] Buzzer task started");
+5338:    Serial.printf("[TREND] n=%u slope=%.5f dir=%+d spikes=%u | "
+5421:  Serial.printf("[TREND-P2] slope_1s=%s%.5f slope_10s=%s%.5f slope_60s=%s%.5f | "
+5673:    Serial.printf("[DESIGN-0004] /sensor measureJson()=%u B (doc memoryUsage=%u B, buf cap=%u B)\n",
+5680:      Serial.printf("[WARN] /sensor JSON truncated! sz=%u buf=%u\n",
+5684:      Serial.printf("[MQTT] /sensor %u B\n", (unsigned)szSensor);
+5686:      Serial.printf("[MQTT] /sensor FAILED (err=%d)\n", mqttClient.lastError());
+5746:      Serial.printf("[WARN] /status JSON truncated! sz=%u\n", (unsigned)szStatus);
+5748:      Serial.printf("[MQTT] /status %u B\n", (unsigned)szStatus);
+5750:      Serial.printf("[MQTT] /status FAILED (err=%d)\n", mqttClient.lastError());
+5850:      Serial.printf("[MQTT] /vibration %d B | %s rms=%.2f peak=%.2f rpm=%.1f "
+5859:      Serial.printf("[MQTT] Publish FAILED (err=%d)\n", mqttClient.lastError());
+5918:  Serial.println("[CORE 1] Analytics task started (Phase 2+Claim2)");
+5943:      Serial.println("[ANALYTICS] CMD CLEAR -- buffers + EMA reset");
+5953:      if (anaReady) Serial.println("[ANALYTICS] Resumed -- analysis READY");
+5954:      else          Serial.printf("[ANALYTICS] Frozen -- reason=%s\n", analysisReasonStr(anaReason));
+5965:      Serial.printf("[ANALYTICS] Resume reinit -- gap=%lus, EMA reseed, slope suppress=%u (raw data preserved)\n",
+6188:                Serial.printf("[ANALYTICS] 60s flush -> buf1s=%u buf10s=%u buf60s=%u slot_ms=%lu\n",
+6252:        Serial.printf("[ANALYTICS] ! RTC corrupt year=%u -- using NTP fallback ts\n",
+6354:        Serial.printf("[WARN] /trend JSON truncated! sz=%u buf=%u\n",
+6361:        Serial.printf("[TREND] /trend %u B queued\n", (unsigned)sz);
+6363:        Serial.printf("[TREND] FAILED to queue -> %s\n", g_mqttTopicTrend);
+6434:  Serial.println();
+6435:  Serial.println("+========================================================+");
+6436:  Serial.printf( "|  [BOOT] Reset Reason : %-6s %s\n", g_resetReasonStr, emoji);
+6437:  Serial.printf( "|  [BOOT] Reboot Count : #%lu\n", (unsigned long)g_rebootCount);
+6438:  Serial.println("+========================================================+");
+6442:    Serial.println("[BOOT] !! BROWNOUT detected -- ตรวจสอบ PSU / 4G current spike");
+6443:    Serial.println("[BOOT] !! ควรเพิ่ม capacitor หรือ separate power rail สำหรับ modem");
+6445:    Serial.println("[BOOT] !! TASK WATCHDOG -- task ค้างเกิน 30s");
+6446:    Serial.println("[BOOT] !! ดู task ที่ไม่ได้ reset WDT ก่อน timeout");
+6448:    Serial.println("[BOOT] !! INTERRUPT WATCHDOG -- ISR ค้างนานเกินไป");
+6450:    Serial.println("[BOOT] !! PANIC/EXCEPTION -- ดู backtrace ใน log ก่อนหน้า");
+6451:    Serial.println("[BOOT] !! สาเหตุที่พบบ่อย: stack overflow, null ptr, heap corruption");
+6463:  Serial.println("\n[CONFIG] Press ENTER within 5 seconds to enter Config Mode...");
+6475:      Serial.printf("[CONFIG] %lu...\n", remaining);
+6482:  Serial.println("[CONFIG] Boot normal\n");
+6498:  Serial.println("\n\n");
+6499:  Serial.println("+========================================================+");
+6500:  Serial.println("|  ESP32-S3 VIBRATION MONITOR v16.5 (Phase 5 Fusion AI)  |");
+6501:  Serial.println("|        LilyGO T-Vending S3 + SIMCom A7670             |");
+6502:  Serial.println("+========================================================+\n");
+6505:  Serial.printf("CPU Frequency: %d MHz\n", ESP.getCpuFreqMHz());
+6506:  Serial.printf("Flash Size: %d MB\n", ESP.getFlashChipSize() / (1024 * 1024));
+6507:  Serial.printf("Free Heap: %d bytes\n\n", ESP.getFreeHeap());
+6530:  Serial.println("[Init] MQTT Pipeline Topics:");
+6531:  Serial.printf("  /vibration (compat): %s\n", g_mqttTopic);
+6532:  Serial.printf("  /sensor:             %s\n", g_mqttTopicSensor);
+6533:  Serial.printf("  /decision:           %s\n", g_mqttTopicDecision);
+6534:  Serial.printf("  /trend:              %s\n", g_mqttTopicTrend);
+6535:  Serial.printf("  /event:              %s\n", g_mqttTopicEvent);            // V14.4
+6536:  Serial.printf("[Init] Identity: plant=%s  machine=%s  sensor=%s  rated_rpm=%d\n",
+6552:  Serial.println("[Init] GPIO configured");
+6572:  Serial.println("[Init] OLED initialized");
+6583:      Serial.println("[Init] RTC lost power! Setting compile time as fallback...");
+6584:      Serial.println("[Init] ! Time will be corrected via NTP after 4G connects");
+6593:      Serial.println("[Init] RTC time appears invalid, setting compile time as fallback");
+6597:      Serial.println("[Init] RTC time looks reasonable (will verify via NTP)");
+6601:    Serial.printf("[Init] RTC: %04d-%02d-%02d %02d:%02d:%02d (sync pending)\n",
+6605:    Serial.println("[Init] RTC not found! Timestamps will be unavailable until NTP sync.");
+6613:  Serial.printf("[Init] Modbus @ %d baud, ID: 0x%02X\n",
+6627:  Serial.println("[Init] Configuring WTVB02 sensor (MODE=FreqDomain)...");
+6633:      Serial.printf("[Init] Sensor config retry %d/3...\n", attempt);
+6640:    Serial.println("[Init] Sensor config OK -- CF/VRMS/Kurtosis will be active");
+6642:    Serial.println("[Init] WARNING: Sensor config partial after 3 attempts");
+6643:    Serial.println("[Init] MODE may still be set -- CF/VRMS active until next power cycle");
+6652:  Serial.printf("[Init] RPM sensor GPIO%d | RATED=%d RPM +/-%d | PPR=%d\n",
+6667:    Serial.println("[FATAL] Failed to create mutexes!");
+6671:  Serial.println("[Init] Mutexes created");
+6681:    Serial.println("[FATAL] Failed to create queues!");
+6685:  Serial.println("[Init] Queues created");
+6693:    Serial.println("[WARN] Failed to create queueMqttOutboundTrend (dormant, no current consumer)");
+6695:    Serial.println("[Init] MQTT outbound queue created (dormant)");
+6704:  Serial.println("\n[Init] Creating FreeRTOS tasks...\n");
+6707:  Serial.println("+--- CORE 0 (PRO_CPU) - Time Critical ---------------+");
+6717:  Serial.printf("| [+] Modbus RTU       (Priority %d, Stack %d)      |\n",
+6728:  Serial.printf("| [+] State Machine    (Priority %d, Stack %d)      |\n",
+6731:  Serial.println("+----------------------------------------------------+\n");
+6734:  Serial.println("+--- CORE 1 (APP_CPU) - User Interface --------------+");
+6744:  Serial.printf("| [+] OLED Display     (Priority %d, Stack %d)      |\n",
+6755:  Serial.printf("| [+] 4G Modem/MQTT    (Priority %d, Stack %d)     |\n",
+6766:  Serial.printf("| [+] Analytics        (Priority %d, Stack %d)      |\n",
+6777:  Serial.printf("| [+] Button Input     (Priority %d, Stack %d)      |\n",
+6788:  Serial.printf("| [+] Buzzer Control   (Priority %d, Stack %d)      |\n",
+6791:  Serial.println("+----------------------------------------------------+\n");
+6793:  Serial.println("+========================================================+");
+6794:  Serial.println("|  SYSTEM READY -- 4G LTE + mTLS + Phase 5 Fusion AI     |");
+6795:  Serial.println("+========================================================+\n");
+6797:  Serial.println("Network Configuration:");
+6798:  Serial.printf("  APN:       %s\n", g_cfgApn);
+6799:  Serial.printf("  MQTT:      %s:%d (mTLS)\n", MQTT_SERVER, MQTT_PORT);
+6800:  Serial.printf("  Client ID: %s\n", MQTT_CLIENT_ID);
+6801:  Serial.printf("  QoS:       %d\n", MQTT_QOS);
+6802:  Serial.printf("  Topic:     %s\n\n", g_mqttTopic);
+6804:  Serial.println("Vibration Thresholds:");
+6805:  Serial.printf("  Baseline: %.1f mm/s\n", BASELINE_RMS);
+6806:  Serial.printf("  Warning:  %.1f mm/s\n", WARNING_RMS);
+6807:  Serial.printf("  Critical: %.1f mm/s\n\n", CRITICAL_RMS);
+6809:  Serial.println("Adaptive Sending:");
+6810:  Serial.println("  NORMAL:   30 seconds");
+6811:  Serial.println("  WARNING:  10 seconds");
+6812:  Serial.println("  CRITICAL: 5 seconds\n");
+6814:  Serial.println("Phase 2 Analytics:");
+6815:  Serial.println("  taskAnalytics: Core 1, 1 Hz, Priority 3");
+6816:  Serial.println("  Buffers: g_buf1s[60]=60s  g_buf10s[60]=10min  g_buf60s[60]=60min");
+6817:  Serial.printf("  RAM overhead: ~%d bytes  (~%.1f KB)\n",
+6820:  Serial.printf("  Analytics topic: %s\n\n", g_mqttAnalyticsTopic);
+6823:  Serial.println("NTP Time Sync:");
+6824:  Serial.printf("  Sync Interval:  %lu hours\n", NTP_SYNC_INTERVAL / 3600000UL);
+6825:  Serial.printf("  Retry Interval: %lu minutes\n", NTP_SYNC_RETRY_INTERVAL / 60000UL);
+6826:  Serial.printf("  Drift Warn:     %d seconds\n", NTP_DRIFT_WARN_SEC);
+6827:  Serial.printf("  Drift Max:      %d seconds\n\n", NTP_DRIFT_MAX_SEC);
+6829:  Serial.println("FreeRTOS scheduler will now take over...\n");
+6878:    Serial.println("\n+========================================================+");
+6879:    Serial.println("|              SYSTEM STATUS REPORT (4G mTLS)            |");
+6880:    Serial.println("+========================================================+");
+6896:    Serial.printf("| Machine: %-45s |\n", MACHINE_NAME);
+6903:    Serial.printf("| State:   %-45s |\n", stateStr);
+6905:    Serial.printf("| RMS:     %-42.2f mm/s |\n", localVib.rms_overall);
+6906:    Serial.printf("| Temp:    %-43.1f  degC |\n", localVib.temperature);
+6908:    Serial.println("+========================================================+");
+6909:    Serial.printf("| Modem:   %-45s |\n", g_network.modemReady ? "READY" : "NOT READY");
+6910:    Serial.printf("| GPRS:    %-45s |\n", g_network.gprsConnected ? "CONNECTED" : "DISCONNECTED");
+6913:    Serial.printf("| MQTT:    %-45s |\n", getMqttConnectedCached() ? "CONNECTED (mTLS)" : "DISCONNECTED");
+6914:    Serial.printf("| Signal:  %d%% (CSQ: %d)                                |\n",
+6916:    Serial.printf("| Operator: %-44s |\n", g_network.operatorName);
+6918:    Serial.println("+========================================================+");
+6919:    Serial.printf("| Sensor Reads:    %8lu (Errors: %8lu)       |\n",
+6921:    Serial.printf("| VRMS Deglitch:   %8lu  (%.1f%% of reads)          |\n",
+6924:    Serial.printf("| Display Updates: %8lu                          |\n",
+6926:    Serial.printf("| MQTT Publishes:  %8u (Failures: %8u)     |\n",
+6930:    Serial.println("+========================================================+");
+6931:    Serial.printf("| Stuck Threshold: %2u reads x 250ms = %.2f s           |\n",
+6933:    Serial.printf("| Vx Stuck Count:  %3u / %u   (Restarts: %3u)           |\n",
+6935:    Serial.printf("| Vy Stuck Count:  %3u / %u   (Restarts: %3u)           |\n",
+6937:    Serial.printf("| Vz Stuck Count:  %3u / %u   (Restarts: %3u)           |\n",
+6941:      Serial.printf("| Last Restart:    %lu sec ago                       |\n", ageSec);
+6943:      Serial.printf("| Last Restart:    never                              |\n");
+6946:    Serial.println("+========================================================+");
+6947:    Serial.printf("| Free Heap:       %8d bytes                     |\n",
+6949:    Serial.printf("| Min Free Heap:   %8d bytes                     |\n",
+6951:    Serial.printf("| Uptime:          %8lu seconds                  |\n",
+6960:        Serial.printf("| RTC Time: %04d-%02d-%02d %02d:%02d:%02d                    |\n",
+6964:        Serial.println("|  RTC Time: INVALID (I2C read error)            |");
+6969:    Serial.println("+========================================================+");
+6970:    Serial.printf("| NTP Synced:  %-41s |\n", g_timeSync.synced ? "YES +" : "NO x");
+6973:      Serial.printf("| Last Sync:   %-41s |\n", g_timeSync.lastSyncTime);
+6974:      Serial.printf("| Sync Age:    %lu seconds ago                        |\n", ageSec);
+6979:        Serial.println("|  Last Drift: OK (I2C glitch suppressed)         |");
+6981:        Serial.printf("| Last Drift:  %+d seconds                            |\n",
+6985:    Serial.printf("| Sync Count:  %lu  (Failures: %lu)                    |\n",
+6988:    Serial.println("+========================================================+\n");
+6991:    Serial.println("Task Stack High Water Marks (bytes remaining):");
+6992:    Serial.printf("  Modbus:      %u\n", uxTaskGetStackHighWaterMark(taskHandleModbus));
+6993:    Serial.printf("  State:       %u\n", uxTaskGetStackHighWaterMark(taskHandleState));
+6994:    Serial.printf("  Display:     %u\n", uxTaskGetStackHighWaterMark(taskHandleDisplay));
+6995:    Serial.printf("  Network:     %u\n", uxTaskGetStackHighWaterMark(taskHandleNetwork));
+6996:    Serial.printf("  Analytics:   %u\n", uxTaskGetStackHighWaterMark(taskHandleAnalytics));
+6997:    Serial.printf("  Button:      %u\n", uxTaskGetStackHighWaterMark(taskHandleButton));
+6998:    Serial.printf("  Buzzer:      %u\n\n", uxTaskGetStackHighWaterMark(taskHandleBuzzer));
+7001:    Serial.printf("Analytics Buffer Fill: buf1s=%u/60  buf10s=%u/60  buf60s=%u/60\n",
+7003:    Serial.printf("EMA: rms=%.3f delta=%.5f dir=%+d\n",
+7007:    Serial.println("+========================================================+");
+7008:    Serial.printf("| TelemBuf Pending:  %3u / %3u slots                     |\n",
+7010:    Serial.printf("| TelemBuf Overflow: %8lu  (oldest overwritten)      |\n",
+7012:    Serial.printf("| TelemBuf Replayed: %8lu  (cumulative sent OK)      |\n",
+7014:    Serial.println("+========================================================+\n");

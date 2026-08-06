@@ -556,7 +556,7 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 // --- Machine Configuration ---
 #define MACHINE_NAME MACHINE_ID  // Display uses MACHINE_ID for consistency
 #define BASELINE_RMS 2.8f
-#define WARNING_RMS 4.5f
+#define WARNING_RMS 7.5f
 #define CRITICAL_RMS 11.2f
 
 // --- FreeRTOS Configuration ---

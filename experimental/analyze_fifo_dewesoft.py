@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """
-analyze_fifo_dewesoft.py -- Dewesoft-compatible FFT/waveform analysis tool.
+analyze_fifo_dewesoft.py -- common vibration analysis engine, dual input format.
 
-Standalone tool that reproduces Dewesoft's FFT processing (Hann window,
-single-sided rFFT, Peak-Auto amplitude scaling) as closely as possible for
-a 3-axis acceleration CSV exported from Dewesoft (e.g.
-experimental/dewesoft_data/3Axis_acc_0009.csv).
+Reproduces Dewesoft's FFT processing (Hann window, single-sided rFFT,
+Peak-Auto amplitude scaling) as closely as possible, and analyzes 3-axis
+acceleration from EITHER of two input formats through one shared analysis
+engine: a Dewesoft CSV export (e.g.
+experimental/dewesoft_data/3Axis_acc_0009.csv) or a WTVB05 FIFO capture CSV
+(raw ADC counts, e.g. the "Index,X,Y,Z" Phase 7A format also read by
+analyze_fifo_capture.py). See "V2 PROJECT PHASE -- MULTI-FORMAT INPUT
+ARCHITECTURE" below and experimental/V2_ARCHITECTURE.md for the full
+Input Layer / Common Analysis Engine / Output Layer design.
 
-This tool is intentionally independent from analyze_fifo_capture.py (which
-targets WTVB05 FIFO captures in raw ADC counts): this one reads acceleration
-already expressed in m/s^2 from a Dewesoft export and does not touch the
-counts<->g<->m/s^2 conversion logic used there.
+This tool remains intentionally independent from analyze_fifo_capture.py
+(which has its own, separate CLI/scope: multi-capture bearing-frequency,
+envelope, and spectrogram analysis) -- it does not import that module, and
+reproduces only the one FIFO counts->m/s^2 conversion line it needs (see
+read_fifo_csv()) rather than depending on it as a library.
 
 Usage:
     python experimental/analyze_fifo_dewesoft.py experimental/dewesoft_data/3Axis_acc_0009.csv --sr-hz 1000
     python experimental/analyze_fifo_dewesoft.py capture.csv --sr-hz 1000 --fft-size 4096
+    python experimental/analyze_fifo_dewesoft.py fifo_capture.csv --sr-hz 1000   # WTVB05 FIFO CSV, auto-detected
 
 Output: waveform.png, fft.png, and summary.json are written to --out-dir,
 which defaults to experimental/output/ (created automatically if it does
@@ -208,9 +215,74 @@ list(band_range_hz) conversion in build_summary_dict(), and the
 print-alignment cosmetic difference between Peak and Energy mode's
 "Dominant Amplitude" line -- all still present, all still harmless, none
 of them were on the confirmed-bug list this release targets.
+
+--------------------------------------------------------------------------
+V2 PROJECT PHASE -- MULTI-FORMAT INPUT ARCHITECTURE (post-V1-freeze)
+--------------------------------------------------------------------------
+NAMING NOTE: "V1" was frozen (as a git commit / feature baseline) with the
+Peak Spectrum default, the Energy Spectrum addition, and the V2.1 stability
+fixes all already included -- the "V2:" section further above refers to
+those PRE-freeze, WITHIN-V1 feature additions (spectrum modes), not this
+project phase. This section is the FIRST change made AFTER the V1 freeze,
+and is a NEW, SEPARATE use of "V2" -- this time meaning "the next project
+phase," i.e. an architectural refactor, not another spectrum-mode feature.
+The two are unrelated despite the shared name; this note exists so a future
+reader isn't confused by the collision.
+
+GOAL: support a second input format (WTVB05 FIFO CSV, raw ADC counts)
+WITHOUT writing a second FFT/RMS/statistics implementation. Every DSP
+function in this file (compute_time_domain_stats, hann_window,
+coherent_gain, noise_power_gain, split_into_blocks, compute_fft_spectrum,
+compute_energy_spectrum, compute_overall_rms, compute_band_rms,
+find_dominant_and_noise_floor, analyze_axis) is UNCHANGED by this phase --
+verified by re-running the Dewesoft validation file and confirming
+summary.json is byte-for-byte identical to the pre-refactor V2.1 baseline
+(see V2_ARCHITECTURE.md).
+
+ARCHITECTURE (see V2_ARCHITECTURE.md for the full diagram):
+
+    Input Layer                    read_dewesoft_csv() / read_fifo_csv() --
+                                    both return the SAME structure:
+                                    {'sample_rate', 'unit', 'X', 'Y', 'Z'}
+         |
+         v
+    Common Analysis Engine         compute_time_domain_stats(),
+                                    compute_fft_spectrum() /
+                                    compute_energy_spectrum(), analyze_axis()
+                                    -- reads plain ndarrays only, never knows
+                                    or asks which loader produced them
+         |
+         v
+    Output Layer                   print_axis_report(), build_summary_dict(),
+                                    plot_waveform(), plot_fft() -- unchanged
+
+FORMAT DETECTION: detect_input_format() sniffs the first non-blank line of
+the input CSV (a Dewesoft "m/s2" column header vs. a WTVB05 "Index,X,Y,Z" or
+legacy "FIFOIndex,Tag,SR,..." header) and dispatches to the matching loader
+-- the same CLI invocation (`--sr-hz` and nothing else new) works for
+either input format, per requirement 5. This mirrors
+analyze_fifo_capture.py's own first-line auto-detection IDIOM (not its
+code, which is not imported -- see above).
+
+FIFO UNIT CONVERSION (requirement 3): read_fifo_csv() converts raw ADC
+counts to m/s^2 via the same formula/constants analyze_fifo_capture.py's
+counts_to_g()/g_to_ms2() use (WTVB05 manual Sec 6.1.4.8/6.1.4.16):
+    m/s^2 = (raw_counts / 2048) * 9.8
+This happens entirely inside the Input Layer, BEFORE any array reaches the
+Common Analysis Engine -- the engine only ever sees already-converted
+m/s^2 values, identically to the Dewesoft path.
+
+EXPLICITLY NOT IMPLEMENTED in this phase (deferred to later V2 phases, per
+requirement 6): cross-format/cross-run comparison, ISO 20816 severity
+evaluation, velocity integration, and envelope analysis. None of this
+phase's changes prepare specific hooks for those beyond what Energy
+Spectrum's Overall RMS / Band RMS already provided in V2.1 -- adding
+forward-looking scaffolding for unimplemented features was deliberately
+avoided.
 """
 
 import os
+import re
 import sys
 import json
 import argparse
@@ -226,7 +298,15 @@ DEFAULT_OUTPUT_DIR = 'experimental/output'
 
 
 # ==========================================================================
-# INPUT -- Dewesoft CSV column detection
+# INPUT LAYER -- format-specific loaders, one common output structure.
+# See experimental/V2_ARCHITECTURE.md for the full Input Layer / Common
+# Analysis Engine / Output Layer diagram. Every loader below returns:
+#   {'sample_rate': <Hz, echoed from --sr-hz>, 'unit': 'm/s²',
+#    'X': ndarray, 'Y': ndarray, 'Z': ndarray}
+# Nothing past this layer (compute_time_domain_stats, compute_fft_spectrum,
+# compute_energy_spectrum, analyze_axis, plotting, build_summary_dict) reads
+# or branches on which loader produced its input -- they only ever see
+# plain ndarrays, unchanged from V1/V2.1.
 # ==========================================================================
 
 def find_acceleration_columns(df):
@@ -255,9 +335,14 @@ def find_acceleration_columns(df):
     return candidates[:3]
 
 
-def load_axes(csv_path):
-    """Read the Dewesoft CSV and return {'X': array, 'Y': array, 'Z': array}
-    of acceleration in m/s^2, in file row order (no resampling/decimation).
+def read_dewesoft_csv(csv_path, sr_hz):
+    """Input Loader: Dewesoft CSV -> the common {sample_rate, unit, X, Y, Z}
+    structure (see INPUT LAYER banner above). Acceleration is already in
+    m/s^2 in a Dewesoft export -- no unit conversion happens here, in file
+    row order (no resampling/decimation). This is V1's read path, renamed
+    from load_axes() and reshaped to the common structure -- the pandas
+    read + find_acceleration_columns() logic is byte-for-byte the same as
+    before this refactor.
 
     [V2.1] Raises ValueError (instead of letting a raw pandas exception
     escape) if the file is completely empty/unreadable as CSV -- one of the
@@ -274,10 +359,169 @@ def load_axes(csv_path):
         raise ValueError(f"CSV file '{csv_path}' is empty or unreadable: {e}")
 
     accel_cols = find_acceleration_columns(df)
-    return {
+    axes = {
         label: df[col].to_numpy(dtype=float)
         for label, col in zip(AXIS_LABELS, accel_cols)
     }
+    return {'sample_rate': sr_hz, 'unit': 'm/s²', **axes}
+
+
+# --------------------------------------------------------------------------
+# WTVB05 FIFO CSV loader -- raw ADC counts -> m/s^2
+# --------------------------------------------------------------------------
+# Same counts-per-g / gravity constants analyze_fifo_capture.py's
+# counts_to_g()/g_to_ms2() use (WTVB05 manual Sec 6.1.4.8/6.1.4.16:
+# g = raw_counts / 32768 * 16 = raw_counts / 2048; m/s^2 = g * 9.8).
+# Reproduced here as a single, trivial, one-line unit conversion (input
+# normalization, not a DSP calculation) rather than importing
+# analyze_fifo_capture.py -- that tool has its own separate CLI/scope
+# (multi-capture bearing/envelope/spectrogram analysis) and is not meant to
+# be depended on as a library; this is the ONE arithmetic line requirement
+# 3 asks the Input Layer to apply, not a second FFT/RMS/statistics engine.
+FIFO_COUNTS_PER_G = 2048
+FIFO_STANDARD_GRAVITY_MS2 = 9.8
+
+
+def _fifo_counts_to_ms2(raw_counts):
+    """Raw WTVB05 FIFO ADC counts -> m/s^2: (counts / 2048) * 9.8."""
+    return np.asarray(raw_counts, dtype=float) / FIFO_COUNTS_PER_G * FIFO_STANDARD_GRAVITY_MS2
+
+
+def _parse_fifo_phase7a(lines):
+    """Phase 7A 4-column FIFO format: 'Index,X,Y,Z' header, raw ADC counts.
+    Only the FIRST capture block is used if more than one 'Index,X,Y,Z'
+    header appears in the file (this engine analyzes one contiguous X/Y/Z
+    record per run -- see read_fifo_csv()).
+    """
+    header_re = re.compile(r'^Index,X,Y,Z\s*$')
+    x, y, z = [], [], []
+    in_block = False
+    for raw_line in lines:
+        line = raw_line.rstrip('\r\n')
+        if header_re.match(line):
+            if in_block:
+                break
+            in_block = True
+            continue
+        if in_block:
+            parts = line.split(',')
+            if len(parts) != 4:
+                continue
+            try:
+                x.append(float(parts[1]))
+                y.append(float(parts[2]))
+                z.append(float(parts[3]))
+            except ValueError:
+                continue
+    return np.array(x), np.array(y), np.array(z)
+
+
+def _parse_fifo_legacy_first_block(lines):
+    """Legacy 9-column FIFO format:
+    'FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g' header, one or more
+    'FIFO_CAPTURE_END'-delimited blocks. Only the FIRST block is used (same
+    reason as _parse_fifo_phase7a()); the precomputed X_g/Y_g/Z_g columns
+    are intentionally ignored -- raw X_raw/Y_raw/Z_raw counts are read and
+    converted via _fifo_counts_to_ms2() so both FIFO formats go through the
+    identical conversion path (requirement 3).
+    """
+    header_re = re.compile(r'^FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g\s*$')
+    x, y, z = [], [], []
+    in_block = False
+    for raw_line in lines:
+        line = raw_line.rstrip('\r\n')
+        if header_re.match(line):
+            if in_block:
+                break
+            in_block = True
+            continue
+        if line.strip() == 'FIFO_CAPTURE_END':
+            if in_block:
+                break
+            continue
+        if in_block:
+            parts = line.split(',')
+            if len(parts) != 9:
+                continue
+            try:
+                x.append(float(parts[3]))
+                y.append(float(parts[4]))
+                z.append(float(parts[5]))
+            except ValueError:
+                continue
+    return np.array(x), np.array(y), np.array(z)
+
+
+def read_fifo_csv(csv_path, sr_hz):
+    """Input Loader: WTVB05 FIFO CSV -> the common {sample_rate, unit, X, Y,
+    Z} structure (see INPUT LAYER banner above). Supports the same two
+    capture formats analyze_fifo_capture.py documents (legacy 9-column and
+    Phase 7A 4-column, auto-detected from the first non-blank header line --
+    see detect_input_format()). Converts raw ADC counts to m/s^2 via
+    _fifo_counts_to_ms2() (requirement 3's counts/2048*9.8 formula) before
+    returning -- everything downstream of this function sees m/s^2, exactly
+    like read_dewesoft_csv(), and cannot tell the two loaders apart.
+    """
+    with open(csv_path, encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+
+    first_line = ''
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped:
+            first_line = stripped
+            break
+
+    if re.match(r'^Index,X,Y,Z\s*$', first_line):
+        x_raw, y_raw, z_raw = _parse_fifo_phase7a(lines)
+    elif re.match(r'^FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g\s*$', first_line):
+        x_raw, y_raw, z_raw = _parse_fifo_legacy_first_block(lines)
+    else:
+        raise ValueError(
+            f"Unrecognized FIFO CSV header in '{csv_path}': {first_line!r} "
+            f"(expected 'Index,X,Y,Z' or 'FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g')"
+        )
+
+    if len(x_raw) == 0:
+        raise ValueError(f"No FIFO samples found in '{csv_path}'.")
+
+    return {
+        'sample_rate': sr_hz,
+        'unit': 'm/s²',
+        'X': _fifo_counts_to_ms2(x_raw),
+        'Y': _fifo_counts_to_ms2(y_raw),
+        'Z': _fifo_counts_to_ms2(z_raw),
+    }
+
+
+def detect_input_format(csv_path):
+    """Sniff csv_path's first non-blank line and return 'dewesoft' or
+    'fifo'. Mirrors analyze_fifo_capture.py's own first-line auto-detection
+    IDIOM (not its code) -- this tool's Input Layer needs to make the same
+    kind of format decision, but between a different pair of formats
+    (Dewesoft acceleration export vs. WTVB05 FIFO capture).
+    """
+    with open(csv_path, encoding='utf-8', errors='replace') as f:
+        first_line = ''
+        for raw_line in f:
+            stripped = raw_line.strip()
+            if stripped:
+                first_line = stripped
+                break
+
+    lowered = first_line.lower().replace('^', '').replace('²', '2')
+    if 'm/s2' in lowered:
+        return 'dewesoft'
+    if re.match(r'^Index,X,Y,Z\s*$', first_line) or \
+       re.match(r'^FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g\s*$', first_line):
+        return 'fifo'
+
+    raise ValueError(
+        f"Could not detect input format for '{csv_path}' from its header line "
+        f"({first_line!r}); expected a Dewesoft acceleration CSV (a column containing "
+        f"'m/s2') or a WTVB05 FIFO CSV ('Index,X,Y,Z' or "
+        f"'FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g')."
+    )
 
 
 # ==========================================================================
@@ -784,7 +1028,11 @@ def build_summary_dict(axes_data, sample_rate_hz, fft_size, fft_resolution_hz, s
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('csv_path', help='Dewesoft-exported CSV with Time + 3 acceleration (m/s^2) columns')
+    ap.add_argument('csv_path',
+                     help='Input CSV -- auto-detected as either a Dewesoft acceleration export '
+                          '(Time + 3 "m/s2" columns) or a WTVB05 FIFO capture '
+                          '("Index,X,Y,Z" or legacy "FIFOIndex,Tag,SR,..." raw-count format). '
+                          'See detect_input_format() / V2_ARCHITECTURE.md.')
     ap.add_argument('--sr-hz', type=float, required=True, help='Sample rate in Hz')
     ap.add_argument('--fft-size', type=int, default=DEFAULT_FFT_SIZE,
                      help=f'FFT block size (default {DEFAULT_FFT_SIZE}); shorter input is zero-padded, '
@@ -822,12 +1070,22 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # empty/unreadable CSV -> clear message instead of a raw pandas traceback
+    # --- Input Layer: detect format, dispatch to the matching loader -----
+    # Both loaders return the identical {sample_rate, unit, X, Y, Z}
+    # structure (see INPUT LAYER banner above / V2_ARCHITECTURE.md) -- the
+    # Common Analysis Engine below this point is unchanged from V1/V2.1 and
+    # cannot tell which loader ran.
     try:
-        raw_axes = load_axes(args.csv_path)
+        input_format = detect_input_format(args.csv_path)
+        if input_format == 'dewesoft':
+            loaded = read_dewesoft_csv(args.csv_path, args.sr_hz)
+        else:
+            loaded = read_fifo_csv(args.csv_path, args.sr_hz)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    raw_axes = {label: loaded[label] for label in AXIS_LABELS}
 
     # fewer than two samples (includes a header-only/empty-data CSV, where
     # every axis array has length 0) -- DC/RMS/FFT are not meaningful below
@@ -842,7 +1100,8 @@ def main():
 
     fft_resolution_hz = compute_fft_resolution_hz(args.sr_hz, args.fft_size)
 
-    print(f"Loaded {len(raw_axes['X'])} samples per axis from {args.csv_path}")
+    print(f"Loaded {len(raw_axes['X'])} samples per axis from {args.csv_path} "
+          f"(input format: {input_format})")
     print(f"Sample rate: {args.sr_hz:g} Hz   FFT size: {args.fft_size}   "
           f"FFT Resolution (dF=SR/FFT size): {fft_resolution_hz:.4f} Hz   "
           f"Spectrum mode: {args.spectrum}")

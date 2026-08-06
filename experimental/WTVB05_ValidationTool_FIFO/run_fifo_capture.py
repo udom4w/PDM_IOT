@@ -2,7 +2,7 @@
 """
 run_fifo_capture.py
 
-Opens COM5 @ 115200, sends "SETPOINT 30" (metadata log only -- no Modbus,
+Opens COM5 @ 115200, sends "SETPOINT 25" (metadata log only -- no Modbus,
 does not drive the motor), then "SR <SR_INDEX>" (see SR_TABLE/SR_INDEX
 below -- the Validation Tool firmware's own SAMPLE_RATE_HZ table, mirrored
 here), waits 1s, then sends "FIFO test1" and "FIFO test2" in turn,
@@ -30,6 +30,7 @@ only.
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 import serial
 
@@ -41,6 +42,18 @@ CSV_HEADER_MARKER = "FIFOIndex,Tag,SR,X_raw,Y_raw,Z_raw,X_g,Y_g,Z_g"
 FAILURE_MARKERS = ("CRC MISMATCH", "FIFO capture FAILED")
 CAPTURE_TIMEOUT_S = 25
 MAX_ATTEMPTS = 5
+
+# READY synchronization (replaces the old fixed post-open sleep). The
+# firmware (WTVB05_ValidationTool_v3_11_TRUEPOLL.ino) prints this exact line
+# as the last thing it does in setup(), immediately before loop()/
+# handleSerialCommands() goes live -- see the boot-timeline investigation.
+# It's the earliest point at which sending a command is guaranteed safe.
+READY_BANNER = "[INIT] Starting continuous monitoring."
+# Configurable: how long to wait for READY_BANNER after opening the port.
+# The firmware's sensor-probe loop at boot has no timeout of its own and
+# retries every 3s, so a slow/absent sensor can legitimately delay READY by
+# a lot -- this is deliberately generous, not a bug-workaround number.
+READY_TIMEOUT_S = 60
 
 # Single source of truth for sample rate (Phase 1.1). Mirrors the firmware's
 # own SR index -> (label, Hz) table (WTVB05_ValidationTool_v3_11_TRUEPOLL.ino
@@ -64,17 +77,58 @@ SR_TABLE = {
 # rate. Everything else (the "SR <n>" command and the --sr-hz passed to
 # analyze_fifo_capture.py) is derived from this via SR_TABLE -- do not
 # hardcode a rate anywhere else in this file.
-SR_INDEX = 5
+SR_INDEX = 6
 
 SR_LABEL, SR_HZ = SR_TABLE[SR_INDEX]
+
+
+def ts():
+    """Timestamp prefix for status lines, e.g. '12:34:56.789'."""
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
+def log_print(log, msg):
+    """Print a timestamped status line to both console and the log file."""
+    line = f"[{ts()}] {msg}"
+    print(line, flush=True)
+    log.write(line + "\n")
+    log.flush()
 
 
 def send_command(ser, log, cmd):
     log.write(f">>> {cmd}\n")
     log.flush()
-    print(f">>> {cmd}")
+    print(f">>> {cmd}", flush=True)
     ser.write((cmd + "\n").encode("utf-8"))
     ser.flush()
+
+
+def wait_for_ready(ser, log, timeout_s):
+    """Read lines until READY_BANNER is seen or timeout_s elapses.
+    Returns True once the firmware has reached its command loop, False on
+    timeout. Every line seen while waiting is logged/printed, so the boot
+    sequence (including a stuck sensor-probe retry) stays visible."""
+    log_print(log, "Waiting for READY...")
+    deadline = time.monotonic() + timeout_s
+
+    while time.monotonic() < deadline:
+        line = ser.readline()
+        if not line:
+            continue
+        try:
+            text = line.decode("utf-8", errors="replace").rstrip("\r\n")
+        except Exception:
+            text = repr(line)
+
+        log.write(text + "\n")
+        log.flush()
+        print(f"<<< {text}", flush=True)
+
+        if READY_BANNER in text:
+            log_print(log, "READY received")
+            return True
+
+    return False
 
 
 def listen_until_end(ser, log, timeout_s):
@@ -94,7 +148,7 @@ def listen_until_end(ser, log, timeout_s):
 
         log.write(text + "\n")
         log.flush()
-        print(text)
+        print(f"<<< {text}", flush=True)
 
         if CSV_HEADER_MARKER in text:
             # A fresh capture's data is starting -- any failure marker seen
@@ -145,16 +199,30 @@ def main():
         sys.exit(1)
 
     with ser, open(LOG_FILE, "a", encoding="utf-8") as log:
-        # Give the port a moment to settle after opening (some boards reset on connect).
-        time.sleep(2)
+        log_print(log, f"COM opened ({PORT} @ {BAUD})")
+
+        if not wait_for_ready(ser, log, READY_TIMEOUT_S):
+            log_print(
+                log,
+                f"[ERROR] READY banner ({READY_BANNER!r}) not received within "
+                f"{READY_TIMEOUT_S}s. Firmware may still be initializing (e.g. "
+                f"stuck in its sensor-probe retry loop) or not running at all. "
+                f"No commands were sent.",
+            )
+            sys.exit(1)
+
         ser.reset_input_buffer()
 
-        send_command(ser, log, "SETPOINT 30")
+        log_print(log, "Sending SETPOINT")
+        send_command(ser, log, "SETPOINT 25")
         time.sleep(0.5)
+        log_print(log, "Sending SR")
         send_command(ser, log, f"SR {SR_INDEX}")
         time.sleep(1)
 
+        log_print(log, "Sending FIFO test1")
         success_test1 = capture_tag(ser, log, "test1")
+        log_print(log, "Sending FIFO test2")
         success_test2 = capture_tag(ser, log, "test2")
 
     if not (success_test1 and success_test2):

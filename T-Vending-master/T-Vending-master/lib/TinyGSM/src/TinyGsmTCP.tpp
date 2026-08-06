@@ -320,6 +320,14 @@ class TinyGsmTCP {
    */
  protected:
   void maintainImpl() {
+#ifdef DEBUG_MODEM
+    // [Phase 6] task 6: attribute bytes consumed WHILE maintain() executes
+    // (via its own waitResponse()/modemGetAvailable() calls below) to a
+    // separate running total. This is a delta against the same counter
+    // waitResponse() increments directly -- the two counters intentionally
+    // overlap; see the .ino's declaration comment for why.
+    uint32_t dbgBefore = g_dbgUartBytesWaitResponse;
+#endif
 #if defined TINY_GSM_BUFFER_READ_AND_CHECK_SIZE
     // Keep listening for modem URC's and proactively iterate through
     // sockets asking if any data is avaiable
@@ -340,6 +348,9 @@ class TinyGsmTCP {
 
 #else
 #error Modem client has been incorrectly created
+#endif
+#ifdef DEBUG_MODEM
+    g_dbgUartBytesMaintain += (g_dbgUartBytesWaitResponse - dbgBefore);
 #endif
   }
 

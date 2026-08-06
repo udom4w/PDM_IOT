@@ -1,0 +1,55 @@
+cd C:\Users\HP\Downloads\PDM_IOT
+cd C:\Users\HP\Downloads\PDM_IOT\claude
+claude
+
+
+1250-C159
+
+cd C:\Users\HP\Downloads\PDM_IOT\experimental\WTVB05_ValidationTool_FIFO
+python .\run_fifo_capture.py
+python extract_fifo.py teraterm.log
+python analyze_fifo_capture.py captureId1.csv --sr-hz 1000 --manufacturer SKF --bearing 6205 --shaft-rpm 1800
+
+
+cd C:\Users\HP\Downloads\PDM_IOT
+python .\experimental\analyze_fifo_dewesoft.py `
+    .\experimental\dewesoft_data\3Axis_acc_0009.csv `
+    --sr-hz 1000 `
+
+FFT Size
+python .\experimental\analyze_fifo_dewesoft.py `
+    .\experimental\dewesoft_data\3Axis_acc_0009.csv `
+    --sr-hz 1000 `
+    --fft-size 4096
+Peak
+python .\experimental\analyze_fifo_dewesoft.py `
+    .\experimental\dewesoft_data\3Axis_acc_0009.csv `
+    --sr-hz 1000 `
+    --spectrum peak
+
+Energy
+python .\experimental\analyze_fifo_dewesoft.py `
+    .\experimental\dewesoft_data\3Axis_acc_0009.csv `
+    --sr-hz 1000 `
+    --spectrum energy
+
+
+
+
+MOTOR_SRC_CURRENT
+Current-driven Condition Monitoring
+
+Temperature Telemetry เข้าไปในเฟิร์มแวร์ด้วย เช่น อ่านอุณหภูมิภายในชิป ESP32-S3 เป็นระยะ แล้วส่งขึ้น MQTT
+CT Ratio จริง (100A/5A)
+จำนวนรอบที่พันสาย (1 รอบ, 2 รอบ ฯลฯ)
+กระแสที่ CTR4A01 จะเห็นหลังคูณอัตราส่วน
+
+
+PROMLOGIX เป็นแพลตฟอร์ม Condition Monitoring สำหรับโรงงาน ที่ช่วยตรวจพบความผิดปกติของเครื่องจักรก่อนเกิดการหยุดผลิต แจ้งเตือนทันเวลา และช่วยให้ทีมซ่อมวางแผนบำรุงรักษาได้จากข้อมูลจริง โดยติดตั้งง่ายและออกแบบมาสำหรับโรงงาน SME
+
+Commit 7 — MQTT Remote Trigger
+Commit 8 — Scheduled Trigger
+Commit 9 — HMI Trigger
+Commit 10 — AI / Analytics Trigger
+& "C:\Users\HP\AppData\Local\Programs\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe" upload -p COM5 --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,FlashMode=qio,FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,UploadMode=default,UploadSpeed=921600" "C:\Users\HP\Downloads\PDM_IOT\claude\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5"
+
