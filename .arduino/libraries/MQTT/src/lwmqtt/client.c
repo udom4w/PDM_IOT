@@ -11,22 +11,11 @@
  * no new dependency on any platform-specific time function (e.g. millis())
  * is introduced into this otherwise fully portable C file.
  * ========================================================================= */
-#define LWMQTT_DEBUG_TIMING
-#ifdef LWMQTT_DEBUG_TIMING
-/* [Phase 13] Output is routed through a C-linkage hook implemented in the
- * sketch (see lwmqtt_dbg_log() there) rather than printf(). Reason: printf()
- * here writes to the ESP-IDF stdout console, which on this board is NOT
- * guaranteed to be the same stream as Arduino's Serial -- the FQBN uses
- * CDCOnBoot=cdc / USBMode=hwcdc, so Serial is USB CDC while the IDF console
- * may remain UART0. Splitting the timing lines across two physical interfaces
- * would make the capture unusable. The hook guarantees these lines interleave
- * correctly with [MQTT-TIMING] / [MODEMSEND] / [TLS-WRITE].
- *
- * Enabling this macro requires the sketch to define lwmqtt_dbg_log(); if it
- * does not, the build fails at link time (loudly), never silently. */
-extern void lwmqtt_dbg_log(const char *fmt, ...);
-#define LWMQTT_DBG(...) lwmqtt_dbg_log(__VA_ARGS__)
-#endif
+/* [Phase 14] The LWMQTT_DEBUG_TIMING toggle, the lwmqtt_dbg_log() declaration
+ * and the LWMQTT_DBG() macro all moved to lwmqtt/lwmqtt.h so that
+ * MQTTClient.cpp (a separate translation unit, which Phase 14 also
+ * instruments) sees the same single switch. Reached here via
+ * packet.h -> helpers.h -> lwmqtt.h. Nothing else changed. */
 
 void lwmqtt_init(lwmqtt_client_t *client, uint8_t *write_buf, size_t write_buf_size, uint8_t *read_buf,
                  size_t read_buf_size) {
@@ -277,6 +266,22 @@ static lwmqtt_err_t lwmqtt_send_packet_in_buffer(lwmqtt_client_t *client, size_t
 static lwmqtt_err_t lwmqtt_cycle_once(lwmqtt_client_t *client, size_t *read, lwmqtt_packet_type_t *packet_type) {
   // read next packet from the network
   lwmqtt_err_t err = lwmqtt_read_packet_in_buffer(client, read, packet_type);
+#ifdef LWMQTT_DEBUG_TIMING
+  /* [Phase 14.1] Observational: report the outcome of a packet read attempt,
+   * but ONLY when something actually happened -- an error, or a real packet.
+   * An idle poll (err == LWMQTT_SUCCESS && packet_type == LWMQTT_NO_PACKET)
+   * is silent, because mqttClient.loop() calls this every ~100ms and the
+   * resulting flood both swamps the capture and risks perturbing the ~900ms
+   * PUBACK window under measurement.
+   * lwmqtt_read_packet_in_buffer() above is still called exactly once; only
+   * its already-computed results are read here. The condition below is
+   * evaluated for logging only -- it does not gate, reorder or alter the
+   * err/packet_type checks that follow, which are unchanged. */
+  if (err != LWMQTT_SUCCESS || *packet_type != LWMQTT_NO_PACKET) {
+    LWMQTT_DBG("[LWMQTT] cycle_once: err=%d packet_type=%d read_total=%u remaining=%ldms\n", (int)err,
+               (int)*packet_type, (unsigned)*read, (long)client->timer_get(client->command_timer));
+  }
+#endif
   if (err != LWMQTT_SUCCESS) {
     return err;
   } else if (*packet_type == LWMQTT_NO_PACKET) {
@@ -402,25 +407,38 @@ static lwmqtt_err_t lwmqtt_cycle_until(lwmqtt_client_t *client, lwmqtt_packet_ty
   // prepare counter
   size_t read = 0;
 
+  /* [Phase 14] Observational only -- see cycle_once. No loop condition, return
+   * value or timer is modified by any LWMQTT_DBG() below. */
+  LWMQTT_DBG("[LWMQTT] cycle_until ENTER: needle=%d available=%u budget_remaining=%ldms\n", (int)needle,
+             (unsigned)available, (long)client->timer_get(client->command_timer));
+
   // loop until timeout has been reached
   do {
     // do one cycle
     lwmqtt_err_t err = lwmqtt_cycle_once(client, &read, packet_type);
     if (err != LWMQTT_SUCCESS) {
+      LWMQTT_DBG("[LWMQTT] cycle_until EXIT: err=%d packet_type=%d read=%u remaining=%ldms (cycle_once failed)\n",
+                 (int)err, (int)*packet_type, (unsigned)read, (long)client->timer_get(client->command_timer));
       return err;
     }
 
     // return when one packet has been successfully read when no availability has been given
     if (needle == LWMQTT_NO_PACKET && available == 0) {
+      LWMQTT_DBG("[LWMQTT] cycle_until EXIT: ok packet_type=%d read=%u remaining=%ldms (no needle)\n",
+                 (int)*packet_type, (unsigned)read, (long)client->timer_get(client->command_timer));
       return LWMQTT_SUCCESS;
     }
 
     // otherwise check if needle has been found
     if (*packet_type == needle) {
+      LWMQTT_DBG("[LWMQTT] cycle_until EXIT: ok needle=%d FOUND read=%u remaining=%ldms\n", (int)needle,
+                 (unsigned)read, (long)client->timer_get(client->command_timer));
       return LWMQTT_SUCCESS;
     }
   } while (client->timer_get(client->command_timer) > 0 && (available == 0 || read < available));
 
+  LWMQTT_DBG("[LWMQTT] cycle_until EXIT: loop ended packet_type=%d read=%u remaining=%ldms (needle=%d NOT found)\n",
+             (int)*packet_type, (unsigned)read, (long)client->timer_get(client->command_timer), (int)needle);
   return LWMQTT_SUCCESS;
 }
 
@@ -727,9 +745,15 @@ lwmqtt_err_t lwmqtt_yield(lwmqtt_client_t *client, size_t available, uint32_t ti
   // set command timer
   client->timer_set(client->command_timer, timeout);
 
+  /* [Phase 14] Observational only. */
+  LWMQTT_DBG("[LWMQTT] yield ENTER: available=%u timeout_budget=%lums\n", (unsigned)available,
+             (unsigned long)timeout);
+
   // cycle until timeout has been reached
   lwmqtt_packet_type_t packet_type = LWMQTT_NO_PACKET;
   lwmqtt_err_t err = lwmqtt_cycle_until(client, &packet_type, available, LWMQTT_NO_PACKET);
+  LWMQTT_DBG("[LWMQTT] yield EXIT: err=%d packet_type=%d remaining=%ldms\n", (int)err, (int)packet_type,
+             (long)client->timer_get(client->command_timer));
   if (err != LWMQTT_SUCCESS) {
     return err;
   }
