@@ -92,13 +92,35 @@ static lwmqtt_err_t lwmqtt_read_from_network(lwmqtt_client_t *client, size_t off
 
   // prepare counter
   size_t read = 0;
+  bool grace_used = false;
 
   // read while data is missing
   while (read < len) {
     // check remaining time
     int32_t remaining_time = client->timer_get(client->command_timer);
     if (remaining_time <= 0) {
-      return LWMQTT_NETWORK_TIMEOUT;
+      // The command timer bounds how long we may WAIT ON THE NETWORK, but bytes
+      // may already be buffered in a lower layer and need no network I/O at all
+      // to retrieve. A TLS engine, for example, decrypts an entire record at
+      // once: after the first plaintext byte is handed up, the remainder of that
+      // record is already sitting in RAM. Returning here would discard a
+      // complete, already-received MQTT packet purely because a clock expired --
+      // and because lwmqtt_read_packet_in_buffer() treats a timeout on any byte
+      // after the first as fatal, the caller then tears down a healthy
+      // connection.
+      //
+      // Allow exactly ONE further attempt with a minimal timeout so such
+      // buffered bytes can be consumed. grace_used bounds this to a single
+      // retry, so the deadline can be exceeded by at most one network_read()
+      // call. If nothing is buffered, network_read() returns
+      // LWMQTT_NETWORK_TIMEOUT and the original behaviour is preserved exactly.
+      // A timeout of 0 would not work: network_read()'s
+      // "millis() - start < timeout" loop condition is false on entry.
+      if (grace_used) {
+        return LWMQTT_NETWORK_TIMEOUT;
+      }
+      grace_used = true;
+      remaining_time = 1;
     }
 
     // read
