@@ -217,6 +217,71 @@ print-alignment cosmetic difference between Peak and Energy mode's
 of them were on the confirmed-bug list this release targets.
 
 --------------------------------------------------------------------------
+V2.2 -- R1 ZERO-PADDING ENERGY NORMALIZATION FIX (Energy Spectrum only)
+--------------------------------------------------------------------------
+FIXED -- Energy Spectrum under-reported energy by sqrt(n_real/fft_size) for
+every zero-padded block. This affected ONLY compute_energy_spectrum() (and
+therefore Overall RMS / Band RMS). Peak Spectrum, time-domain statistics,
+the FFT itself, windowing, coherent-gain correction, NPG correction,
+single-sided folding, and the V2.1 block-weighting logic are ALL UNCHANGED.
+
+  Symptom: the production FIFO configuration (captureId2.csv, N=1024
+  samples, SR=1000 Hz, --fft-size 2048 -- i.e. exactly the configuration
+  V2_ARCHITECTURE_current.md documents as "the current test") reported
+  Overall RMS ~30% BELOW the time-domain AC RMS:
+        X 0.330882 vs 0.475557    Y 0.291468 vs 0.407776
+        Z 0.179902 vs 0.266146
+  A 1024-sample synthetic tone with an exactly known analytic RMS confirmed
+  the error is exactly -1/sqrt(2) = -29.3% at n_real = fft_size/2.
+
+  Root cause: split_into_blocks() zero-pads a short block up to fft_size,
+  but the normalization divided by NPG*fft_size**2 -- i.e. by the energy of
+  the WHOLE window -- while only the first n_real window samples actually
+  multiply real signal. The padded tail contributes window energy to the
+  denominator and zero signal energy to the numerator, so the recovered
+  mean-square was scaled by sum(w[:n_real]**2)/sum(w**2). For n_real =
+  fft_size/2 a symmetric Hann window carries exactly half its energy in its
+  first half, giving exactly 0.5 in power = -29.3% in RMS. The V2.1
+  real-sample-count weighting does not help: it reweights blocks AGAINST
+  EACH OTHER, and a single zero-padded block has nothing to be reweighted
+  against, so no correction was applied at all.
+
+  Fix: normalize by the window energy ACTUALLY APPLIED TO REAL SAMPLES,
+        denominator = fft_size * sum(w[:n_real]**2)
+  For a full block sum(w[:n_real]**2) == sum(w**2) == NPG*fft_size, so this
+  reduces to the original NPG*fft_size**2 -- the code keeps that literal
+  expression on the full-block path so exact-multiple inputs stay
+  BIT-FOR-BIT identical for any fft_size, not merely numerically close.
+
+  Why not "NPG * fft_size * n_real" (the other obvious candidate): it is an
+  APPROXIMATION of sum(w[:n_real]**2) that is exact only at n_real=fft_size
+  and n_real=fft_size/2. It happens to be exact for captureId2.csv
+  (1024/2048 = exactly half), but for the Dewesoft validation file's
+  1994-sample trailing block it is wrong by +1.345% in RMS, because a Hann
+  window's last 54 samples carry almost no energy while that form assumes
+  energy accrues linearly with n_real. sum(w[:n_real]**2) is the exact
+  quantity and is correct at every padding ratio.
+
+  New edge case handled: np.hanning(M)[0] is EXACTLY 0.0, so a block with
+  n_real=1 has zero window energy. Such a block is now SKIPPED (it carries
+  no recoverable information) rather than producing a 0/0 NaN that would
+  poison the whole averaged spectrum. The pre-fix code never risked this
+  because it always divided by a nonzero constant.
+
+  GUARD: _warn_if_not_parseval_consistent() now checks, on every energy-mode
+  run, that the spectrum's bins still sum back to the time-domain AC RMS
+  within +-10%, and prints a specific warning to stderr if not. R1 was
+  silent for two releases precisely because nothing asserted this invariant.
+  See also experimental/test_energy_spectrum_regression.py.
+
+  KNOWN REMAINING LIMITATION (not fixed here, by design): heavy zero-padding
+  (fft_size >> N) is now unbiased but increasingly NOISY, because the real
+  samples then sit in the near-zero rise of the Hann window and
+  sum(w[:n_real]**2) becomes very small. fft_size <= N remains the correct
+  configuration for any energy/RMS work; the guard above warns when this
+  degrades past 10%.
+
+--------------------------------------------------------------------------
 V2 PROJECT PHASE -- MULTI-FORMAT INPUT ARCHITECTURE (post-V1-freeze)
 --------------------------------------------------------------------------
 NAMING NOTE: "V1" was frozen (as a git commit / feature baseline) with the
@@ -295,6 +360,13 @@ import matplotlib.pyplot as plt
 AXIS_LABELS = ['X', 'Y', 'Z']
 DEFAULT_FFT_SIZE = 2048
 DEFAULT_OUTPUT_DIR = 'experimental/output'
+
+# [V2.2 R1] Parseval self-check tolerance, in the RMS domain, used only by
+# _warn_if_not_parseval_consistent(). Set ~6x looser than the worst
+# Hann/NPG approximation error documented in validation_report.md Sec 7.2
+# (~1.6%) so it can only ever fire on a genuinely broken normalization --
+# the R1 zero-padding defect was -29.3% and would have been caught here.
+ENERGY_PARSEVAL_RMS_TOLERANCE = 0.10
 
 
 # ==========================================================================
@@ -529,12 +601,25 @@ def detect_input_format(csv_path):
 # ==========================================================================
 
 def compute_time_domain_stats(signal):
-    """Mean(DC)/AC-RMS/Peak/Peak-to-Peak/StdDev/CrestFactor for one axis.
+    """Mean(DC)/AC-RMS/Peak/Peak-to-Peak/StdDev/CrestFactor/Kurtosis/Skewness
+    for one axis.
 
     DC = signal.mean(); everything else is computed on the mean-removed
     (AC) signal, per standard vibration-analysis convention (matches
     Dewesoft's own Peak/RMS math widgets, which report AC quantities on an
     AC-coupled or DC-removed channel).
+
+    [v16.3ae time-domain milestone] Kurtosis and Skewness are computed on
+    the SAME AC signal as RMS/Peak/StdDev/CrestFactor, using population
+    (N-divisor, ddof=0) moments -- matching std_dev's existing np.std()
+    convention -- so all time-domain statistics in this function stay
+    internally consistent:
+      kurtosis  = mean(ac**4) / std(ac)**4 - 3   (excess/Fisher kurtosis;
+                                                    0 for a Gaussian)
+      skewness  = mean(ac**3) / std(ac)**3       (population skewness;
+                                                    0 for a symmetric signal)
+    Frozen definitions -- see experimental/V2_ARCHITECTURE.md discussion;
+    not to be changed without a corresponding regression re-run.
     """
     signal = np.asarray(signal, dtype=float)
     dc = signal.mean()
@@ -684,6 +769,44 @@ def compute_fft_spectrum(ac_signal, fft_size, sr_hz):
     return freqs, avg_spectrum, len(blocks)
 
 
+def _warn_if_not_parseval_consistent(ac_signal, ms_avg, fft_size):
+    """[V2.2 R1 GUARD] Warn on stderr if the Energy Spectrum's bins no longer
+    sum back to the time-domain AC mean-square.
+
+    This is the invariant compute_energy_spectrum() exists to provide, and it
+    is the exact invariant the R1 zero-padding defect violated -- silently,
+    for every capture shorter than fft_size, by a factor of
+    sqrt(n_real/fft_size) (~-29.3% for the production 1024-sample capture at
+    fft_size=2048). A guard here means that class of defect can only ever
+    return LOUDLY.
+
+    Compared in the RMS domain (not power) so the printed percentage is
+    directly comparable to the +-0.3-1.6% figures quoted in
+    validation_report.md Sec 7.2. The tolerance is deliberately ~6x looser
+    than the worst documented approximation error: this must detect a broken
+    normalization, never second-guess the documented Hann/NPG behaviour.
+    """
+    ac = np.asarray(ac_signal, dtype=float)
+    td_rms = float(np.sqrt(np.mean(ac ** 2)))
+    if td_rms <= 0.0:
+        return  # all-zero signal: 0 == 0, nothing to check
+
+    spec_rms = float(np.sqrt(np.sum(ms_avg)))
+    rel_err = abs(spec_rms - td_rms) / td_rms
+    if rel_err > ENERGY_PARSEVAL_RMS_TOLERANCE:
+        print(
+            f"WARNING: Energy Spectrum is not Parseval-consistent "
+            f"(time-domain AC RMS {td_rms:.6f} vs spectrum-summed RMS "
+            f"{spec_rms:.6f}, {100.0 * (spec_rms / td_rms - 1.0):+.2f}%, "
+            f"tolerance +-{100.0 * ENERGY_PARSEVAL_RMS_TOLERANCE:.0f}%). "
+            f"N={len(ac)} fft_size={fft_size}. Overall/Band RMS from this "
+            f"spectrum are NOT trustworthy. Heavy zero-padding "
+            f"(fft_size >> N) is the most likely cause -- prefer "
+            f"fft_size <= N.",
+            file=sys.stderr,
+        )
+
+
 def compute_energy_spectrum(ac_signal, fft_size, sr_hz):
     """Hann-windowed, Noise-Power-Gain-corrected, single-sided RMS-amplitude
     spectrum that preserves signal energy (Parseval) -- see module
@@ -715,34 +838,74 @@ def compute_energy_spectrum(ac_signal, fft_size, sr_hz):
     """
     window = hann_window(fft_size)
     npg = noise_power_gain(window)
+    window_sq = window ** 2
 
     blocks, weights = split_into_blocks(ac_signal, fft_size)
     power_spectra = []
-    for block in blocks:
+    block_weights = []
+    for block, n_real in zip(blocks, weights):
+        # [V2.2 R1] Normalize by the window energy ACTUALLY APPLIED TO REAL
+        # SAMPLES, not by the full-length window energy. For a full block
+        # these are the same quantity and the expression below is the
+        # ORIGINAL one, bit-for-bit; for a zero-padded block they differ,
+        # and using the full-length one is what diluted the measured energy
+        # by n_real/fft_size (see R1 note in the module docstring).
+        if n_real >= fft_size:
+            denom = npg * fft_size ** 2                       # UNCHANGED path
+        else:
+            denom = fft_size * float(np.sum(window_sq[:n_real]))
+
+        # [V2.2 R1] np.hanning(M)[0] is EXACTLY 0.0, so a 1-real-sample
+        # trailing block has zero window energy -- the window annihilates it
+        # and it carries no recoverable information. Skip it rather than
+        # dividing by zero (which the pre-fix code never risked, because it
+        # always divided by the full-window constant).
+        if denom <= 0.0:
+            continue
+
         windowed = block * window
         spectrum = np.fft.rfft(windowed)
 
-        # Windowed one-sided Parseval: mean(x**2) ~= (1/(NPG*M^2)) *
-        # [ |X0|^2 + 2*sum(|Xk|^2, k=1..M/2-1) + |X_{M/2}|^2 ] (module
-        # docstring derivation -- note the M^2, not M: mean-square is a
-        # POWER quantity, so it scales with the square of the amplitude
-        # normalization compute_fft_spectrum() uses for its M-scaled AMPLITUDE
-        # spectrum). ms[k] is bin k's own contribution to that sum -- same
+        # Windowed one-sided Parseval: mean(x**2) ~= (1/(M*Sw)) *
+        # [ |X0|^2 + 2*sum(|Xk|^2, k=1..M/2-1) + |X_{M/2}|^2 ], where
+        # Sw = sum(w[n]**2) over the samples that actually carry signal
+        # (== NPG*M for a full block, hence the NPG*M^2 form above). Note
+        # the M*Sw, not M: mean-square is a POWER quantity, so it scales
+        # with the square of the amplitude normalization
+        # compute_fft_spectrum() uses for its M-scaled AMPLITUDE spectrum.
+        # ms[k] is bin k's own contribution to that sum -- same
         # fold-then-undo-DC/Nyquist pattern as compute_fft_spectrum(), just
-        # in the power domain (|.|^2) and normalized by NPG instead of CG.
-        ms = (np.abs(spectrum) ** 2) / (npg * fft_size ** 2)
+        # in the power domain (|.|^2) and normalized by window energy
+        # instead of CG.
+        ms = (np.abs(spectrum) ** 2) / denom
         ms = ms * 2.0
         ms[0] /= 2.0
         if fft_size % 2 == 0:
             ms[-1] /= 2.0
 
         power_spectra.append(ms)
+        block_weights.append(n_real)
 
-    ms_avg = np.average(power_spectra, axis=0, weights=weights)
+    if not power_spectra:
+        raise ValueError(
+            f"No usable FFT block in a {len(ac_signal)}-sample signal at "
+            f"fft_size={fft_size}: every block was annihilated by the window."
+        )
+
+    ms_avg = np.average(power_spectra, axis=0, weights=block_weights)
     rms_spectrum = np.sqrt(ms_avg)
     freqs = np.fft.rfftfreq(fft_size, d=1.0 / sr_hz) if sr_hz else np.fft.rfftfreq(fft_size, d=1.0)
 
-    return freqs, rms_spectrum, ms_avg, len(blocks)
+    # [V2.2 R1 GUARD] Parseval self-check. The whole point of this spectrum
+    # is that its bins sum (in power) back to the time-domain AC mean-square;
+    # the R1 defect broke exactly that invariant and did so SILENTLY for two
+    # releases. A gross mismatch now says so on stderr instead of returning a
+    # plausible-looking but wrong number. The threshold is deliberately loose
+    # (10% in RMS) so it can never fire on the documented ~0.3-1.6% Hann/NPG
+    # approximation -- it is a defect detector, not an accuracy assertion.
+    _warn_if_not_parseval_consistent(ac_signal, ms_avg, fft_size)
+
+    return freqs, rms_spectrum, ms_avg, len(power_spectra)
 
 
 def compute_overall_rms(ms_avg):
