@@ -545,6 +545,8 @@ def compute_time_domain_stats(signal):
     peak_to_peak = np.max(ac) - np.min(ac)
     std_dev = np.std(ac)
     crest_factor = peak / ac_rms if ac_rms > 0 else float('nan')
+    kurtosis = np.mean(ac ** 4) / std_dev ** 4 - 3.0 if std_dev > 0 else float('nan')
+    skewness = np.mean(ac ** 3) / std_dev ** 3 if std_dev > 0 else float('nan')
 
     return {
         'dc': dc,
@@ -553,6 +555,8 @@ def compute_time_domain_stats(signal):
         'peak_to_peak': peak_to_peak,
         'std_dev': std_dev,
         'crest_factor': crest_factor,
+        'kurtosis': kurtosis,
+        'skewness': skewness,
         'ac': ac,
     }
 
@@ -977,6 +981,8 @@ def print_axis_report(label, stats, spectrum_mode='peak'):
     print(f"Peak-to-Peak       : {stats['peak_to_peak']:.6f} m/s^2")
     print(f"Std Dev            : {stats['std_dev']:.6f} m/s^2")
     print(f"Crest Factor       : {stats['crest_factor']:.4f}")
+    print(f"Kurtosis (excess)  : {stats['kurtosis']:.4f}")
+    print(f"Skewness           : {stats['skewness']:.4f}")
     print(f"Dominant Frequency : {stats['dominant_freq_hz']:.4f} Hz")
     if spectrum_mode == 'energy':
         print(f"Dominant Amplitude (RMS) : {stats['dominant_amplitude']:.6f} m/s^2")
@@ -1000,6 +1006,8 @@ def build_summary_dict(axes_data, sample_rate_hz, fft_size, fft_resolution_hz, s
             'peak_to_peak': stats['peak_to_peak'],
             'std_dev': stats['std_dev'],
             'crest_factor': stats['crest_factor'],
+            'kurtosis': stats['kurtosis'],
+            'skewness': stats['skewness'],
             'dominant_frequency_hz': stats['dominant_freq_hz'],
             'dominant_amplitude': stats['dominant_amplitude'],
             'noise_floor': stats['noise_floor'],
