@@ -6021,6 +6021,24 @@ void taskModbusRead(void* parameter) {
         // reported as having no provenance -- never a silent nominal 2000 Hz.
         fifoReq.srIndexAtCapture = g_sensorSrIndexVerified;
         fifoReq.srHz             = g_sensorSrHzVerified;
+        // [R-3] Machine-state provenance, bound to THIS capture at the same
+        // point and for the same reason as the sample-rate pair above. Source
+        // is g_telemSnapshot (the v16.5.4 atomic snapshot) so the /event
+        // fifo_capture payload agrees with /vibration by construction --
+        // previously these published zero-init defaults (motor_state=0 rpm=0
+        // temp_c=0) because FifoCaptureResult had no producer for them.
+        //
+        // Single-word scalar members read lock-free, the sanctioned v16.5.4
+        // pattern already used at latestRpm / snapMotorStateAnalytics below;
+        // whole-struct readers use memcpy under mutexVibData instead. This
+        // keeps the broker block non-blocking by construction.
+        //
+        // motor_state is whatever the production motor-state source already
+        // produced (MOTOR_SRC_CURRENT) -- a pure copy of an existing value.
+        // Nothing here selects, derives or alters motor-state detection.
+        fifoReq.motorStateAtCapture = g_telemSnapshot.motor_state;
+        fifoReq.rpmAtCapture        = g_telemSnapshot.rpm;
+        fifoReq.tempCAtCapture      = g_telemSnapshot.vib.temperature;
         uint32_t fifoHandle = 0;
         FifoError fifoVerdict = FifoDriver_Request(&fifoReq, &fifoHandle);
         Serial.printf("[FIFO-BROKER] FifoDriver_Request() source=%d verdict=%d handle=%lu "

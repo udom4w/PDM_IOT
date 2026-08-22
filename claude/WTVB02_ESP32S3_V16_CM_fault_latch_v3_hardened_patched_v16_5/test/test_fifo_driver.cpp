@@ -200,6 +200,14 @@ static FifoCaptureRequest MakeAdmissibleRequest() {
   req.admissionContext.motorStable = true;
   req.admissionContext.sensorHealthy = true;
   req.admissionContext.mqttReconnecting = false;
+  // [R-3] Machine-state provenance. Deliberately NON-ZERO and distinctive so a
+  // regression to the old "declared but never assigned" behaviour (which
+  // published motor_state=0 rpm=0 temp_c=0) fails loudly instead of silently
+  // matching a zero-initialised result. Values mirror the real hardware
+  // observation that exposed the defect: RUNNING @ ~1484 rpm, ~51.1 degC.
+  req.motorStateAtCapture = 2;        // MOTOR_RUNNING
+  req.rpmAtCapture        = 1484.5f;
+  req.tempCAtCapture      = 51.1f;
   return req;
 }
 
@@ -271,6 +279,12 @@ static void Test_EndToEndSuccess() {
   TEST_ASSERT(result.y[512] == yVals[512], "y samples decode correctly");
   TEST_ASSERT(result.z[100] == zVals[100], "z samples decode correctly");
   TEST_ASSERT(result.retryCount == 0, "no retries needed");
+  // [R-3] Machine-state provenance copied verbatim from the request at the
+  // provenance latch, exactly as srIndexAtCapture/srHz already were. Before
+  // R-3 these three had no producer and stayed at their zero-init defaults.
+  TEST_ASSERT(result.motorStateAtCapture == 2, "motorStateAtCapture copied from request (not zero-init 0)");
+  TEST_ASSERT(result.rpmAtCapture > 1484.4f && result.rpmAtCapture < 1484.6f, "rpmAtCapture copied from request (not zero-init 0)");
+  TEST_ASSERT(result.tempCAtCapture > 51.0f && result.tempCAtCapture < 51.2f, "tempCAtCapture copied from request (not zero-init 0)");
 
   FifoCaptureResult second{};
   TEST_ASSERT(!FifoDriver_TryAcquireResult(&second), "double-acquire rejected while first holder active");

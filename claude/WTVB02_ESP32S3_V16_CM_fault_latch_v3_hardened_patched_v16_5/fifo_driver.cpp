@@ -466,6 +466,15 @@ static void HandleS1Idle() {
   // behaviour reads these fields.
   s_result.srIndexAtCapture = s_pendingRequest.srIndexAtCapture;
   s_result.srHz             = s_pendingRequest.srHz;
+  // [R-3] Machine-state provenance -- copied VERBATIM from the request at the
+  // same "Provenance latched" point, for the same reason and with the same
+  // pure-metadata guarantee as the sample-rate pair above. Before this, these
+  // three FifoCaptureResult members had no producer anywhere and the /event
+  // payload published the zero-init defaults (motor_state=0 rpm=0 temp_c=0).
+  // No protocol, timing, retry, breaker, admission or DSP behaviour reads them.
+  s_result.tempCAtCapture      = s_pendingRequest.tempCAtCapture;
+  s_result.motorStateAtCapture = s_pendingRequest.motorStateAtCapture;
+  s_result.rpmAtCapture        = s_pendingRequest.rpmAtCapture;
   s_attemptFillBaseline = 0;
 
   s_state = FifoState::S2_ARMED;  // "Provenance latched, gates passed"

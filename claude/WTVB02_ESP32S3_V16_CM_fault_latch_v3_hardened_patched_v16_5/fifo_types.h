@@ -184,6 +184,28 @@ struct FifoCaptureRequest {
   // FIFO_SR_INDEX_UNKNOWN for the same purpose.
   uint16_t             srIndexAtCapture;  // raw REG_SAMPLE_RATE value, or UNKNOWN
   uint32_t             srHz;              // decoded Hz, or 0 == not established
+
+  // [R-3] Machine-state provenance, same contract as the sample-rate pair
+  // above: supplied BY THE CALLER, copied verbatim onto FifoCaptureResult at
+  // the provenance latch, never derived/validated/defaulted by the driver,
+  // and NOT admission inputs -- FifoDriver_Request() reads none of them for
+  // any gate, so a capture is never rejected for missing machine provenance.
+  //
+  // Previously these three lived only on FifoCaptureResult with NO producer
+  // anywhere in the firmware, so the /event fifo_capture payload published
+  // their zero-initialised defaults forever (observed on hardware: 317/317
+  // events with motor_state=0 rpm=0 temp_c=0 while /vibration concurrently
+  // reported motor_state=2 rpm~1484 temp~51.1). Same defect class as the
+  // v16.6.16 s_result.status fix, which missed these.
+  //
+  // Caller sources g_telemSnapshot (the v16.5.4 atomic telemetry snapshot),
+  // so fifo_capture provenance is internally consistent with /vibration by
+  // construction. motorStateAtCapture is whatever the production motor-state
+  // source already produced (MOTOR_SRC_CURRENT) -- this is a pure copy and
+  // changes no detection logic.
+  float                tempCAtCapture;       // [degC]
+  uint8_t              motorStateAtCapture;  // MotorRunState_t: 0=STOPPED,1=STARTING,2=RUNNING,3=STOPPING
+  float                rpmAtCapture;         // [rpm]
 };
 
 // [Phase 3A] Sentinel for "SR index not established". 0x0000 is a REAL SR
