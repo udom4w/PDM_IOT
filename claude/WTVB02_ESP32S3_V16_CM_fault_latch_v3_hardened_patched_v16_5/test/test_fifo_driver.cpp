@@ -109,6 +109,30 @@ static void RunFor(uint32_t totalMs, uint32_t stepMs = 50) {
   }
 }
 
+// [R-4.1] Ticks one service call at a time until `want` is observed, or
+// maxTicks elapse. Returns true if it was observed.
+//
+// Why this replaces "RunFor(N) then assert phase": a transient phase can be
+// entered and left inside a single RunFor() window, so sampling only at the
+// END of the window silently misses it. S12_COOLDOWN is exactly that case --
+// ADR-0006 D-3 amended T_COOLDOWN_MS from 60000 to 0, so COOLDOWN now lasts
+// ONE service tick. The old test asserted COOLDOWN after RunFor(100,50) (two
+// ticks) and therefore always sampled one tick too late, after IDLE.
+//
+// Checking BEFORE each tick makes this policy-agnostic: it passes whether the
+// dwell is 0 ms (current) or 60000 ms (if ADR-0006 is ever reverted) -- only
+// maxTicks needs to be generous enough for the long case.
+static bool RunUntilPhase(FifoPhase want, uint32_t maxTicks, uint32_t stepMs = 50) {
+  for (uint32_t i = 0; i < maxTicks; i++) {
+    if (FifoDriver_GetPhase() == want) {
+      return true;
+    }
+    AdvanceMs(stepMs);
+    FifoDriver_Service();
+  }
+  return FifoDriver_GetPhase() == want;
+}
+
 // ----------------------------------------------------------------------------
 // Frame construction helpers.
 // ----------------------------------------------------------------------------
@@ -275,9 +299,15 @@ static void Test_EndToEndSuccess() {
   TEST_ASSERT(result.status == FifoPhase::RESULT_READY, "status reflects RESULT_READY, not the zero-init default IDLE");
   TEST_ASSERT(result.captureId == handle, "captureId matches the handle Request() returned");
   TEST_ASSERT(result.sampleCount == 1024, "sampleCount == 1024");
-  TEST_ASSERT(result.x[0] == xVals[0] && result.x[1023] == xVals[1023], "x samples decode correctly");
-  TEST_ASSERT(result.y[512] == yVals[512], "y samples decode correctly");
-  TEST_ASSERT(result.z[100] == zVals[100], "z samples decode correctly");
+  // [R-4.1] fifo_types.h: "FifoError::NONE required before x/y/z may be read".
+  if (result.error == FifoError::NONE &&
+      result.x != NULL && result.y != NULL && result.z != NULL) {
+    TEST_ASSERT(result.x[0] == xVals[0] && result.x[1023] == xVals[1023], "x samples decode correctly");
+    TEST_ASSERT(result.y[512] == yVals[512], "y samples decode correctly");
+    TEST_ASSERT(result.z[100] == zVals[100], "z samples decode correctly");
+  } else {
+    TEST_ASSERT(false, "samples unreadable: error != NONE or x/y/z == NULL");
+  }
   TEST_ASSERT(result.retryCount == 0, "no retries needed");
   // [R-3] Machine-state provenance copied verbatim from the request at the
   // provenance latch, exactly as srIndexAtCapture/srHz already were. Before
@@ -290,11 +320,14 @@ static void Test_EndToEndSuccess() {
   TEST_ASSERT(!FifoDriver_TryAcquireResult(&second), "double-acquire rejected while first holder active");
 
   FifoDriver_ReleaseResult();
-  RunFor(100, 50);
-  TEST_ASSERT(FifoDriver_GetPhase() == FifoPhase::COOLDOWN, "enters COOLDOWN after release");
-
-  RunFor(62000, 500);  // T_COOLDOWN_MS = 60000
-  TEST_ASSERT(FifoDriver_GetPhase() == FifoPhase::IDLE, "returns to IDLE after cooldown");
+  // [R-4.1] Observe the TRANSITION into COOLDOWN rather than a dwell. With
+  // T_COOLDOWN_MS = 0 (ADR-0006 D-3) the state is entered on the first tick
+  // after release and left on the next, so it must be sampled per-tick.
+  TEST_ASSERT(RunUntilPhase(FifoPhase::COOLDOWN, 10), "enters COOLDOWN after release");
+  // Return to IDLE verified separately. maxTicks sized for the pre-ADR-0006
+  // 60 s dwell too (60000/50 = 1200 ticks), so this assertion holds under
+  // either cooldown policy.
+  TEST_ASSERT(RunUntilPhase(FifoPhase::IDLE, 2000), "returns to IDLE after cooldown");
 
   TEST_END();
 }
@@ -449,9 +482,13 @@ static void Test_RetrySucceeds() {
   std::vector<uint32_t> timestamps;
   // Attempt 1 (t=260): bad type byte -> BAD_TYPE_BYTE -> SESSION_FAILED.
   AppendSegment(bytes, timestamps, BuildBadTypeByteFrame(), 260);
-  // Attempt 2, well after attempt 1's drain+one-tick-idle+re-request
-  // cycle has certainly completed: a valid dump.
-  AppendSegment(bytes, timestamps, BuildDumpFrame(xVals, yVals, zVals), 5000);
+  // [R-4.1] Attempt 2's valid dump, placed INSIDE attempt 2's actual response
+  // window. Measured attempt boundaries (50 ms ticks): attempt 1 t=50..700,
+  // attempt 2 t=750..2250, attempt 3 t=2300..3800 -- the whole session is
+  // terminal by t=3800. The previous t=5000 placement was therefore never
+  // reachable: attempts 2 and 3 both hit T_REQUEST_RESPONSE_MS (1000 ms) and
+  // the session ended ERR_NO_RESPONSE before this segment was ever replayed.
+  AppendSegment(bytes, timestamps, BuildDumpFrame(xVals, yVals, zVals), 1000);
 
   FifoTransport transport;
   LogReplayTransport_Init(&transport, bytes.data(), bytes.size(), timestamps.data(),
@@ -470,8 +507,16 @@ static void Test_RetrySucceeds() {
   TEST_ASSERT(FifoDriver_TryAcquireResult(&result), "acquire succeeds");
   TEST_ASSERT(result.error == FifoError::NONE, "second attempt succeeded");
   TEST_ASSERT(result.retryCount == 1, "exactly one retry was needed");
+  TEST_ASSERT(result.sampleCount == 1024, "full dump decoded on the successful attempt");
   TEST_ASSERT(result.captureId == handle, "captureId preserved across the retry (same logical capture)");
-  TEST_ASSERT(result.x[0] == xVals[0], "samples from the SECOND (successful) attempt are what's reported");
+  // [R-4.1] fifo_types.h: "FifoError::NONE required before x/y/z may be read".
+  // Guarded so a future failure reports the real cause instead of dereferencing
+  // a stale arena pointer (which previously yielded a misleading x[0] = -999).
+  if (result.error == FifoError::NONE && result.x != NULL) {
+    TEST_ASSERT(result.x[0] == xVals[0], "samples from the SECOND (successful) attempt are what's reported");
+  } else {
+    TEST_ASSERT(false, "samples unreadable: error != NONE or x == NULL");
+  }
   FifoDriver_ReleaseResult();
 
   TEST_END();
@@ -483,10 +528,15 @@ static void Test_RetryExhausted() {
 
   std::vector<uint8_t> bytes;
   std::vector<uint32_t> timestamps;
-  // Three attempts (initial + FIFO_MAX_RETRIES=2), all bad, well-spaced.
+  // [R-4.1] Three attempts (initial + FIFO_MAX_RETRIES=2), one bad frame inside
+  // EACH attempt's actual response window. Measured boundaries (50 ms ticks):
+  // attempt 1 t=50..700, attempt 2 t=750..2250, attempt 3 t=2300..3800. The
+  // previous 260/5000/10000 spacing put segments 2 and 3 past the session's own
+  // terminal point (t=3800), so attempts 2 and 3 timed out ERR_NO_RESPONSE and
+  // the terminal error was never the ERR_BAD_TYPE_BYTE this test asserts.
   AppendSegment(bytes, timestamps, BuildBadTypeByteFrame(), 260);
-  AppendSegment(bytes, timestamps, BuildBadTypeByteFrame(), 5000);
-  AppendSegment(bytes, timestamps, BuildBadTypeByteFrame(), 10000);
+  AppendSegment(bytes, timestamps, BuildBadTypeByteFrame(), 1000);
+  AppendSegment(bytes, timestamps, BuildBadTypeByteFrame(), 2500);
 
   FifoTransport transport;
   LogReplayTransport_Init(&transport, bytes.data(), bytes.size(), timestamps.data(),
