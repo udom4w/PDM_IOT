@@ -10399,6 +10399,7 @@ static void buildBuildId() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);  // [R-1C] non-blocking USB CDC TX -- see HWCDC.cpp write(): with a host attached but not draining, isPlugged() stays true so write() takes the blocking branch and stalls up to 20*100ms, starving Core 0's 10ms FIFO service and overflowing the 2048B RS485 RX ring (178ms budget @115200) -> ERR_RX_OVERFLOW. Timeout 0 drops output instead of blocking.
   delay(1000);
 
   // [v16.3v] โหลด NVS Config ก่อนสิ่งอื่น
