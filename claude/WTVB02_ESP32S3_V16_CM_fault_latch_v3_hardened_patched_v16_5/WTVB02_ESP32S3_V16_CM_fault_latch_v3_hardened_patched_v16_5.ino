@@ -9100,7 +9100,10 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // authority; when false, velocity_ema_mms is 0.0f meaning "not computed",
     // never "no vibration".
     {
-      const VibEmaState em = VibEma_Get();
+      // [R-2] Same freshness deadline as readVelocityForAlarm()/pushTelemBuf(), so
+      // velocity_ema_valid can no longer report true while vibration_status is
+      // UNAVAILABLE. Observed pre-fix: ema_mms held 0.998 with valid=true for >=565 s.
+      const VibEmaState em = VibEma_Get(millis(), VIB_VELOCITY_MAX_AGE_MS_TBD);
       d["velocity_ema_mms"]          = roundf(em.ema_mms * 1000.0f) / 1000.0f;
       d["velocity_ema_valid"]        = em.valid;
       d["velocity_ema_reseeded"]     = em.reseeded;

@@ -117,6 +117,14 @@ void VibEma_Update(void) {
   }
 }
 
-VibEmaState VibEma_Get(void) {
-  return s_st;
+VibEmaState VibEma_Get(uint32_t nowMs, uint32_t maxAgeMs) {
+  // [R-2] Freshness is applied to the COPY, never to s_st. Clearing the stored
+  // seeded flag would make the next valid sample seed instead of decay, silently
+  // changing the EMA's own reseed contract (VIB_EMA_RESET_GAP_MS) -- so the stored
+  // state is deliberately left alone here.
+  VibEmaState out = s_st;
+  if (out.valid && (uint32_t)(nowMs - out.timestampMs) > maxAgeMs) {
+    out.valid = false;  // stale -> not usable. Value retained, NOT zeroed.
+  }
+  return out;
 }

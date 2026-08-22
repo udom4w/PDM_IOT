@@ -42,7 +42,12 @@
 
 struct VibEmaState {
   float    ema_mms;       // [mm/s] valid ONLY when valid == true
-  bool     valid;         // false => never seeded, or reset and awaiting a sample
+  bool     valid;         // [R-2] "current usable EMA": seeded AND fresh. False =>
+                          // never seeded, reset and awaiting a sample, OR the newest
+                          // consumed sample is older than the caller's maxAgeMs.
+                          // Freshness is applied by VibEma_Get() to the RETURNED COPY
+                          // only -- the stored state keeps its seeded flag, so a stale
+                          // period never turns the next sample into a spurious reseed.
   bool     reseeded;      // last update was a seed/reseed rather than a decay step
   uint32_t timestampMs;   // timestamp of the sample that produced ema_mms
   uint32_t updates;       // decay steps applied (excludes seeds)
@@ -74,7 +79,22 @@ void VibEma_Reset(void);   // forces valid=false; next valid sample reseeds
 // ----------------------------------------------------------------------------
 void VibEma_Update(void);
 
-VibEmaState VibEma_Get(void);
+// ----------------------------------------------------------------------------
+// [R-2] VibEma_Get -- snapshot with freshness applied.
+//
+//   nowMs    : caller's monotonic clock, INJECTED (not millis()) so this module
+//              stays Arduino-free and host-testable, matching the rest of the file.
+//   maxAgeMs : freshness deadline. Production passes VIB_VELOCITY_MAX_AGE_MS_TBD,
+//              the same deadline readVelocityForAlarm() and the telemetry slot use,
+//              so velocity_ema_valid and vibration_status agree by construction.
+//
+// Returns the stored state with `valid` cleared when the newest consumed sample is
+// older than maxAgeMs. ema_mms / timestampMs are RETAINED unchanged -- a stale EMA
+// is never zeroed and no measurement is fabricated; `valid` is the sole authority.
+// nowMs - timestampMs is unsigned and therefore wrap-correct, same idiom as
+// VibEma_Update()'s dtMs.
+// ----------------------------------------------------------------------------
+VibEmaState VibEma_Get(uint32_t nowMs, uint32_t maxAgeMs);
 
 // Exposed for tests and for anyone needing the same derivation.
 float VibEma_AlphaFor(uint32_t dtMs);
