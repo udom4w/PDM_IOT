@@ -126,7 +126,58 @@
 // COMMENT OUT BOTH THIS AND LWMQTT_DEBUG_TIMING (in
 // .arduino/libraries/MQTT/src/lwmqtt/client.c) TO RETURN TO A PRODUCTION BUILD.
 // ============================================================================
-#define DEBUG_MQTT_TIMING
+// #define DEBUG_MQTT_TIMING   // [production-clean] disabled -- see V16_5C_VERIFIED.md
+
+// ============================================================================
+// [Phase 15A] RECEIVE-PATH TIME ATTRIBUTION -- OFF by default.
+//
+// Purpose: locate where the ~1000 ms between "broker response reaches the
+// modem" and "ESP32 returns the byte to lwmqtt" is actually spent. Wire
+// evidence (mqtt_phase14.pcap) proved the broker answers in 198us-8ms with no
+// retransmission, no loss and no zero-window, so the missing time is entirely
+// inside the ESP32<->modem retrieval path.
+//
+// Three probes only (Phase 15A scope; 15B NOT implemented):
+//   P1  modemGetAvailable()      TinyGsmClientSIM7600.h -- AT+CIPRXGET=4 cadence
+//   P3  _bio_recv()              this file              -- blind-poll burst cost
+//   P5  handleURCs()             TinyGsmClientSIM7600.h -- URC push timing
+//
+// MUST be defined before <TinyGsmClient.h> below: the TinyGSM headers are
+// textually #include-d into this translation unit, so P1/P5 compile in only
+// if this is already set.
+//
+// Observational only: no AT command added, no control flow, return path,
+// timeout or reconnect behaviour altered. With this macro undefined every
+// probe compiles to nothing and the binary is byte-identical to production.
+// TO ENABLE: uncomment the single line below.
+// ============================================================================
+// #define DEBUG_RXPATH   // [production-clean] disabled -- see V16_5C_VERIFIED.md
+
+// ============================================================================
+// [v16.5b] ISSUE #2 PHASE 1 -- READ-ONLY A7670E MODEM DIAGNOSTICS
+// ============================================================================
+// Issue #1 proved the stall lies downstream of the modem's AT-level CIPSEND
+// acceptance: the modem confirms the bytes, then emits no IP packet for up to
+// 1.68 s (IP-ID advanced by exactly +1 across the stall). Nothing on the host
+// side can see further. This probe samples the modem's own view of the radio
+// once per minute so that uplink delay can be correlated against serving cell,
+// signal quality, registration state and any power-saving configuration.
+//
+// STRICTLY READ-ONLY: every command below is a query form (+CPSI?, +CSQ,
+// +CEREG?, +CPSMS?, +CEDRXS?). No "=" set form appears anywhere, so modem
+// configuration cannot be altered. No MQTT, TinyGSM, reconnect or timeout
+// behaviour is touched. With DEBUG_MODEM_DIAG undefined the whole feature
+// compiles to nothing.
+//
+// SCOPE LIMIT (deliberate, per Issue #2 decision): the quiet-window gate can
+// only fire when publishInterval >= 2 * MODEM_DIAG_QUIET_MS, i.e. in the
+// NORMAL 30 s cadence only. WARNING (10 s) and CRITICAL (5 s) never sample.
+// The investigation targets the NORMAL interval; no fallback is provided.
+// ============================================================================
+// #define DEBUG_MODEM_DIAG   // [production-clean] disabled -- see V16_5C_VERIFIED.md
+#define MODEM_DIAG_PERIOD_MS  60000UL   // sample cadence
+#define MODEM_DIAG_QUIET_MS   10000UL   // clearance from both publish edges
+#define MODEM_DIAG_AT_TMO_MS   1000UL   // per-command ceiling (worst case 5 x)
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -147,6 +198,13 @@
 #include "fifo_types.h"
 #include "fifo_transport_uart485.h"
 #include "fifo_driver.h"
+#include "vib_accel.h"   // [Phase 3B] FIFO RAW -> acceleration RMS (Arduino-free)
+#include "vib_velocity.h"  // [Phase 3C] FIFO RAW -> velocity RMS, frequency domain
+#include "vib_history.h"   // [M1B-1] timestamped velocity trend history ring
+#include "vib_ema.h"       // [M1B-2] timestamp-aware EMA over the history ring
+#include "vib_window.h"    // [M1B-3] time-based trend windows over the history ring
+#include "vib_slope.h"     // [M1B-4] timestamp-aware velocity slope (mm/s per s)
+#include "vib_ttw.h"       // [M1B-5] Time-To-Warning from velocity + slope
 
 // [v16.6 logging refactor] Centralized logging framework -- see log.h.
 // Included near the top for the same .ino auto-prototype reason as the
@@ -207,7 +265,7 @@ constexpr uint32_t FORCE_CURRENT_STOPPED_MS = 5000;   // [ms] continuous below-O
 ///////////////////////////////////////////////////////////////////////////////
 #define CT_RATIO_PRIMARY_A          1.0f    // [A] external CT ratio primary -- 1:1 if no external CT
 #define CT_RATIO_SECONDARY_A        1.0f    // [A] external CT ratio secondary
-#define CT_TURNS                    2       // [turns] times the conductor loops through the CT clamp
+#define CT_TURNS                    1       // [turns] times the conductor loops through the CT clamp
 
 ///////////////////////////////////////////////////////////////////////////////
 // Debug / Test Configuration
@@ -234,7 +292,16 @@ constexpr uint32_t FORCE_CURRENT_STOPPED_MS = 5000;   // [ms] continuous below-O
 // payload construction or FIFO protocol/state-machine timing (the dump
 // fires strictly after S11_RESULT_READY has already been reached and
 // acquired; the capture itself is over by the time this runs).
-#define DEBUG_FIFO_DUMP
+// [Phase 2B TEST-ONLY] DISABLED for the periodic-capture hardware validation
+// build. The dump is 1024 Serial.printf() calls (~1-2 s at this line rate) and
+// runs inside handleFifoCaptureCompletion(), i.e. ON CORE 0 inside
+// taskModbusRead() -- so with the 2000 ms SCHEDULED cadence it would block the
+// Modbus/CTR4A01 poll loop for most of every period and make the measured
+// capture interval / jitter a measurement of the DUMP rather than of the FIFO
+// capture. Re-enable (uncomment) whenever the raw waveform is needed again;
+// DumpFifoCaptureCsv() and the FIFO RAW capture path itself are UNCHANGED and
+// still present -- only this egress switch is off.
+// #define DEBUG_FIFO_DUMP
 
 // ============================================================================
 // [BUILD FINGERPRINT] Firmware identity -- printed once at boot in setup(),
@@ -307,7 +374,12 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 #define OLED_ADDRESS 0x3C
 
 // --- Modbus Configuration ---
-#define MODBUS_BAUDRATE 9600
+// [Phase 0 / rs485-115200-validation] 9600 -> 115200. Single source of truth
+// for the shared RS485 bus: consumed only by SerialRS485.begin() in setup()
+// and by the boot banner. BOTH bus devices must already be reconfigured to
+// 115200 (WTVB02 BAUD reg 0x04 = 0x06; CTR4A01 reg 0x00FE = 0x07) BEFORE
+// flashing this, or all Modbus traffic fails -- see the Phase 0 procedure.
+#define MODBUS_BAUDRATE 115200
 #define MODBUS_SLAVE_ID 0x50
 
 // --- CTR4A01 Current Sensor (shared RS485 bus, multi-drop Modbus) [v16.6a] ---
@@ -317,9 +389,26 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 // §6.4.14-16: Velocity RMS (True RMS, ÷1000 → mm/s)
 // เปลี่ยนจาก VX/VY/VZ (0x3A Peak ÷100) → VRMSX/Y/Z (True RMS ÷1000)
 // ต้องตั้ง DRM=0x02 (Frequency domain) เพื่อให้ค่าถูกต้อง
-#define REG_VRMS_X 0x50  // VRMSX: X-axis velocity RMS (mm/s) §6.4.14
-#define REG_VRMS_Y 0x5C  // VRMSY: Y-axis velocity RMS (mm/s) §6.4.15
-#define REG_VRMS_Z 0x68  // VRMSZ: Z-axis velocity RMS (mm/s) §6.4.16
+// [M1A DEPRECATED] ==========================================================
+// These three registers are NO LONGER the Product Phase-1 vibration alarm
+// source. As of M1A the alarm state machine, health score and fault latch all
+// read velocity_rms_overall produced by FIFO RAW -> DSP (see g_velCarrier).
+//
+// They are retained ONLY for:
+//   - backward-compatible telemetry (/sensor rms,vx,vy,vz,peak,peak_velocity_*
+//     and /vibration rms) -- deprecated, removal no earlier than Phase 5
+//   - the trend/EMA/TTW engine, which still consumes them until M1B (their
+//     cadence changes 4 Hz -> ~0.5 Hz, so that migration is deliberately a
+//     separate change -- see M1B dependency list)
+//   - VERIFY_TEST diagnostics
+//
+// Do NOT add a new Product decision that reads these values or anything
+// derived from them (vel_peak_*, rms_x/y/z, rms_overall).
+// Removal plan: Phase 5 cleanup -- see M1A review section 10.
+// ===========================================================================
+#define REG_VRMS_X 0x50  // VRMSX: X-axis velocity RMS (mm/s) §6.4.14  [DEPRECATED]
+#define REG_VRMS_Y 0x5C  // VRMSY: Y-axis velocity RMS (mm/s) §6.4.15  [DEPRECATED]
+#define REG_VRMS_Z 0x68  // VRMSZ: Z-axis velocity RMS (mm/s) §6.4.16  [DEPRECATED]
 #define REG_TEMPERATURE 0x40
 #define REG_FREQ_X 0x44  // Frequency X,Y,Z (0x44~0x46) per WTVB02 manual
 #define REG_CFX    0x47  // CFX=Accel Crest Factor X, KX=Kurtosis X (0x47~0x48) §6.4.14
@@ -338,11 +427,65 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 #define SENSOR_UNLOCK_KEY 0xB588  // Unlock password
 #define SENSOR_SR_16K     0x0001  // Sample Rate = 16 kHz
 // [PD-0001] SR6=512Hz was the Phase 1 experimental baseline (WTVB05_FIFO_Investigation_Report.md).
-// [PD-0003] Switched to SR5=1kHz. This constant IS wired into the write path
-// (see REG_SAMPLE_RATE write in the sensor-config sequence). SR ownership/enforcement
-// policy still pending design doc -- update this comment again if the baseline changes.
+// [PD-0003] SR5=1kHz superseded PD-0001 above.
+// [PD-0004] Switched production to SR4=2kHz (superseded by PD-0005 below).
+// [PD-0005] Reverted production to SR5=1kHz for Phase 1 validation.
+// [PD-0006] Production SR is now SR4=2kHz, and -- unlike PD-0001..PD-0005 --
+// it is selected in exactly ONE place: SENSOR_SR_PRODUCTION below. Previously
+// the rate appeared three times independently (the REG_SAMPLE_RATE write, the
+// pre-write Serial label, and the read-back verify constant), so changing it
+// meant editing three sites in lockstep; a partial edit silently produced a
+// fail-closed verify against a rate the firmware no longer wrote. The
+// SENSOR_SR_* table below stays as the raw register-value dictionary
+// (WTVB02-485 manual §6.4.12); SENSOR_SR_PRODUCTION is the policy.
 #define SENSOR_SR_512     0x0006  // Sample Rate = 512 Hz (SR6)
 #define SENSOR_SR_1K      0x0005  // Sample Rate = 1 kHz (SR5)
+#define SENSOR_SR_2K      0x0004  // Sample Rate = 2 kHz (SR4)
+
+// [PD-0006] SINGLE SOURCE OF TRUTH for the production sample rate. Written to
+// REG_SAMPLE_RATE and verified against the read-back -- write and verify can
+// no longer disagree. Change this one line to change the production SR.
+// SR4 = 2 kHz -> measurable frequency 8~1000 Hz (manual §6.4.12); FIFO Nyquist
+// 1000 Hz, dF = 2000/1024 = 1.953125 Hz.
+#define SENSOR_SR_PRODUCTION  SENSOR_SR_2K
+
+// ----------------------------------------------------------------------------
+// [Phase 3A] VERIFIED SAMPLE-RATE PROVENANCE
+//
+// Before this, the ONLY evidence of the sensor's actual rate was a local
+// variable inside reconfigSensorAfterRestart() that was compared once and then
+// discarded, so FifoCaptureResult::srHz/srIndexAtCapture -- declared, and
+// published on /event -- were never written and always read 0. Any DSP built
+// on that would silently assume a rate it had never observed; a sensor running
+// SR5 while firmware assumed SR4 would make every velocity figure wrong by 2x
+// with no error anywhere.
+//
+// These two globals hold the rate PROVEN BY READ-BACK, not the rate we asked
+// for. They are set ONLY when the read-back both decodes to a known SR index
+// AND matches SENSOR_SR_PRODUCTION, and are cleared to UNKNOWN on every entry
+// to the config sequence and on any failure -- fail-closed by construction.
+//
+// SCOPE LIMITATION (documented, not worked around): reconfigSensorAfterRestart()
+// is the firmware's only SR read-back, and it runs at boot and after a sensor
+// restart -- NOT per capture. So provenance is "verified at last successful
+// sensor configuration", not "verified at this capture". A rate change made
+// externally mid-session would not be detected. Closing that would need a
+// periodic SR re-read, which is a Modbus/behaviour change and deliberately out
+// of Phase 3A scope. The staleness is bounded by the sensor-restart path,
+// which itself re-runs this verification.
+//
+// Written on Core 0 (taskModbusRead) and read on Core 0 (drain block) only;
+// single-word volatile scalars, no mutex needed (CLAUDE.md cross-core rule).
+// ----------------------------------------------------------------------------
+// NOTE: only VARIABLES are declared here. sensorSrIndexToHz() is deliberately
+// defined much further down, immediately above reconfigSensorAfterRestart().
+// Per CLAUDE.md, the .ino auto-prototype generator inserts every generated
+// prototype directly before the FIRST function definition in the file -- so a
+// function defined here, above the VibrationData_t / MachineState_t / ...
+// typedefs, would push all of those prototypes ahead of the types they name
+// and break the whole build.
+static volatile uint16_t g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+static volatile uint32_t g_sensorSrHzVerified    = 0;  // 0 == NOT established
 #define REG_DRM           0x002B  // Displacement range mode register §6.4.11
 #define SENSOR_DRM_FREQ   0x0002  // 0x02 = Frequency domain algorithm
                                   // จำเป็นสำหรับ VRMS (0x50/0x5C/0x68) ให้คำนวณถูกต้อง
@@ -472,6 +615,9 @@ struct FaultLatch_t {
 #define MQTT_PORT 8883                           // TLS port
 #define MQTT_CLIENT_ID "pump01"           // -> "PLANT01-ESP01"
 #define MQTT_QOS 1                               // QoS 1 -- at-least-once delivery
+// [v16.5d] Bounds GsmTLSClient's _tcp.stop() teardown wait (was unbounded
+// 15000ms via TinyGSM default) -- see session-takeover/GPRS-reconnect review.
+#define BOUNDED_STOP_MS 1000UL
 // Mosquitto config:  require_certificate = true
 //                    use_identity_as_username = true
 //                    allow_anonymous = false
@@ -574,8 +720,41 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 // --- Machine Configuration ---
 #define MACHINE_NAME MACHINE_ID  // Display uses MACHINE_ID for consistency
 #define BASELINE_RMS 2.8f
-#define WARNING_RMS 7.5f
-#define CRITICAL_RMS 11.2f
+// [M1A LEGACY/TBD] These two thresholds were baselined against the legacy
+// VRMS-register metric, which is max(x,y,z). They are NOT valid for
+// velocity_rms_overall, which is the vector magnitude sqrt(x^2+y^2+z^2) and
+// therefore reads up to sqrt(3) ~ 1.73x higher for comparable axes. Reusing
+// them would silently tighten the alarm by that factor.
+//
+// They remain ONLY because the un-migrated legacy consumers still reference
+// them: computeHealthScore()'s normalization span, SANITY_RMS_MAX, the OLED
+// WARN/CRIT legends, and the trend engine (M1B). They no longer gate any
+// vibration alarm decision.
+#define WARNING_RMS 7.5f    // [M1A LEGACY -- NOT the vibration alarm threshold]
+#define CRITICAL_RMS 11.2f  // [M1A LEGACY -- NOT the vibration alarm threshold]
+
+// [M1A] Product Phase-1 vibration alarm thresholds, in mm/s, applied to
+// velocity_rms_overall (FIFO RAW -> DSP).
+//
+// *** TBD -- DELIBERATELY UNSET. NO VALUE HAS BEEN CHOSEN. ***
+// Pending field/reference re-baselining against a calibrated instrument
+// (deferred R&D; blocked on the same reference instrument as Validation D).
+//
+// VIB_THRESHOLD_UNSET is a sentinel, not a threshold: it is negative, so it
+// can never be crossed by a non-negative RMS even if a future edit
+// accidentally removed the vibThresholdsConfigured() gate. Fail-closed by
+// construction rather than by convention.
+#define VIB_THRESHOLD_UNSET (-1.0f)
+#define VIB_WARNING_MMS     VIB_THRESHOLD_UNSET   // TBD -- pending re-baselining
+#define VIB_CRITICAL_MMS    VIB_THRESHOLD_UNSET   // TBD -- pending re-baselining
+
+// [M1A] Freshness deadline for the velocity carrier.
+// *** TBD PLACEHOLDER -- this is NOT a product SLA. ***
+// Chosen only to be a few capture intervals (capture cadence ~2 s) so the
+// plumbing is exercisable. The real value is a product decision tied to M3
+// (freshness/age semantics) and must be set with the customer's detection
+// latency requirement in hand, not here.
+#define VIB_VELOCITY_MAX_AGE_MS_TBD 10000u
 
 // --- FreeRTOS Configuration ---
 #define STACK_SIZE_MODBUS    4096   // Modbus task stack
@@ -584,7 +763,11 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define STACK_SIZE_BUTTON    4096   // V14.7: 2048→4096 (watermark was 172B=92% used; rtc+Wire+Serial.printf depth)
 #define STACK_SIZE_STATE     8192   // [v16.3n] 6144→8192: NVS write (Preferences) ใน checkAndLatchFault
                                     // ใช้ IPC call ไป Core 1 → ipc1 stack overflow ถ้า stack ไม่พอ
-#define STACK_SIZE_ANALYTICS 6144   // Phase 3: +decision engine +classifyFault on stack
+// [M1B-3] 6144 -> 8192. The /trend JSON document and its serialization buffer
+// both live on this task's stack and each grow 1024 -> 1536 B for the M1B-3
+// window fields (+1024 B total). Measured Analytics high-water was 2940 B
+// remaining, so the raise keeps the same margin rather than spending it.
+#define STACK_SIZE_ANALYTICS 8192   // Phase 3: +decision engine +classifyFault on stack
 
 #define PRIORITY_MODBUS    5  // Highest priority (time-critical)
 #define PRIORITY_STATE     4  // State machine
@@ -605,7 +788,19 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define QUEUE_SIZE_DIAG_SNAPSHOT 1  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
 #endif
 
-#define MQTT_OUTBOUND_PAYLOAD_MAX 1024  // [v16.5] matches existing /trend serialization buffer size
+// [M1B-3] 1024 -> 1536. REQUIRED, not cosmetic.
+//
+// enqueueMqttOutbound() REJECTS (does not truncate) any payload >= this limit:
+//   if (... || len >= MQTT_OUTBOUND_PAYLOAD_MAX) return false;
+// /trend measured 857 B on hardware after M1B-2. The twelve M1B-3 window keys
+// add ~354 B -> ~1211 B, which under the old 1024 limit would have caused
+// EVERY /trend message to be silently DROPPED -- taking the M1B-1 history_*
+// observability down with it. Dropping is worse than truncating because
+// nothing in the log would say so.
+//
+// Cost: MqttOutboundMsg_t.payload grows 512 B x QUEUE_SIZE_MQTT_OUTBOUND (6)
+// = +3072 B RAM. Accepted deliberately; see the M1B-3 report.
+#define MQTT_OUTBOUND_PAYLOAD_MAX 1536
 
 // --- Modem Timeouts ---
 #define MODEM_INIT_TIMEOUT 30000    // 30 seconds for modem init
@@ -968,7 +1163,7 @@ public:
       mbedtls_ssl_close_notify(&_ssl);
       _connected = false;
     }
-    _tcp.stop();
+    _tcp.stop(BOUNDED_STOP_MS);  // [v16.5d] bounded, was unbounded 15000ms
     _freeSession();
     // Re-init only the per-connection contexts (certs stay parsed)
     mbedtls_ssl_init(&_ssl);
@@ -1001,7 +1196,7 @@ public:
       mbedtls_ssl_close_notify(&_ssl);
       _connected = false;
     }
-    _tcp.stop();
+    _tcp.stop(BOUNDED_STOP_MS);  // [v16.5d] bounded, was unbounded 15000ms
 
     // Free และ reinit per-connection contexts ทั้งหมด
     // (CA cert, client cert, private key ยังคงอยู่ -- parse ครั้งเดียวตอน setupTLS)
@@ -1240,6 +1435,13 @@ private:
   static int _bio_recv(void* ctx, unsigned char* buf, size_t len) {
     BioCtx* c = (BioCtx*)ctx;
     GsmTLSClient* self = c->self;
+#ifdef DEBUG_RXPATH
+    // [P3] Blind-poll burst accumulators. Static locals are safe here:
+    // _bio_recv() is only ever entered from mbedtls_ssl_read()/write() running
+    // on taskNetwork -- never from an ISR, never from Core 0.
+    static uint32_t s_dbgWaitStartMs = 0;
+    static uint32_t s_dbgWaitCount   = 0;
+#endif
 
     // -- Step 1: Serve from local buffer --
     int buffered = self->_rxTail - self->_rxHead;
@@ -1254,10 +1456,35 @@ private:
     // -- Step 2: Pump modem, check for data --
     for (int i = 0; i < 5; i++) c->modem->maintain();
     int avail = c->tcp->available();
-    if (avail <= 0) return MBEDTLS_ERR_SSL_WANT_READ;
+    if (avail <= 0) {
+#ifdef DEBUG_RXPATH
+      // [P3] Accumulate the no-data poll but emit NOTHING. This branch was
+      // taken 871 times in a single Phase 14 wait; a printf per call would
+      // dominate the very interval being measured (observer effect).
+      if (s_dbgWaitCount == 0) s_dbgWaitStartMs = millis();
+      s_dbgWaitCount++;
+#endif
+      return MBEDTLS_ERR_SSL_WANT_READ;
+    }
 
+#ifdef DEBUG_RXPATH
+    // [P3] Data has appeared -- emit ONE line summarising the preceding blind
+    // spin. spin_ms is the interval Phase 14 could not attribute: time during
+    // which c->tcp->available() kept reporting 0 while (per pcap) the bytes
+    // were already in the modem.
+    uint32_t dbgSpins   = s_dbgWaitCount;
+    uint32_t dbgSpinMs  = s_dbgWaitCount ? (millis() - s_dbgWaitStartMs) : 0;
+    uint32_t dbgFetchT0 = millis();
+    s_dbgWaitCount = 0;
+#endif
     // -- Step 3: Fill local buffer via one CIPRXGET call --
     int fetched = self->_ciprxget(avail);
+#ifdef DEBUG_RXPATH
+    Serial.printf("[P3 bio_recv] t=%lu avail=%d fetched=%d spins=%lu spin_ms=%lu fetch_ms=%lu\n",
+                  (unsigned long)dbgFetchT0, avail, fetched,
+                  (unsigned long)dbgSpins, (unsigned long)dbgSpinMs,
+                  (unsigned long)(millis() - dbgFetchT0));
+#endif
     if (fetched <= 0) return MBEDTLS_ERR_SSL_WANT_READ;
 
     // -- Step 4: Serve from freshly filled buffer --
@@ -1742,6 +1969,134 @@ typedef struct {
   bool              requirePermissive;
 } FifoTriggerIntent_t;
 
+// ----------------------------------------------------------------------------
+// [Phase 3B] Core 0 -> Core 1 waveform hand-off.
+//
+// WHY A COPY AT ALL: FifoCaptureResult.x/y/z are non-owning views into
+// FifoArena, valid ONLY between TryAcquireResult() and ReleaseResult(). The
+// Phase 3B architecture mandates "copy raw samples, release the FIFO result
+// immediately, NEVER run DSP while holding the result" -- so Core 0 memcpy's
+// the 6144 B waveform out of the arena and releases, and Core 1 does every
+// floating-point operation against this copy. The driver is therefore never
+// blocked by analytics, and the arena is never held across a DSP pass.
+//
+// The buffer is file-scope static, NOT stack: 6144 B would blow taskAnalytics'
+// 6144 B stack outright and leaves taskModbusRead (708 B high-water headroom
+// observed in the field) no margin whatsoever.
+//
+// Concurrency contract:
+//   - g_accelSnapMutex guards g_accelSnap's contents.
+//   - Core 0 (taskModbusRead) takes it with timeout 0 and SKIPS the capture if
+//     it cannot get it instantly. The Modbus task is the time-critical one and
+//     must never wait on analytics; a dropped waveform is acceptable (FIFO is
+//     best-effort by Phase 3 decision #3), a stalled Modbus poll is not.
+//   - queueAccelSnapshot (depth 1) carries only the captureId as the "ready"
+//     notification -- the bulk samples travel via the mutex-guarded buffer, per
+//     CLAUDE.md's cross-core rule (struct => mutex/queue, never a shared bool).
+// ----------------------------------------------------------------------------
+typedef struct {
+  int16_t  x[VIB_ACCEL_REQUIRED_SAMPLES];
+  int16_t  y[VIB_ACCEL_REQUIRED_SAMPLES];
+  int16_t  z[VIB_ACCEL_REQUIRED_SAMPLES];
+  uint32_t captureId;
+  uint16_t sampleCount;
+  uint32_t srHz;
+} AccelSnapshot_t;
+
+typedef struct {
+  uint32_t captureId;   // notification only; payload lives in g_accelSnap
+} AccelSnapshotReady_t;
+
+// ----------------------------------------------------------------------------
+// [M1A] Core 1 -> Core 0 velocity carrier.
+//
+// Direction is the REVERSE of the Phase 3B/3C waveform hand-off: velocity RMS
+// is produced on Core 1 (taskAnalytics) but the alarm state machine, health
+// score and fault latch all live on Core 0 (taskModbusRead). This struct is
+// the only channel between them.
+//
+// Per CLAUDE.md a multi-word struct crossing cores must go through a mutex --
+// a shared bool or a bare float would not be safe here because `overall`,
+// `valid` and `timestampMs` must be read as ONE consistent set. Reading a
+// fresh timestamp against a stale value (or vice versa) is exactly the
+// tearing that would let a stale reading masquerade as current.
+//
+// timestampMs is millis() AT PUBLISH TIME on Core 1, so freshness is measured
+// against when the value was computed, not when it was read.
+//
+// Initial state is deliberately valid=false: before the first successful
+// capture the product is in VIBRATION_UNAVAILABLE, not "0.0 mm/s, healthy".
+// ----------------------------------------------------------------------------
+typedef struct {
+  float    overall;      // velocity_rms_overall [mm/s]
+  bool     valid;        // false => VIBRATION_UNAVAILABLE, NOT "zero vibration"
+  uint32_t captureId;
+  uint32_t timestampMs;  // millis() when produced on Core 1
+
+  // [M1B-6] Per-axis values and capture provenance, added so taskNetwork's
+  // pushTelemBuf() can populate an outage slot WITHOUT reading the M1B-1 ring.
+  // The ring has no mutex and is safe only inside taskAnalytics; this carrier
+  // already crosses exactly that boundary and already owns mutexVelCarrier, so
+  // extending it adds no new lock and no new cross-task path.
+  float    x;            // velocity_rms_x [mm/s]
+  float    y;
+  float    z;
+  uint32_t sampleRateHz; // provenance of the capture these values came from
+  uint16_t sampleCount;
+} VelocityCarrier_t;
+
+// ----------------------------------------------------------------------------
+// [ADR-0006 D-1/D-9, Phase 2] PERIODIC FIFO PRODUCER -- the SOLE initiator of
+// FIFO capture. Runs inside taskModbusRead() (same task as the drain block, so
+// no new task, no new core, no new concurrency), enqueues only, never inspects
+// driver state, never blocks.
+//
+// Monotonic deadline, NOT delay()/vTaskDelay(): s_fifoPeriodicNextDueMs is an
+// absolute millis() deadline compared with signed wraparound-safe arithmetic.
+// On a due tick the deadline advances by exactly one period so the cadence
+// stays phase-locked to boot; if the tick was serviced so late that the new
+// deadline is already in the past, it is re-based to now + period instead of
+// accumulating. That is what makes a missed tick a SKIP and never a backlog:
+// two captures can never become due at once (ADR-0006 D-9).
+//
+// s_fifoPeriodicSuspended satisfies "do not repeatedly enqueue once the
+// circuit breaker has opened" WITHOUT the producer reading driver state
+// (Trigger Broker invariant #4): the drain block -- which legitimately sees
+// every admission verdict -- latches it on ERR_CIRCUIT_OPEN.
+//
+// [Phase 2D Option A] BOUNDED SELF-RECOVERY. Previously the latch had no
+// clearing path at all and FifoDriver_ResetCircuitBreaker() had no caller, so a
+// single burst of 5 failed sessions ended ALL vibration acquisition until the
+// next reboot -- silently, while every other subsystem reported healthy
+// (observed on hardware: 2C-ST 25.6 s from first failure to permanent death,
+// then >30 min dead with Modbus/MQTT/heap all nominal). That is not acceptable
+// for a monitoring product.
+//
+// Recovery is deliberately BOUNDED, not free: after a backoff the producer
+// makes ONE attempt to reset the breaker and resume. If the fault persists the
+// driver simply re-trips (5 more failed sessions) and the backoff DOUBLES, up
+// to a 15-minute ceiling. A permanently dead sensor therefore costs a bounded,
+// decaying share of the RS485 bus instead of either (a) dying forever or
+// (b) retrying every 60 s indefinitely. The backoff resets to base only when a
+// capture actually succeeds, so a recovered sensor returns to normal cadence
+// immediately.
+//
+// What is NOT changed: T_COOLDOWN_MS, FIFO_MAX_RETRIES, FIFO_BREAKER_THRESHOLD,
+// the S12->S14 trip itself, the 2 s cadence, and the rule that only the drain
+// block may set the latch. The breaker still protects the bus exactly as
+// before -- this only makes its verdict recoverable instead of terminal.
+// ----------------------------------------------------------------------------
+#define FIFO_PERIODIC_INTERVAL_MS  2000UL   // ADR-0006: 2 s capture cadence
+#define FIFO_SUSPEND_RETRY_BASE_MS   60000UL   // first recovery attempt: 60 s
+#define FIFO_SUSPEND_RETRY_MAX_MS   900000UL   // ceiling: 15 min
+static uint32_t s_fifoPeriodicNextDueMs = 0;      // absolute millis() deadline
+static bool     s_fifoPeriodicSuspended = false;  // latched by the drain block
+static uint32_t s_fifoPeriodicEnqueued  = 0;      // diagnostic counters only --
+static uint32_t s_fifoPeriodicSkipped   = 0;      // never read by any decision
+static uint32_t s_fifoSuspendRetryAtMs  = 0;      // absolute recovery deadline
+static uint32_t s_fifoSuspendBackoffMs  = FIFO_SUSPEND_RETRY_BASE_MS;
+static uint32_t s_fifoSuspendRecoveries = 0;      // diagnostic counter only
+
 // ============================================================================
 // FREERTOS HANDLES
 // ============================================================================
@@ -1801,6 +2156,54 @@ SemaphoreHandle_t mutexModem      = NULL;  // Mutex for modem access
 SemaphoreHandle_t mutexAggBufs    = NULL;  // Phase 2: protects g_buf1s/10s/60s (taskAnalytics ? taskNetwork)
 SemaphoreHandle_t mutexFaultLatch = NULL;  // v3 hardened: guards g_fl + g_flCount + the "fault_latch" NVS namespace
 SemaphoreHandle_t mutexTelemBuf   = NULL;  // guards g_telemBuf + g_telemBuf* counters
+// [Phase 3B] guards g_accelSnap (Core 0 writes / Core 1 reads) -- see AccelSnapshot_t
+SemaphoreHandle_t mutexAccelSnap  = NULL;
+QueueHandle_t     queueAccelSnapshot = NULL;  // [Phase 3B] depth-1 "waveform ready" notification
+static AccelSnapshot_t g_accelSnap;           // [Phase 3B] 6144 B waveform copy + provenance
+// [Phase 3C] Core 1's private working copy. Phase 3C forbids holding the FIFO
+// snapshot mutex while DSP executes -- with an FFT in the pipeline the hold
+// would span milliseconds instead of microseconds, and Core 0 takes that mutex
+// with timeout 0, so every capture landing during a DSP pass would be dropped.
+// Core 1 therefore memcpy's g_accelSnap -> g_accelWork, releases immediately,
+// and computes against g_accelWork with no lock held at all.
+// Touched ONLY by taskAnalytics (Core 1), so it needs no lock of its own.
+static AccelSnapshot_t g_accelWork;
+// [Phase 3B] Waveforms dropped because Core 1 still held the mutex, or the
+// depth-1 queue was still full. Counted so a silent loss can never be mistaken
+// for "the sensor produced nothing"; internal diagnostic only -- deliberately
+// NOT published, since Phase 3B's approved payload field list is closed.
+static volatile uint32_t g_accelSnapDropped = 0;
+
+// [M1A] Velocity carrier: written by Core 1, read by Core 0. See VelocityCarrier_t.
+SemaphoreHandle_t mutexVelCarrier = NULL;
+static VelocityCarrier_t g_velCarrier = { 0.0f, false, 0, 0 };
+// [M1A] Latest vibration-availability verdict, for telemetry/display only.
+// Written by Core 0 immediately after each alarm evaluation; single writer.
+// Starts true: until the first fresh valid velocity arrives the product must
+// report UNAVAILABLE rather than imply a healthy reading.
+static volatile bool g_vibUnavailable = true;
+
+// ----------------------------------------------------------------------------
+// [M1B-5] TTW result, taskAnalytics (writer) -> taskNetwork (reader).
+//
+// WHY A CARRIER AND NOT A DIRECT READ: TTW needs VibHistory_LatestValid(), but
+// the M1B-1 ring has NO mutex -- it is safe today only because every reader
+// runs inside taskAnalytics, the same task that writes it. /decision is built
+// in taskNetwork, so computing TTW there would create the first cross-task ring
+// read and a real tearing risk. Instead taskAnalytics computes and publishes
+// these two scalars, exactly mirroring the existing g_trendResult pattern.
+// No new mutex is introduced, as required.
+//
+// ORDERED PUBLICATION (no lock needed, single core, volatile):
+//   to VALIDATE   : write hours, THEN status  -- a reader seeing VALID is
+//                   guaranteed the hours it then reads were already stored
+//   to INVALIDATE : write status, THEN hours  -- a reader never sees VALID
+//                   paired with a cleared hours
+// Both directions are ordered so no interleaving can pair a VALID status with
+// a stale or zeroed number.
+// ----------------------------------------------------------------------------
+static volatile float   g_ttwHours  = 0.0f;
+static volatile uint8_t g_ttwStatus = (uint8_t)VIB_TTW_THRESHOLDS_UNSET;
 
 // ============================================================================
 // SHARED VARIABLES (protected by mutex)
@@ -1844,9 +2247,12 @@ static volatile uint32_t g_flCount = 0u;
 // ใช้เก็บ telemetry snapshot ขณะ MQTT/4G offline แล้ว burst-replay เมื่อ reconnect
 //
 // Sizing:
-//   Slot size : sizeof(TelemetrySlot_t) = 72 B
+//   [M1B-7] ตัวเลขเดิม (72 B / 8 640 B) ค้างจากก่อน M1B-6 เพิ่ม 32 B velocity block
+//   ทำให้เอกสารรายงาน RAM ต่ำกว่าจริง 3 360 B — แก้ให้ตรงกับ TELEM_SLOT_EXPECTED_SIZE
+//   และ static_assert ด้านล่าง ซึ่งเป็นค่าที่ compiler ยืนยันแล้ว
+//   Slot size : sizeof(TelemetrySlot_t) = 100 B
 //   Slots     : TELEM_BUF_SIZE = 120      (60 min @ 30s/cycle NORMAL state)
-//   Total RAM : 120 × 72 B = 8 640 B ≈ 8.5 KB (static .bss — NOT heap-allocated)
+//   Total RAM : 120 × 100 B = 12 000 B ≈ 11.7 KB (static .bss — NOT heap-allocated)
 //
 // Behaviour:
 //   • Push  : overwrite oldest slot when full (drop-oldest FIFO)
@@ -1883,7 +2289,49 @@ typedef struct {
   uint8_t  machine_state;     // MachineState_t cast to uint8_t
   uint8_t  kurtosis_axis;     // dominant axis: 0=X,1=Y,2=Z
   uint8_t  prox;              // rotation signal ok flag
+
+  // ── [M1B-6] FIFO-DSP velocity, ADDITIVE ────────────────────────────────
+  // Every legacy field above keeps its exact prior meaning and its existing
+  // isRunningBuf gate until M1B-8. These are new fields, not a redefinition.
+  //
+  // INVALID IS NaN, NEVER 0.0f. The legacy rms_* fields above store literal
+  // 0.0 when the motor is stopped; that convention is deliberately NOT copied
+  // here. A stored 0.0 is a plausible-looking vibration reading that silently
+  // biases anything that aggregates it, whereas NaN cannot be mistaken for a
+  // measurement. velocity_data_valid is the sole authority, and the replay
+  // serializer omits the velocity_rms_* keys entirely when it is false.
+  float    velocity_rms_x;       // [mm/s] NaN when velocity_data_valid == false
+  float    velocity_rms_y;
+  float    velocity_rms_z;
+  float    velocity_rms_overall;
+
+  uint32_t capture_id;           // FIFO capture that produced the values
+  uint32_t capture_ts_ms;        // producer millis() at capture completion.
+                                 // Carried IN ADDITION to buffered_ts because
+                                 // buffered_ts is the RTC second at PUSH time
+                                 // and is 0 whenever the RTC is invalid -- the
+                                 // very condition (power loss) that tends to
+                                 // accompany an MQTT outage. capture_ts_ms is
+                                 // monotonic and RTC-independent, so replayed
+                                 // samples stay orderable either way.
+  uint32_t sample_rate_hz;
+  uint16_t sample_count;
+
+  bool     velocity_data_valid;  // sole authority for the four floats above
+  uint8_t  schema_version;       // 1 == this migration
 } TelemetrySlot_t;
+
+// [M1B-6] Layout guard. The size is the COMPILER-REPORTED value, not an
+// assumed packing: 68 B legacy + 32 B additive (4 floats, 3 uint32, 1 uint16,
+// 2 uint8, padded to 4-byte alignment) = 100 B. If a future edit reorders or
+// adds a field, this fails the build instead of silently changing the RAM
+// footprint of the 120-slot buffer or the bytes memcpy'd on replay.
+#define TELEM_SLOT_EXPECTED_SIZE 100u
+static_assert(sizeof(TelemetrySlot_t) == TELEM_SLOT_EXPECTED_SIZE,
+              "TelemetrySlot_t size changed unexpectedly");
+
+// [M1B-6] Schema version carried on every replayed record.
+#define TELEM_SLOT_SCHEMA_VERSION 1u
 
 // Ring buffer storage (static — data segment, not heap)
 static TelemetrySlot_t  g_telemBuf[TELEM_BUF_SIZE];
@@ -2360,23 +2808,31 @@ static void mqttCommandCallback(String &topic, String &payload) {
     return;
   }
 
-  FifoTriggerIntent_t mqttIntent{};
-  mqttIntent.source = FifoTriggerSource::REMOTE_ON_DEMAND;
-  for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && requestId[ti] != '\0'; ti++) {
-    mqttIntent.tag[ti] = requestId[ti];
-  }
-  mqttIntent.requirePermissive = true;
+  // [ADR-0006 D-1, Phase 2A] The REMOTE_ON_DEMAND FIFO producer that stood
+  // here has been REMOVED -- periodic SCHEDULED capture is the sole FIFO
+  // initiator, so a remote command can no longer start a capture.
+  //
+  // All command HANDLING above is unchanged: payload-size bound, JSON parse,
+  // action=="capture", and request_id validation all still run and still
+  // reject with their original messages.
+  //
+  // The MQTT response contract is preserved, not dropped. Previously a
+  // rejected remote request was answered by the drain block via
+  // publishMqttRejectionEvent() (Commit 7C); with no enqueue, that path would
+  // never be reached and the command would fail SILENTLY. The same helper is
+  // therefore called directly here -- same topic, same schema, same
+  // request_id echo -- reporting ERR_NOT_PERMITTED, which is precisely what
+  // an architecturally-disallowed trigger source is. Non-blocking:
+  // publishMqttRejectionEvent() routes through enqueueMqttOutbound().
+  Serial.printf("[MQTT-CMD] REJECTED request_id=%s -- remote capture disabled; "
+                "periodic capture is the sole FIFO initiator (ADR-0006)\n", requestId);
 
-  // [ARCH-INVARIANT] producer #4/4 -- enqueue only, never FifoDriver_Request().
-  // The depth-1, non-blocking send IS the duplicate/queue-depth guard, same
-  // as every existing producer -- if a trigger is already pending, this
-  // send fails and is dropped here, never retried.
-  if (xQueueSend(queueFifoTrigger, &mqttIntent, 0) != pdTRUE) {
-    Serial.printf("[MQTT-CMD] QUEUE FULL request_id=%s -- capture already pending, dropped\n",
-                  requestId);
-  } else {
-    Serial.printf("[MQTT-CMD] ACCEPTED request_id=%s source=REMOTE_ON_DEMAND\n", requestId);
+  char rejTag[FIFO_TAG_MAXLEN];
+  memset(rejTag, 0, sizeof(rejTag));
+  for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && requestId[ti] != '\0'; ti++) {
+    rejTag[ti] = requestId[ti];
   }
+  publishMqttRejectionEvent(rejTag, FifoError::ERR_NOT_PERMITTED);
 }
 
 // ============================================================================
@@ -2826,6 +3282,52 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   s->kurtosis_axis     = data->kurtosis_dominant_axis;
   s->prox              = data->prox;
 
+  // ── [M1B-6] FIFO-DSP velocity block ───────────────────────────────────
+  // Sourced from g_velCarrier, NOT from the M1B-1 ring: this function runs in
+  // taskNetwork, and the ring is only safe inside taskAnalytics. The carrier
+  // already owns mutexVelCarrier for exactly this boundary.
+  //
+  // Freshness uses the same VIB_VELOCITY_MAX_AGE_MS_TBD deadline as the alarm
+  // and trend paths, so "stale" means one thing everywhere.
+  //
+  // On ANY failure -- carrier missing, mutex busy, invalid, or stale -- the
+  // four floats are NaN and velocity_data_valid is false. There is no path
+  // that writes 0.0f to represent absent velocity.
+  s->schema_version       = (uint8_t)TELEM_SLOT_SCHEMA_VERSION;
+  s->velocity_rms_x       = NAN;
+  s->velocity_rms_y       = NAN;
+  s->velocity_rms_z       = NAN;
+  s->velocity_rms_overall = NAN;
+  s->velocity_data_valid  = false;
+  s->capture_id           = 0u;
+  s->capture_ts_ms        = 0u;
+  s->sample_rate_hz       = 0u;
+  s->sample_count         = 0u;
+
+  if (mutexVelCarrier != NULL) {
+    VelocityCarrier_t vc;
+    bool got = false;
+    if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) == pdTRUE) {
+      vc  = g_velCarrier;          // whole-struct copy: no torn read
+      got = true;
+      xSemaphoreGive(mutexVelCarrier);
+    }
+    if (got && vc.valid && vc.timestampMs != 0u) {
+      const uint32_t vAge = millis() - vc.timestampMs;   // wrap-safe
+      if (vAge <= VIB_VELOCITY_MAX_AGE_MS_TBD) {
+        s->velocity_rms_x       = vc.x;
+        s->velocity_rms_y       = vc.y;
+        s->velocity_rms_z       = vc.z;
+        s->velocity_rms_overall = vc.overall;
+        s->capture_id           = vc.captureId;
+        s->capture_ts_ms        = vc.timestampMs;
+        s->sample_rate_hz       = vc.sampleRateHz;
+        s->sample_count         = vc.sampleCount;
+        s->velocity_data_valid  = true;
+      }
+    }
+  }
+
   xSemaphoreGive(mutexTelemBuf);
 
   Serial.printf("[TelemBuf] push: count=%u/%u  overflow_total=%lu\n",
@@ -2851,11 +3353,21 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
 
 // Shared formatter for every mqttClient.publish() call site, so the same block
 // is emitted at all 8 sites without duplicating the format string 8 times.
+// [v16.5c] wasConnected defaults to true so the 5 call sites that don't pass
+// it keep byte-identical output. MQTTClient::publish()'s
+// `if (!connected()) return false;` guard returns without touching
+// _lastError -- when a prior publish() in the same cycle already dropped the
+// connection, the next topic's call hits that guard at elapsed=0ms and this
+// would otherwise re-report the FIRST failure's stale err code as if it were
+// a fresh one. Diagnostic-only: no control flow, retry, timeout, or
+// reconnect behaviour changes -- this only changes what gets printed.
 static void dbgLogMqttPublish(const char* topic, size_t payloadLen, int qos,
-                               bool result, int err, uint32_t elapsedMs) {
+                               bool result, int err, uint32_t elapsedMs,
+                               bool wasConnected = true) {
+  const char* label = result ? "OK" : (wasConnected ? "FAIL" : "NOT_CONNECTED");
   Serial.printf("[MQTT-TIMING] topic=%s payload=%u qos=%d result=%s err=%d elapsed=%lums\n",
                 topic ? topic : "(null)", (unsigned)payloadLen, qos,
-                result ? "OK" : "FAIL", err, (unsigned long)elapsedMs);
+                label, err, (unsigned long)elapsedMs);
 }
 
 // C-linkage sink for lwmqtt/client.c's timing output.
@@ -2877,6 +3389,71 @@ extern "C" void lwmqtt_dbg_log(const char* fmt, ...) {
   Serial.print(buf);
 }
 #endif  // DEBUG_MQTT_TIMING
+
+#ifdef DEBUG_MODEM_DIAG
+// ============================================================================
+// [v16.5b] Read-only modem diagnostics -- Issue #2 Phase 1
+// ============================================================================
+// Called ONLY from taskNetwork() (Core 1), which is the sole owner of
+// SerialAT. taskNetwork is single-threaded, so this can never interleave with
+// a publish, a PUBACK wait or a reconnect -- those all run to completion in
+// the same task before control reaches the call site.
+//
+// modem.sendAT()/modem.waitResponse() are public members of TinyGsmModem
+// (TinyGsmModem.tpp:91 and :142, inside the public: block opened at :59) and
+// are CALLED here, not modified -- the TinyGSM library is untouched.
+// waitResponse() internally dispatches handleURCs(), the same path
+// modemGetAvailable() already uses, so +CIPRXGET URCs continue to be consumed
+// normally and no socket data can be lost.
+//
+// Return code: TinyGsmModem.tpp:605 initialises index=0 and returns it after
+// the timeout loop expires (:657, :672), so rc==0 means TIMEOUT, rc==1 means
+// the OK terminator matched, rc==2 means ERROR. A failed or unsupported
+// command is therefore recorded and execution continues, never aborted.
+// ============================================================================
+static void modemDiagOne(const char* label, const char* cmd) {
+  String   raw;
+  uint32_t t0 = millis();
+  modem.sendAT(cmd);
+  int8_t   rc = modem.waitResponse(MODEM_DIAG_AT_TMO_MS, raw);
+  uint32_t el = millis() - t0;
+
+  raw.trim();
+  raw.replace("\r\n", " | ");   // flatten to one log line; content kept verbatim
+
+  Serial.printf("[MODEM-DIAG] t=%lu %-6s rc=%d timeout=%s elapsed=%lums raw=\"%s\"\n",
+                (unsigned long)t0, label, (int)rc,
+                (rc == 0) ? "YES" : "NO",
+                (unsigned long)el, raw.c_str());
+}
+
+// Context is read from ALREADY-CACHED state only -- no extra AT traffic, so
+// this cannot perturb the very uplink timing under measurement. In particular
+// mqttClient.connected() is deliberately NOT called here: that path reaches
+// TinyGsmClient::connected() -> modemGetConnected(), which issues an AT
+// command (visible today as "[P1] ... incl modemGetConnected").
+static void modemDiagPoll(bool mqttUp, bool gprsUp,
+                          uint32_t sincePubMs, uint32_t pubIntervalMs) {
+  uint32_t t0 = millis();
+  Serial.printf("[MODEM-DIAG] t=%lu ==== BEGIN ====\n", (unsigned long)t0);
+  Serial.printf("[MODEM-DIAG] t=%lu CONTEXT mqtt=%s gprs=%s since_pub=%lums "
+                "next_pub_in=%lums idle=YES(gated)\n",
+                (unsigned long)millis(),
+                mqttUp ? "UP" : "DOWN",
+                gprsUp ? "UP" : "DOWN",
+                (unsigned long)sincePubMs,
+                (unsigned long)(pubIntervalMs - sincePubMs));
+
+  modemDiagOne("CPSI",   "+CPSI?");    // system mode, band, cell, RSRP/RSRQ/SINR
+  modemDiagOne("CSQ",    "+CSQ");      // RSSI + BER
+  modemDiagOne("CEREG",  "+CEREG?");   // EPS registration state
+  modemDiagOne("CPSMS",  "+CPSMS?");   // Power Saving Mode configuration
+  modemDiagOne("CEDRXS", "+CEDRXS?");  // extended DRX configuration
+
+  Serial.printf("[MODEM-DIAG] t=%lu ==== END total=%lums ====\n",
+                (unsigned long)millis(), (unsigned long)(millis() - t0));
+}
+#endif  // DEBUG_MODEM_DIAG
 
 // ============================================================================
 // replayTelemBuf() — ส่ง ONE slot ที่เก่าที่สุดออก MQTT แล้ว pop ออก
@@ -2903,7 +3480,12 @@ static bool replayTelemBuf() {
   // --- Build replay JSON (ใช้ /sensor topic เดียวกัน + replay fields พิเศษ) ---
   // ขยาย StaticJsonDocument จาก 960 เป็น 1024 เพื่อรองรับ field เพิ่ม 3 ตัว
   // ขนาดยังคงอยู่บน stack ของ taskNetwork (stack size ตรวจสอบ watermark แล้ว)
-  StaticJsonDocument<1024> r;
+  // [M1B-6] 1024 -> 1536: live /sensor measures 873-891 B and the additive
+  // velocity block adds ~190 B, which would overflow the old 1024 B buffer
+  // and hit the "[TelemBuf] WARN: replay JSON truncated" path. Replay uses
+  // mqttClient.publish() directly, so MQTT_OUTBOUND_PAYLOAD_MAX does not
+  // apply; taskNetwork has ~17 KB stack free.
+  StaticJsonDocument<1536> r;
 
   r["plant"]              = PLANT_ID;
   r["machine_id"]         = MACHINE_ID;
@@ -3002,13 +3584,35 @@ static bool replayTelemBuf() {
                          (snap.kurtosis_axis == 1) ? "Y" : "Z";
   r["kurtosis_axis"] = kaxisStr;
 
+  // ── [M1B-6] FIFO-DSP velocity, additive ───────────────────────────────
+  // Legacy rms/vx/vy/vz/peak/crest_factor/kurtosis/freq/rpm/temp above are
+  // untouched and still VRMS-derived; this tag makes that explicit in-band,
+  // matching what live /sensor already publishes.
+  r["vibration_source_legacy"] = "vrms_register";
+  r["schema_version"]          = snap.schema_version;
+  r["velocity_data_valid"]     = snap.velocity_data_valid;
+  if (snap.velocity_data_valid) {
+    // Published ONLY when valid. When invalid the four values are NaN, which
+    // JSON cannot represent -- omitting the keys is what prevents a NaN from
+    // being coerced into a 0 or a null that a consumer might read as a real
+    // measurement of zero vibration.
+    r["velocity_rms_x"]       = roundf(snap.velocity_rms_x       * 1000.0f) / 1000.0f;
+    r["velocity_rms_y"]       = roundf(snap.velocity_rms_y       * 1000.0f) / 1000.0f;
+    r["velocity_rms_z"]       = roundf(snap.velocity_rms_z       * 1000.0f) / 1000.0f;
+    r["velocity_rms_overall"] = roundf(snap.velocity_rms_overall * 1000.0f) / 1000.0f;
+    r["capture_id"]           = snap.capture_id;
+    r["capture_ts_ms"]        = snap.capture_ts_ms;
+    r["sample_rate_hz"]       = snap.sample_rate_hz;
+    r["sample_count"]         = snap.sample_count;
+  }
+
   // time_synced — ถูก set ใน block ด้านบนแล้วถ้า bufTsValid=false
   // ถ้า bufTsValid=true ใช้ค่าจาก NTP sync state
   if (bufTsValid) {
     r["time_synced"] = g_timeSync.synced;
   }
 
-  char buf[1024];
+  char buf[1536];  // [M1B-6] 1024 -> 1536, matches the enlarged replay doc
   size_t sz = serializeJson(r, buf, sizeof(buf));
   if (sz == 0 || sz >= sizeof(buf) - 1) {
     Serial.printf("[TelemBuf] WARN: replay JSON truncated sz=%u\n", (unsigned)sz);
@@ -3158,7 +3762,19 @@ static void checkAndLatchFault(const VibrationData_t* data,
 
   g_fl.code     = evCode;
   g_fl.ts       = epochNow;
-  g_fl.rms      = data->rms_overall;
+  // [M1A] Latch the value that actually drove the decision: velocity_rms_overall
+  // [mm/s] from FIFO RAW -> DSP, not the deprecated VRMS register figure.
+  // Control only reaches here when suppressLatch was false, which already
+  // required a valid, fresh carrier -- so this read cannot record a stale or
+  // unavailable value. The fallback below exists solely so the field is never
+  // indeterminate if that invariant is ever broken by a future edit.
+  {
+    float latchedVel = 0.0f;
+    if (!readVelocityForAlarm(&latchedVel, NULL)) {
+      latchedVel = 0.0f;
+    }
+    g_fl.rms = latchedVel;   // [mm/s] velocity_rms_overall (unit unchanged)
+  }
   g_fl.kurtosis = data->kurtosis_max;
   g_flCount++;
 
@@ -3209,39 +3825,18 @@ static void checkAndLatchFault(const VibrationData_t* data,
                   (unsigned long)snapCount);
   }
 
-  // [Production Trigger, Commit 5] A new fault latch has just been asserted
-  // (fresh latch or a higher-severity OVERWRITE -- the SKIP branch above
-  // already returned early for anything else, so every path that reaches
-  // here is a genuinely new latch). taskStateMachine() (this function's
-  // caller, Core 0) is a DIFFERENT task from taskModbusRead() (also Core 0,
-  // but a distinct FreeRTOS task/priority) -- per the Trigger Broker's own
-  // contract (Commit 1), this NEVER calls FifoDriver_Request() directly; it
-  // only enqueues onto queueFifoTrigger, exactly like the commissioning
-  // producer. The depth-1, non-blocking xQueueSend(...,0) IS the duplicate-
-  // trigger guard: if an earlier trigger (this or the commissioning
-  // one-shot) is still undrained, this send fails and is dropped here --
-  // no second queue entry, no retry. If the queue is empty because a
-  // capture is already ACTIVE or in COOLDOWN, this send succeeds, but
-  // FifoDriver_Request()'s own admission gates (S1_IDLE, cooldown, circuit
-  // breaker, result-held -- fifo_driver.cpp, unmodified) then reject it
-  // with the appropriate ERR_* code on the next taskModbusRead() drain
-  // tick. Either way: at most one FifoDriver_Request() attempt per latch,
-  // never retried (requirement 5).
-  {
-    FifoTriggerIntent_t faultIntent{};
-    faultIntent.source = FifoTriggerSource::FAULT_LATCH;
-    const char* faultTag = "fault_latch";
-    for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && faultTag[ti] != '\0'; ti++) {
-      faultIntent.tag[ti] = faultTag[ti];
-    }
-    faultIntent.requirePermissive = true;
-    // [ARCH-INVARIANT] producer #1/3 -- enqueue only, never FifoDriver_Request().
-    if (xQueueSend(queueFifoTrigger, &faultIntent, 0) != pdTRUE) {
-      Serial.println("[LATCH] FifoTriggerIntent enqueue SKIPPED (queue full -- capture already pending)");
-    } else {
-      Serial.println("[LATCH] FifoTriggerIntent enqueued source=FAULT_LATCH");
-    }
-  }
+  // [ADR-0006 D-1, Phase 2A] The FAULT_LATCH FIFO producer that stood here
+  // (Commit 5, later narrowed to BEARING/CRITICAL by v16.6j) has been REMOVED.
+  // A fault no longer starts a FIFO capture; it consumes the most recent
+  // completed periodic capture instead, so the waveform attached to a fault
+  // event is at most one capture period old. Periodic SCHEDULED capture is now
+  // the sole FIFO initiator.
+  //
+  // Everything this function does ABOVE is unchanged and still runs for every
+  // event type: evCode derivation, severity arbitration/SKIP/OVERWRITE, the
+  // g_fl latch, NVS persistence, and the [LATCH]/[NVS_BEGIN]/[NVS_END] logs.
+  // Only the capture request is gone -- fault DETECTION and fault EVENT
+  // generation are untouched.
 
   return;  // mutex ถูก release ไปแล้วข้างบน ไม่ต้องทำอีก
 }
@@ -3696,8 +4291,10 @@ static void processRPM(VibrationData_t* data) {
   // Serial I/O from an IRAM ISR is unsafe and would itself alter timing,
   // which this diagnostic build must not do.
   if (newPulse) {
-    Serial.printf("[PULSE]\nintervalUs=%lu rpmRaw=%.1f pulseCount=%lu\n",
-                  (unsigned long)interval, g_diagRpmRaw, (unsigned long)pulseCopy);
+    // [v16.5e] Serial output silenced for log readability -- calculation
+    // above (g_diagRpmRaw/g_diagPulseCount/g_diagTimeSincePulseMs) unchanged.
+    // Serial.printf("[PULSE]\nintervalUs=%lu rpmRaw=%.1f pulseCount=%lu\n",
+    //               (unsigned long)interval, g_diagRpmRaw, (unsigned long)pulseCopy);
   }
 
   // ---------- Motor State Machine ----------
@@ -3818,12 +4415,111 @@ static void processRPM(VibrationData_t* data) {
 // inlined into captureTelemetrySnapshot()) so the capture function stays a
 // pure data-movement layer: it invokes an already-named decision, it does
 // not itself contain the decision's arithmetic.
-static int computeHealthScore(const VibrationData_t* data) {
-  if (data->motor_state != 2) {  // ไม่ประเมิน health ขณะ STOPPED/STARTING/STOPPING
-    return 100;
+// [M1A] Are BOTH vibration thresholds explicitly configured and coherent?
+// Until this returns true no vibration WARNING/CRITICAL decision may be made
+// and no health score may be normalized. Both operands are currently the
+// negative VIB_THRESHOLD_UNSET sentinel, so this returns false by construction
+// -- it is not a runtime flag someone forgot to set, it is the documented
+// state of the product pending re-baselining.
+static inline bool vibThresholdsConfigured() {
+  return (VIB_WARNING_MMS  > 0.0f) &&
+         (VIB_CRITICAL_MMS > 0.0f) &&
+         (VIB_CRITICAL_MMS > VIB_WARNING_MMS);
+}
+
+// [M1A] Core 0's read of the Core 1 velocity carrier, with freshness applied.
+//
+// Returns true ONLY when a genuinely usable velocity figure exists:
+//   - carrier readable
+//   - carrier.valid  (the DSP produced a real result for that capture)
+//   - age <= VIB_VELOCITY_MAX_AGE_MS_TBD
+//
+// A false return means VIBRATION_UNAVAILABLE. It explicitly does NOT mean
+// "zero vibration": *outMmS is left at 0.0f purely so the caller never reads
+// an indeterminate float, and every caller is required to branch on the
+// return value, never on the magnitude.
+//
+// Short mutex timeout: this runs in the 250 ms Core 0 poll loop, so it must
+// never stall the Modbus cadence. A timeout is treated as unavailable, which
+// is the fail-closed direction.
+static bool readVelocityForAlarm(float* outMmS, uint32_t* outAgeMs) {
+  if (outMmS)   *outMmS   = 0.0f;
+  if (outAgeMs) *outAgeMs = UINT32_MAX;
+
+  if (mutexVelCarrier == NULL) {
+    return false;
   }
-  float normalized = (data->rms_overall - BASELINE_RMS) /
-                     (CRITICAL_RMS - BASELINE_RMS) * 100.0f;
+
+  VelocityCarrier_t snap;
+  if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) != pdTRUE) {
+    return false;  // fail closed
+  }
+  snap = g_velCarrier;               // whole-struct copy: no torn read
+  xSemaphoreGive(mutexVelCarrier);
+
+  if (!snap.valid || snap.timestampMs == 0u) {
+    return false;
+  }
+
+  // millis() wraps at ~49.7 days; unsigned subtraction stays correct across
+  // the wrap, so this needs no special-casing.
+  const uint32_t age = millis() - snap.timestampMs;
+  if (outAgeMs) *outAgeMs = age;
+  if (age > VIB_VELOCITY_MAX_AGE_MS_TBD) {
+    return false;  // stale -> VIBRATION_UNAVAILABLE
+  }
+
+  if (outMmS) *outMmS = snap.overall;
+  return true;
+}
+
+// [M1A] Sentinel for "health score could not be determined". Distinct from any
+// real 0..100 score. Consumers MUST treat this as UNKNOWN and must not render
+// or trend it as a low score.
+#define HEALTH_SCORE_UNKNOWN (-1)
+
+// [M1A] Health score now derives from velocity_rms_overall, not the deprecated
+// VRMS-register rms_overall.
+//
+// Returns HEALTH_SCORE_UNKNOWN whenever a score cannot be honestly computed:
+//   - motor not RUNNING                    (pre-existing semantics: not assessed)
+//   - velocity unavailable or stale        (M1A requirement 7)
+//   - vibration thresholds not configured  (M1A requirement 6)
+//
+// The threshold case matters and is easy to miss: the legacy normalization
+// span BASELINE_RMS..CRITICAL_RMS was calibrated against the VRMS-register
+// metric. Re-using that span for velocity would be inventing a threshold
+// mapping by the back door -- exactly what requirement 6 forbids -- so the
+// score is reported UNKNOWN rather than computed from an invalid scale.
+static int computeHealthScore(const VibrationData_t* data) {
+  // [M1A-CLEANUP] STOPPED/STARTING/STOPPING now reports UNKNOWN, not 100.
+  //
+  // The previous `return 100` was the pre-M1A convention "not assessed => assume
+  // healthy". Once M1A began publishing vibration_status, that produced a
+  // self-contradicting message: health_score=100 (healthy) alongside
+  // vibration_status=UNAVAILABLE (no vibration evidence exists) -- observed on
+  // 13 consecutive /decision samples during the 2026-08-19 validation run.
+  //
+  // UNKNOWN is the honest answer: when the machine is not running there is no
+  // vibration evidence, so no health claim can be made in either direction.
+  // This asserts nothing bad about the machine -- see the callers, which keep
+  // alarm_code=0/alarm_level=NORMAL for non-RUNNING states, so a stopped motor
+  // still raises no fault. It only stops asserting something GOOD that was
+  // never measured.
+  if (data->motor_state != 2) {
+    return HEALTH_SCORE_UNKNOWN;
+  }
+
+  float vibMmS = 0.0f;
+  if (!readVelocityForAlarm(&vibMmS, NULL)) {
+    return HEALTH_SCORE_UNKNOWN;   // VIBRATION_UNAVAILABLE
+  }
+  if (!vibThresholdsConfigured()) {
+    return HEALTH_SCORE_UNKNOWN;   // no valid scale exists yet
+  }
+
+  float normalized = (vibMmS - VIB_WARNING_MMS) /
+                     (VIB_CRITICAL_MMS - VIB_WARNING_MMS) * 100.0f;
   return (int)max(0.0f, min(100.0f, roundf(100.0f - normalized)));
 }
 
@@ -3958,20 +4654,56 @@ static const uint32_t SENSOR_RESTART_COOLDOWN = 15000; // shared cooldown ระ
 /**
  * Re-configure WTVB02-485 หลัง reboot ผ่าน Modbus (v15.7)
  *
- * [PD-0003] ลำดับ config จริงที่ทำงานอยู่ (DRM ยังไม่เขียน -- ดู [PATCHED v16.3] ด้านล่าง):
+ * [PD-0005] ลำดับ config จริงที่ทำงานอยู่ (DRM ยังไม่เขียน -- ดู [PATCHED v16.3] ด้านล่าง):
  *   1. Unlock#1 (0x69=0xB588) → MODE=FreqDomain    (0x07=0x0002)
- *   2. Unlock#2 (0x69=0xB588) → SR=SENSOR_SR_1K    (0x29=0x0005)  [SR5, 1 kHz]
- *      → 500ms settle → one-shot read-back of REG_SAMPLE_RATE → decode via SR0-SR9 lookup (Serial only)
+ *   2. Unlock#2 (0x69=0xB588) → SR=SENSOR_SR_PRODUCTION (0x29)
+ *      → 500ms settle → one-shot read-back of REG_SAMPLE_RATE → decode via SR0-SR9 lookup
+ *      + verify against SENSOR_SR_PRODUCTION (Serial only)
  *   3. Unlock#3 (0x69=0xB588) → Save               (0x00=0x0000)
  * ไม่มีการเขียน REG_DRM (0x2B) ในฟังก์ชันนี้ -- sensor ใช้ค่าที่ persist อยู่ใน NVM ของตัวมันเอง
  *
- * [PD-0003] SR5 (1 kHz) is the current write value, wired into the write path below.
- * (Previously SR6/512Hz under PD-0002; changed to SR5/1kHz -- update again if this changes.)
+ * [PD-0006] The write value and the verify value are both SENSOR_SR_PRODUCTION
+ * (currently SR4/2kHz) -- see its definition for the rate and the rationale.
  *
  * @return true  ทุก step สำเร็จ
  *         false มี step ใดล้มเหลว (log warning แต่ caller ยังนับ restart ว่า OK)
  */
+// [Phase 3A] Maps a raw REG_SAMPLE_RATE value to its documented rate in Hz.
+// Table is WTVB02-485 Data Sheet & User Manual V260406 Sec 6.4.12 verbatim
+// (0x00 32K .. 0x09 64Hz). Returns 0 for any undocumented value, so an
+// unexpected register read can never be mistaken for a valid rate.
+//
+// Defined HERE, not beside g_sensorSrHzVerified, because the .ino
+// auto-prototype generator emits all prototypes before the file's first
+// function definition -- placing this helper up with the globals would put
+// those prototypes ahead of the typedefs they reference (CLAUDE.md).
+static uint32_t sensorSrIndexToHz(uint16_t srIndex) {
+  switch (srIndex) {
+    case 0x00: return 32000u;
+    case 0x01: return 16000u;
+    case 0x02: return  8000u;
+    case 0x03: return  4000u;
+    case 0x04: return  2000u;   // SR4 -- current production
+    case 0x05: return  1000u;
+    case 0x06: return   512u;
+    case 0x07: return   256u;
+    case 0x08: return   128u;
+    case 0x09: return    64u;
+    default:   return     0u;   // undocumented -> provenance NOT established
+  }
+}
+
 static bool reconfigSensorAfterRestart() {
+  // [Phase 3A] INVALIDATE sample-rate provenance for the whole duration of
+  // reconfiguration. Entering here means the sensor is being (re)configured
+  // -- possibly after a restart that reverted its NVM -- so any previously
+  // verified rate is no longer trustworthy until this run's own read-back
+  // re-establishes it. Fail-closed: if this function is interrupted, fails,
+  // or the read-back mismatches, provenance simply stays UNKNOWN and captures
+  // taken meanwhile report srHz == 0 rather than a stale or assumed rate.
+  g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+  g_sensorSrHzVerified    = 0;
+
   // [PATCHED v16.1] reconfigSensorAfterRestart()
   //
   // การเปลี่ยนแปลงจาก v16.0:
@@ -3983,9 +4715,9 @@ static bool reconfigSensorAfterRestart() {
   //      เดิม: unlock FAIL แต่ยัง write ต่อ → register อาจถูกเขียนโดยไม่ผ่าน unlock จริง
   //      ใหม่: unlock FAIL → skip write step นั้น + set allOk=false + log ชัดเจน
   //
-  //   3. ลำดับ steps ตาม WTVB02 manual §6.2 และ §6.4.1 ที่ทำงานอยู่จริง (หลัง [PD-0003] เปลี่ยนเป็น SR5/1kHz):
+  //   3. ลำดับ steps ตาม WTVB02 manual §6.2 และ §6.4.1 ที่ทำงานอยู่จริง (หลัง [PD-0006] ใช้ SENSOR_SR_PRODUCTION):
   //      Step 1: Unlock → MODE=0x02(0x07=0x0002)  [FreqDomain: ให้ CF/VRMS/Kurtosis]
-  //      Step 2: Unlock → SR=SENSOR_SR_1K (0x29=0x0005) → 500ms → Read-back + decode (Serial only)
+  //      Step 2: Unlock → SR=SENSOR_SR_PRODUCTION (0x29) → 500ms → Read-back + decode + verify (Serial only)
   //      Step 3: Unlock → Save     (0x00=0x0000)
   //      (DRM=0x02 (0x2B) ไม่ได้เขียนในฟังก์ชันนี้)
 
@@ -4000,8 +4732,8 @@ static bool reconfigSensorAfterRestart() {
   //   - Single unlock: SR=OK, MODE=FAIL, Save=OK → MODE ต้องการ unlock ใหม่
   //   - DRM ถูกลบออกเพราะ FAIL ทุกครั้งและไม่เกี่ยวกับ CF/VRMS
   //
-  // [PD-0003] เขียน SENSOR_SR_1K (0x0005), ไม่ใช่ SENSOR_SR_512 (SR6) หรือ SENSOR_SR_16K เดิม
-  // SR5 (1 kHz) is the current write value, wired into the write path below.
+  // [PD-0006] เขียน SENSOR_SR_PRODUCTION (ปัจจุบัน = SENSOR_SR_2K, 0x0004)
+  // -- ค่าเดียวที่ทั้ง write และ verify ใช้ร่วมกัน (ดูนิยามของ SENSOR_SR_PRODUCTION)
   // Read-back placed AFTER the 500ms settle delay (ไม่ใช่ทันทีหลัง write) -- หลักฐานเดียวที่มี (v16.3b)
   // คือ settle delay มีไว้เพื่อความน่าเชื่อถือของ transaction ถัดไป ซึ่ง read ก็นับเป็น transaction
   //
@@ -4033,11 +4765,11 @@ static bool reconfigSensorAfterRestart() {
   vTaskDelay(pdMS_TO_TICKS(500));  // [v16.3b] 100→500ms: sensor ต้องการเวลา settle หลัง MODE write
 
   // ------------------------------------------------------------------
-  // Step 2: Unlock + SR = SENSOR_SR_1K (0x0005, 1 kHz)
-  // [PD-0003] SR5 (1 kHz) is the current write value, wired into the write path.
-  // (Previously SR6/512Hz under PD-0002.)
-  // Includes one-shot read-back + SR0-SR9 lookup decode, Serial only
-  // (no retry, no MQTT, no struct, no analytics).
+  // Step 2: Unlock + SR = SENSOR_SR_PRODUCTION
+  // [PD-0006] The rate itself is chosen at SENSOR_SR_PRODUCTION's definition,
+  // not here -- this block writes and verifies whatever that resolves to.
+  // Includes one-shot read-back + SR0-SR9 lookup decode + verify against
+  // SENSOR_SR_PRODUCTION, Serial only (no retry, no MQTT, no struct, no analytics).
   // ------------------------------------------------------------------
   Serial.printf("[SENSOR-CFG] [Unlock for SR]...");
   result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
@@ -4048,8 +4780,10 @@ static bool reconfigSensorAfterRestart() {
     Serial.println(" + OK");
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    Serial.printf("[SENSOR-CFG] SR5 (1 kHz) (0x%02X=0x%04X)...", REG_SAMPLE_RATE, SENSOR_SR_1K);
-    result = modbus.writeSingleRegister(REG_SAMPLE_RATE, SENSOR_SR_1K);
+    // [PD-0006] Label no longer hard-codes a rate name -- the raw value below
+    // is the authority, and the decoded name is printed by the read-back.
+    Serial.printf("[SENSOR-CFG] SR write (0x%02X=0x%04X)...", REG_SAMPLE_RATE, SENSOR_SR_PRODUCTION);
+    result = modbus.writeSingleRegister(REG_SAMPLE_RATE, SENSOR_SR_PRODUCTION);
     if (result != modbus.ku8MBSuccess) {
       Serial.printf(" x FAILED (err=%d)\n", result);
       allOk = false;
@@ -4079,6 +4813,34 @@ static bool reconfigSensorAfterRestart() {
         Serial.printf("[SR] Readback = %s\n", srLabel);
       } else {
         Serial.printf("[SR] Unexpected value = 0x%04X\n", srReadback);
+      }
+      // [PD-0005] Transaction success alone does not prove the sensor is
+      // actually running at the intended rate -- compare the decoded value
+      // against the intended rate explicitly. A mismatch here (e.g. sensor
+      // silently rejected the write, or reverted to a stale NVM value) must
+      // fail configuration the same way a transaction error already does,
+      // not just log a label and continue.
+      // [PD-0006] Verifies against SENSOR_SR_PRODUCTION -- the same constant
+      // the write above used, so this check can never fail-closed against a
+      // rate the firmware did not actually request.
+      // [Phase 3A] Latch VERIFIED provenance. Deliberately placed so it runs
+      // only when the read-back decoded to a documented SR index (srLabel !=
+      // NULL) AND equals the intended rate -- i.e. exactly the same condition
+      // that lets configuration be declared OK below. A mismatch or an
+      // undocumented value leaves the globals at UNKNOWN/0, which downstream
+      // must treat as "no provenance" rather than assuming 2 kHz.
+      if (srLabel != NULL && srReadback == SENSOR_SR_PRODUCTION) {
+        uint32_t srHz = sensorSrIndexToHz(srReadback);
+        if (srHz != 0u) {
+          g_sensorSrIndexVerified = srReadback;
+          g_sensorSrHzVerified    = srHz;
+        }
+      }
+
+      if (srReadback != SENSOR_SR_PRODUCTION) {
+        Serial.printf("[SR] MISMATCH: readback=0x%04X expected=0x%04X (SENSOR_SR_PRODUCTION) -- SR config FAILED\n",
+                      srReadback, SENSOR_SR_PRODUCTION);
+        allOk = false;
       }
     } else {
       Serial.println("[SR] Readback FAILED");
@@ -4310,8 +5072,80 @@ bool modemConnectGPRS() {
   Serial.println("[Modem] Waiting for network registration...");
   g_network.modemState = MODEM_STATE_SEARCHING;
 
-  // Wait for network registration (30 seconds)
-  modem.waitForNetwork(30000L);
+  // [R-1] FIX-WDT AT THE BLOCKING CALLEE.
+  //
+  // waitForNetwork(30000L) below blocks for the FULL 30 s whenever there is no
+  // usable RF -- and the Network4G task watchdog timeout is also 30 s
+  // (esp_task_wdt_config_t{.timeout_ms = 30000}). A blocking call exactly equal
+  // to the watchdog budget, with no feed inside it, fires the watchdog every
+  // time rather than occasionally: this is deterministic, not a race.
+  //
+  // Reproduced on hardware at ~4 m 20 s of RF loss on BOTH the M1B-5 and M1B-6
+  // binaries (same Network4G/CPU1 signature, same rst:0xc), which is what
+  // established it as pre-existing and unrelated to the M1B chain. The 4.3 min
+  // figure is just when the 30/60/120 s MQTT backoff ladder reaches its third
+  // consecutive failure and calls modemConnectGPRS() from the reinit branch.
+  //
+  // v16.6d already identified this exact hazard and bracketed the BOOT call
+  // site (see the "[v16.6d] FIX-WDT: modemConnectGPRS() -> waitForNetwork(30000L)
+  // may block up to 30s" comment beside the boot call). The reinit call site
+  // reached from taskNetwork's "3 consecutive MQTT failures -- reinit modem"
+  // branch was never given the same bracket. Feeding here, inside the callee,
+  // covers EVERY call site including any added later -- which is why this is
+  // fixed at the callee rather than by bracketing a second caller.
+  //
+  // A watchdog feed has no side effects: it does not touch the modem, the
+  // network state machine, the backoff ladder, or any timing.
+  // [R-1B] CHUNKED, WATCHDOG-FED REGISTRATION WAIT.
+  //
+  // R-1 fed immediately before and after waitForNetwork(30000L) and still
+  // WDT'd -- three times on hardware, at 30.007 s after the "Waiting for
+  // network registration..." print. That is the whole point: the TWDT timeout
+  // is ALSO 30 s, so a single call whose blocking duration EQUALS the entire
+  // watchdog budget cannot be rescued by feeding outside it. Feeding around
+  // the call was never going to work; the call itself has to be split.
+  //
+  // Splitting is safe because the library implementation is stateless --
+  // TinyGSM TinyGsmModem.tpp:774-782 waitForNetworkImpl():
+  //     for (uint32_t start = millis(); millis() - start < timeout_ms;) {
+  //       if (thisModem().isNetworkConnected()) { return true; }
+  //       delay(250);
+  //     }
+  //     return false;
+  // `start` is a local initialised on every entry and each iteration issues an
+  // independent AT+CGREG? (SIM7600 isNetworkConnectedImpl, TinyGsmClientSIM7600.h
+  // :243). There is no session, handle or accumulated timer, so six 5 s calls
+  // are semantically identical to one 30 s call -- they merely cost ~5 extra
+  // CGREG polls at the chunk seams, on a link already polling every 250 ms.
+  // SIM7600 does not override waitForNetwork (only TinyGsmClientXBee.h:802 does),
+  // so the template above is what actually runs here.
+  //
+  // Result: max unfed block 5 s against a 30 s watchdog (6x margin instead of
+  // R-1's 1.0x equality), total budget still 30 s, and early exit via the bool
+  // return value that the previous code discarded.
+  const uint32_t R1B_TOTAL_MS = 30000UL;
+  const uint32_t R1B_CHUNK_MS = 5000UL;
+  bool r1bRegistered = false;
+
+  for (uint32_t waited = 0;
+       waited < R1B_TOTAL_MS;
+       waited += R1B_CHUNK_MS) {
+
+    esp_task_wdt_reset();
+
+    if (modem.waitForNetwork(R1B_CHUNK_MS)) {
+      r1bRegistered = true;
+      break;
+    }
+
+    esp_task_wdt_reset();
+  }
+
+  // Deliberately unused: the pre-existing isNetworkConnected() check below
+  // remains the single authority on registration, so downstream behaviour is
+  // byte-for-byte the same decision it always made. r1bRegistered exists only
+  // to terminate the loop early.
+  (void)r1bRegistered;
 
   if (modem.isNetworkConnected()) {
     Serial.println("[Modem] Network registered!");
@@ -4331,7 +5165,14 @@ bool modemConnectGPRS() {
     Serial.printf("[Modem] Connecting to GPRS APN: %s\n", APN);
     g_network.modemState = MODEM_STATE_GPRS_CONNECTING;
 
-    if (modem.gprsConnect(g_cfgApn, GPRS_USER, GPRS_PASS)) {
+    // [R-1] gprsConnect() performs PDP activation over AT and can block for
+    // several seconds on a marginal link. Feeding immediately after it keeps
+    // the remainder of this function (operator/IP queries, and the caller's
+    // subsequent work) inside a fresh 30 s window rather than whatever was
+    // left after registration.
+    const bool r1GprsOk = modem.gprsConnect(g_cfgApn, GPRS_USER, GPRS_PASS);
+    esp_task_wdt_reset();
+    if (r1GprsOk) {
       Serial.println("[Modem] GPRS connected!");
       g_network.gprsConnected = true;
       g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
@@ -4642,12 +5483,16 @@ static bool readCurrentSensor(uint16_t &milliAmps) {
   bool success = (r == modbus.ku8MBSuccess);
   if (success) {
     milliAmps = modbus.getResponseBuffer(0);
-    Serial.printf("[CURRENT] raw=%u mA\n", milliAmps);  // [v16.6c] diagnostic only
+    // [v16.5e] Serial output silenced for log readability -- milliAmps/
+    // success return value unchanged.
+    // Serial.printf("[CURRENT] raw=%u mA\n", milliAmps);  // [v16.6c] diagnostic only
   } else {
     // [v16.6c] diagnostic only -- current_read_errors/current_valid handling
     // is unchanged, still owned entirely by readCTR4A01Current() below.
-    Serial.printf("[CURRENT] FAIL rc=0x%02X (%s) elapsed=%lu ms\n",
-                  r, modbusRcName(r), (unsigned long)elapsedMs);
+    // [v16.5e] Serial output silenced for log readability -- r/elapsedMs/
+    // success return value unchanged.
+    // Serial.printf("[CURRENT] FAIL rc=0x%02X (%s) elapsed=%lu ms\n",
+    //               r, modbusRcName(r), (unsigned long)elapsedMs);
   }
   return success;
 }
@@ -4687,16 +5532,16 @@ static bool readCTR4A01Current(float &amps) {
     // buildMotorStateEvidence(), which never references CT_TURNS/CT_RATIO_*.
     static uint32_t s_lastMeasDiagMs = 0;
     uint32_t nowMeasMs = millis();
-    if (nowMeasMs - s_lastMeasDiagMs >= 1000) {
+    if (nowMeasMs - s_lastMeasDiagMs >= 10000) {
       s_lastMeasDiagMs = nowMeasMs;
       float scale = (rawCurrentA != 0.0f) ? (engineeringCurrentA / rawCurrentA) : 0.0f;
-      LOGT("[CURRENT_DIAG]\r\n");
-      LOGT("rawA=%.3f\n",              rawCurrentA);
-      LOGT("engineeringA=%.3f\n",       engineeringCurrentA);
-      LOGT("ctTurns=%d\n",              (int)CT_TURNS);
-      LOGT("ctRatioPrimaryA=%.3f\n",    (float)CT_RATIO_PRIMARY_A);
-      LOGT("ctRatioSecondaryA=%.3f\n",  (float)CT_RATIO_SECONDARY_A);
-      LOGT("scale=%.3f\n",              scale);
+      LOGI("[CURRENT_DIAG]\r\n");
+      LOGI("rawA=%.3f\n",              rawCurrentA);
+      LOGI("engineeringA=%.3f\n",       engineeringCurrentA);
+      LOGI("ctTurns=%d\n",              (int)CT_TURNS);
+      LOGI("ctRatioPrimaryA=%.3f\n",    (float)CT_RATIO_PRIMARY_A);
+      LOGI("ctRatioSecondaryA=%.3f\n",  (float)CT_RATIO_SECONDARY_A);
+      LOGI("scale=%.3f\n",              scale);
     }
 #endif
   }
@@ -4924,6 +5769,15 @@ static void handleFifoCaptureCompletion() {
                 (unsigned long)result.captureId, fifoTriggerSourceStr(result.triggerSource),
                 fifoErrorStr(result.error), (int)enqueued, (unsigned)szEvt);
 
+  // [Phase 2D Option A] A capture that actually succeeded proves the fault
+  // cleared, so collapse the escalated recovery backoff back to base. Without
+  // this, one bad episode would leave a healthy sensor permanently on a
+  // 15-minute recovery ceiling. Read-only w.r.t. the driver; touches no
+  // capture, retry, breaker, cooldown or cadence state.
+  if (result.error == FifoError::NONE) {
+    s_fifoSuspendBackoffMs = FIFO_SUSPEND_RETRY_BASE_MS;
+  }
+
 #ifdef DEBUG_FIFO_DUMP
   // [Phase 7A] Debug-only, additive to everything above -- MQTT payload
   // (evDoc/evBuf/enqueueMqttOutbound) already fully built and enqueued by
@@ -4937,6 +5791,51 @@ static void handleFifoCaptureCompletion() {
     DumpFifoCaptureCsv(result);
   }
 #endif  // DEBUG_FIFO_DUMP
+
+  // [Phase 3B] Waveform hand-off to Core 1 -- the ONLY place result.x/y/z are
+  // read in a production build. This is a memcpy and nothing else: no floating
+  // point, no RMS, no serialization. The Phase 3B architecture forbids running
+  // DSP while the FIFO result is held, and this is what makes that possible --
+  // by the time Core 1 touches a single sample, the arena has been released
+  // back to the driver below.
+  //
+  // The validity gate is applied HERE, before the copy, so an invalid capture
+  // costs nothing: spec's "sample_count == 1024 && error == NONE && srHz != 0,
+  // otherwise data_valid = false, do not calculate". VibAccel_ComputeRms()
+  // re-checks the same conditions independently on Core 1 -- the duplication is
+  // deliberate, since the module is separately host-tested and must not depend
+  // on a caller having filtered its input.
+  if (result.error == FifoError::NONE &&
+      result.sampleCount == VIB_ACCEL_REQUIRED_SAMPLES &&
+      result.srHz != 0u &&
+      result.x != NULL && result.y != NULL && result.z != NULL &&
+      mutexAccelSnap != NULL && queueAccelSnapshot != NULL) {
+
+    // timeout 0: taskModbusRead is the time-critical task and must never block
+    // on analytics. If Core 1 still holds the buffer, drop this waveform and
+    // count it -- FIFO is best-effort (Phase 3 decision #3); the Modbus poll
+    // cadence is not negotiable.
+    if (xSemaphoreTake(mutexAccelSnap, 0) == pdTRUE) {
+      memcpy(g_accelSnap.x, result.x, sizeof(g_accelSnap.x));
+      memcpy(g_accelSnap.y, result.y, sizeof(g_accelSnap.y));
+      memcpy(g_accelSnap.z, result.z, sizeof(g_accelSnap.z));
+      g_accelSnap.captureId   = result.captureId;
+      g_accelSnap.sampleCount = result.sampleCount;
+      g_accelSnap.srHz        = result.srHz;
+      xSemaphoreGive(mutexAccelSnap);
+
+      // Non-blocking send on a depth-1 queue. A full queue means Core 1 has not
+      // yet consumed the previous notification; the buffer above already holds
+      // the newer waveform, so the stale notification still resolves to fresh
+      // data and only the older waveform is lost.
+      AccelSnapshotReady_t ready = { result.captureId };
+      if (xQueueSend(queueAccelSnapshot, &ready, 0) != pdTRUE) {
+        g_accelSnapDropped++;
+      }
+    } else {
+      g_accelSnapDropped++;
+    }
+  }
 
   // Mandatory (SDS A-6/A-7 ownership contract): release on this, the only
   // path that reaches here, regardless of whether the enqueue above
@@ -5003,6 +5902,74 @@ void taskModbusRead(void* parameter) {
   while (1) {
     g_sensorReads++;
 
+    // [ADR-0006 D-1, Phase 2] PERIODIC FIFO PRODUCER -- the sole initiator.
+    // Placed immediately before the drain block so an intent enqueued now is
+    // admitted on THIS tick rather than waiting for the next one.
+    //
+    // Non-blocking by construction: one millis() comparison plus a
+    // zero-timeout xQueueSend(). No delay(), no vTaskDelay(), no wait on FIFO
+    // completion, no driver-state inspection (Trigger Broker invariant #4).
+    //
+    // Overlap is impossible without this producer needing to know: a queue
+    // already holding an intent rejects the send (depth 1), and a driver that
+    // is ACTIVE/COOLDOWN/DISABLED rejects the request inside
+    // FifoDriver_Request(). Both outcomes are a SKIP -- this tick is dropped
+    // and the next opportunity is one full period later. Nothing is deferred.
+    {
+      uint32_t nowPeriodicMs = millis();
+
+      // [Phase 2D Option A] BOUNDED SELF-RECOVERY -- the only path that clears
+      // s_fifoPeriodicSuspended. Runs before the cadence check so a recovered
+      // producer can fire on this same tick. Exactly ONE reset attempt per
+      // backoff window; if the underlying fault persists the driver re-trips
+      // and the drain block re-arms the (now doubled) backoff.
+      if (s_fifoPeriodicSuspended &&
+          (int32_t)(nowPeriodicMs - s_fifoSuspendRetryAtMs) >= 0) {
+        // FifoDriver_ResetCircuitBreaker() returns false if the breaker was
+        // not actually tripped. That would mean suspend and driver state had
+        // diverged; clear the latch anyway rather than deadlock the producer
+        // against a breaker that is already closed.
+        bool didReset = FifoDriver_ResetCircuitBreaker();
+        s_fifoPeriodicSuspended = false;
+        s_fifoSuspendRecoveries++;
+        Serial.printf("[FIFO-PERIODIC] RESUME reason=backoff_elapsed didReset=%d "
+                      "backoff_ms=%lu recoveries=%lu t=%lums\r\n",
+                      (int)didReset, (unsigned long)s_fifoSuspendBackoffMs,
+                      (unsigned long)s_fifoSuspendRecoveries,
+                      (unsigned long)nowPeriodicMs);
+      }
+
+      if (s_fifoPeriodicNextDueMs == 0) {
+        // First pass after boot: arm the schedule one full period out so the
+        // very first capture cannot race sensor configuration in setup().
+        s_fifoPeriodicNextDueMs = nowPeriodicMs + FIFO_PERIODIC_INTERVAL_MS;
+      } else if (!s_fifoPeriodicSuspended &&
+                 (int32_t)(nowPeriodicMs - s_fifoPeriodicNextDueMs) >= 0) {
+        // Advance by exactly one period (phase-locked); re-base only if we are
+        // already past the new deadline, so a missed tick never accumulates.
+        s_fifoPeriodicNextDueMs += FIFO_PERIODIC_INTERVAL_MS;
+        if ((int32_t)(nowPeriodicMs - s_fifoPeriodicNextDueMs) >= 0) {
+          s_fifoPeriodicNextDueMs = nowPeriodicMs + FIFO_PERIODIC_INTERVAL_MS;
+        }
+
+        FifoTriggerIntent_t schedIntent{};
+        schedIntent.source = FifoTriggerSource::SCHEDULED;
+        const char* schedTag = "periodic";
+        for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && schedTag[ti] != '\0'; ti++) {
+          schedIntent.tag[ti] = schedTag[ti];
+        }
+        // requirePermissive=true: only measure while the motor is RUNNING and
+        // the sensor is healthy. A stopped machine has no vibration to sample.
+        schedIntent.requirePermissive = true;
+        // [ARCH-INVARIANT] producer -- enqueue only, never FifoDriver_Request().
+        if (xQueueSend(queueFifoTrigger, &schedIntent, 0) != pdTRUE) {
+          s_fifoPeriodicSkipped++;   // queue still holds an undrained intent
+        } else {
+          s_fifoPeriodicEnqueued++;
+        }
+      }
+    }
+
     // [Broker, Commit 1] Drain at most one pending FIFO trigger intent,
     // before FifoDriver_Service() advances the driver this tick, so an
     // intent enqueued on a prior tick (or by a different task/core) is
@@ -5021,6 +5988,21 @@ void taskModbusRead(void* parameter) {
     {
       FifoTriggerIntent_t fifoIntent;
       if (xQueueReceive(queueFifoTrigger, &fifoIntent, 0) == pdPASS) {
+        // [ADR-0006 D-1, Phase 2/2A] SCHEDULED-ONLY ADMISSION BOUNDARY.
+        // Phase 2A removed the FAULT_LATCH / REMOTE_ON_DEMAND /
+        // OPERATOR_BUTTON producers, so in a correct build nothing but
+        // SCHEDULED can reach this queue and this branch is unreachable.
+        // It is retained deliberately as a defence-in-depth invariant: if a
+        // future producer is ever added, it cannot silently start a capture.
+        // FifoTriggerSource enumerators are kept (FifoCaptureResult, the
+        // /event payload and test/test_fifo_driver.cpp all still reference
+        // them). The intent is consumed and dropped -- the queue slot is
+        // freed this tick, and nothing is retried.
+        if (fifoIntent.source != FifoTriggerSource::SCHEDULED) {
+          Serial.printf("[FIFO-BROKER] REJECTED non-SCHEDULED source=%d tag=%s "
+                        "-- periodic capture is the sole FIFO initiator (ADR-0006)\n",
+                        static_cast<int>(fifoIntent.source), fifoIntent.tag);
+        } else {
         FifoCaptureRequest fifoReq{};
         fifoReq.triggerSource = fifoIntent.source;
         for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && fifoIntent.tag[ti] != '\0'; ti++) {
@@ -5031,6 +6013,14 @@ void taskModbusRead(void* parameter) {
         fifoReq.admissionContext.motorStable      = (g_motorRunState == MOTOR_RUNNING);
         fifoReq.admissionContext.sensorHealthy    = (g_modbusConsecErrors == 0);
         fifoReq.admissionContext.mqttReconnecting = !mqttClient.connected();
+        // [Phase 3A] Bind sample-rate provenance to THIS capture, read here --
+        // the same place, and for the same reason, as the admission context:
+        // this is the one point that sees the freshest verified state, and the
+        // driver stores what it is given without interpreting it. If the
+        // read-back never verified, these carry UNKNOWN/0 and the capture is
+        // reported as having no provenance -- never a silent nominal 2000 Hz.
+        fifoReq.srIndexAtCapture = g_sensorSrIndexVerified;
+        fifoReq.srHz             = g_sensorSrHzVerified;
         uint32_t fifoHandle = 0;
         FifoError fifoVerdict = FifoDriver_Request(&fifoReq, &fifoHandle);
         Serial.printf("[FIFO-BROKER] FifoDriver_Request() source=%d verdict=%d handle=%lu "
@@ -5052,6 +6042,40 @@ void taskModbusRead(void* parameter) {
             fifoVerdict != FifoError::NONE) {
           publishMqttRejectionEvent(fifoIntent.tag, fifoVerdict);
         }
+
+        // [ADR-0006 D-5, Phase 2] Latch the periodic producer off once the
+        // circuit breaker has opened, satisfying "do not repeatedly enqueue
+        // while disabled" WITHOUT the producer itself reading driver state.
+        // Set here because the drain block is the one place that legitimately
+        // sees admission verdicts.
+        //
+        // [Phase 2D Option A] The latch is no longer terminal: arm a bounded
+        // recovery deadline, then DOUBLE the backoff (capped) so that a
+        // persistent fault decays toward the ceiling instead of retrying
+        // forever at a fixed rate. The producer performs the single reset
+        // attempt when that deadline expires. Edge-gated: the deadline and the
+        // escalation are applied once per false->true transition, never per
+        // tick, so a stream of ERR_CIRCUIT_OPEN verdicts cannot inflate the
+        // backoff beyond one step per actual trip.
+        if (fifoVerdict == FifoError::ERR_CIRCUIT_OPEN) {
+          if (!s_fifoPeriodicSuspended) {
+            uint32_t nowSusMs = millis();
+            s_fifoSuspendRetryAtMs = nowSusMs + s_fifoSuspendBackoffMs;
+            Serial.printf("[FIFO-PERIODIC] SUSPEND reason=ERR_CIRCUIT_OPEN "
+                          "breaker_state=%s driver_phase=%d retry_in_ms=%lu t=%lums\r\n",
+                          "S14_DISABLED", (int)FifoDriver_GetPhase(),
+                          (unsigned long)s_fifoSuspendBackoffMs,
+                          (unsigned long)nowSusMs);
+            // Escalate for the NEXT trip (saturating at the ceiling).
+            if (s_fifoSuspendBackoffMs < FIFO_SUSPEND_RETRY_MAX_MS) {
+              uint32_t nextBackoff = s_fifoSuspendBackoffMs * 2UL;
+              s_fifoSuspendBackoffMs = (nextBackoff > FIFO_SUSPEND_RETRY_MAX_MS)
+                                         ? FIFO_SUSPEND_RETRY_MAX_MS : nextBackoff;
+            }
+          }
+          s_fifoPeriodicSuspended = true;
+        }
+        }  // [ADR-0006 D-1] end SCHEDULED-only admission branch
       }
     }
 
@@ -5895,7 +6919,22 @@ void taskStateMachine(void* parameter) {
       // v16.0: gate ด้วย MOTOR_RUNNING -- STARTING/STOPPING มี transient RMS สูง
       // ไม่ควร trigger STATE_WARNING/CRITICAL ขณะ ramp-up/down
       MachineState_t newState;
-      float rms = sensorData.rms_overall;
+      // [M1A] Legacy VRMS value retained ONLY for the existing debug print and
+      // the un-migrated trend path. It is NO LONGER read by any alarm branch
+      // below -- the vibration alarm source is now the velocity carrier.
+      float rms = sensorData.rms_overall;  // [M1A DEPRECATED as alarm input]
+
+      // [M1A] The Product Phase-1 vibration alarm source.
+      float    vibMmS  = 0.0f;
+      uint32_t vibAge  = 0;
+      const bool vibOk = readVelocityForAlarm(&vibMmS, &vibAge);
+      g_vibUnavailable = !vibOk;   // exposed on telemetry/display
+
+      // [M1A] Gate on whether a vibration alarm DECISION may be made at all.
+      // This is separate from newState: when false, newState is not applied,
+      // so the previous state (including any active WARNING/CRITICAL) is held
+      // rather than being overwritten with a fabricated NORMAL.
+      bool vibDecisionValid = true;
 
       // [PATCHED v16.3b] Suppress transient spike หลัง sensor กลับ online
       // sensor ให้ค่า spike สูงใน 1-2 reads แรกหลัง power cycle (เห็น RMS=22mm/s)
@@ -5908,13 +6947,35 @@ void taskStateMachine(void* parameter) {
         g_motorRunFaultLatchHoldoff--;
       }
 
+      // [M1A] Vibration alarm decision tree. Reads vibMmS (FIFO RAW -> DSP
+      // velocity_rms_overall). Does NOT read rms/sensorData.rms_overall.
       if (g_motorRunState != MOTOR_RUNNING) {
         newState = STATE_NORMAL;  // STOPPED/STARTING/STOPPING → ไม่ประเมิน alarm
+        // Legitimate NORMAL: the machine genuinely is not running. This is a
+        // real decision, not an absence of one, so it may clear an alarm.
       } else if (g_sensorWarmupReads > 0) {
         newState = STATE_NORMAL;  // warmup reads หลัง sensor online → suppress spike
-      } else if (rms < WARNING_RMS) {
+      } else if (!vibOk) {
+        // ── VIBRATION_UNAVAILABLE ────────────────────────────────────────────
+        // Velocity invalid or stale (FIFO suspended, DSP gate failed, or no
+        // capture within the freshness deadline).
+        //   - no new vibration alarm is raised
+        //   - 0.0f is NOT interpreted as low vibration
+        //   - any existing alarm is HELD, never cleared
+        newState = STATE_NORMAL;      // placeholder only -- NOT applied below
+        vibDecisionValid = false;
+      } else if (!vibThresholdsConfigured()) {
+        // ── THRESHOLDS TBD ───────────────────────────────────────────────────
+        // Velocity is valid and fresh, but VIB_WARNING_MMS / VIB_CRITICAL_MMS
+        // have not been re-baselined. Per M1A requirement 6 no vibration
+        // WARNING/CRITICAL may be raised, and equally no NORMAL may be
+        // asserted -- asserting NORMAL would clear a latched alarm on the
+        // strength of a comparison that was never performed.
+        newState = STATE_NORMAL;      // placeholder only -- NOT applied below
+        vibDecisionValid = false;
+      } else if (vibMmS < VIB_WARNING_MMS) {
         newState = STATE_NORMAL;
-      } else if (rms < CRITICAL_RMS) {
+      } else if (vibMmS < VIB_CRITICAL_MMS) {
         newState = STATE_WARNING;
       } else {
         newState = STATE_CRITICAL;
@@ -5929,7 +6990,12 @@ void taskStateMachine(void* parameter) {
         MachineState_t oldState = g_systemState.state;
 
         // Skip if in maintenance mode
-        if (g_systemState.state != STATE_MAINTENANCE) {
+        // [M1A] vibDecisionValid gates the whole transition: when no vibration
+        // decision could be made (unavailable/stale, or thresholds unset) the
+        // state is left exactly as it was. This is the single point that
+        // guarantees an unavailable reading can neither raise nor clear an
+        // alarm -- the buzzer, LED and effectiveState all follow from here.
+        if (g_systemState.state != STATE_MAINTENANCE && vibDecisionValid) {
           if (newState != oldState) {
             g_systemState.state = newState;
             g_systemState.stateEntryTime = millis();
@@ -5942,8 +7008,11 @@ void taskStateMachine(void* parameter) {
               g_systemState.buzzerActive = false;
             }
 
-            Serial.printf("[CORE 0] State: %d -> %d (RMS: %.2f)\n",
-                          oldState, newState, rms);
+            // [M1A] Report the value that actually drove the decision
+            // (velocity), plus the legacy VRMS figure for comparison during
+            // the deprecation window. Transition-only -- not per-tick.
+            Serial.printf("[CORE 0] State: %d -> %d (vel: %.3f mm/s, legacyRMS: %.2f)\n",
+                          oldState, newState, vibMmS, rms);
           }
         }
 
@@ -5954,13 +7023,25 @@ void taskStateMachine(void* parameter) {
       // ── Fault Latch v3: evaluate fault transitions ────────────────────────
       {
         int latchHealth = 100;
-        // [v16.3m] sanity check: ถ้า rms > SANITY_RMS_MAX = garbage จาก reconfig fail
-        // ไม่คำนวณ health score จากค่านี้ → ไม่ trigger HEALTH_LOW latch ผิดพลาด
-        const bool rmsValid = (sensorData.rms_overall <= SANITY_RMS_MAX);
-        if (rmsValid && sensorData.motor_state == 2 &&
-            sensorData.rms_overall > BASELINE_RMS) {
-          float norm = (sensorData.rms_overall - BASELINE_RMS) /
-                       (CRITICAL_RMS - BASELINE_RMS) * 100.0f;
+        // [M1A] Fault-latch health now derives from the velocity carrier, not
+        // the deprecated VRMS register value. The legacy `rmsValid` sanity
+        // gate is replaced by the carrier's own validity + freshness check --
+        // the DSP path has no "garbage from reconfig fail" failure mode to
+        // sanity-bound, it simply reports valid=false.
+        //
+        // healthUsable is what decides whether a HEALTH_LOW latch may fire at
+        // all. Without it, HEALTH_SCORE_UNKNOWN (-1) would satisfy
+        // checkAndLatchFault()'s `healthScore <= FL_HEALTH_LOW_THOLD` test and
+        // manufacture a health fault out of missing data -- the exact
+        // inversion M1A requirement 7 forbids.
+        float      latchVibMmS = 0.0f;
+        const bool latchVibOk  = readVelocityForAlarm(&latchVibMmS, NULL);
+        const bool healthUsable = (latchVibOk && vibThresholdsConfigured());
+
+        if (healthUsable && sensorData.motor_state == 2 &&
+            latchVibMmS > VIB_WARNING_MMS) {
+          float norm = (latchVibMmS - VIB_WARNING_MMS) /
+                       (VIB_CRITICAL_MMS - VIB_WARNING_MMS) * 100.0f;
           latchHealth = (int)max(0.0f, min(100.0f, roundf(100.0f - norm)));
         }
         // [v16.3m] suppress latch ถ้า rms garbage หรืออยู่ใน warmup suppress
@@ -5971,11 +7052,27 @@ void taskStateMachine(void* parameter) {
         // /vibration telemetry still reflect the real spike exactly as before),
         // DEGLITCH, or the FIFO Broker -- this function already returns before evCode/
         // the FIFO-enqueue block are evaluated whenever suppressed.
-        const bool suppressLatch = (!rmsValid || g_sensorWarmupReads > 0 || g_motorRunFaultLatchHoldoff > 0);
-        if (suppressLatch) {
-          Serial.printf("[LATCH] Suppressed -- rmsValid=%d warmup=%u runHoldoff=%u\n",
-                        (int)rmsValid, (unsigned)g_sensorWarmupReads,
+        // [M1A] Added !healthUsable and !vibDecisionValid to the suppression
+        // set. checkAndLatchFault() returns immediately when suppressed and
+        // ONLY ever sets latches (g_fl.code/g_flCount) -- it contains no clear
+        // path -- so suppressing here can never clear an existing latch. That
+        // is the structural guarantee behind M1A requirement 7's "do not clear
+        // an existing vibration alarm latch".
+        const bool suppressLatch = (!healthUsable || !vibDecisionValid ||
+                                    g_sensorWarmupReads > 0 || g_motorRunFaultLatchHoldoff > 0);
+        // [M1A] EDGE-TRIGGERED, not per-tick. With thresholds deliberately
+        // unset, suppressLatch is true on EVERY 4 Hz cycle -- the original
+        // unconditional printf would have become a 4 lines/second flood, which
+        // M1A requirement 14 forbids. Logging only on transition keeps the
+        // diagnostic value at zero steady-state cost.
+        static bool s_prevSuppressLatch = false;
+        if (suppressLatch != s_prevSuppressLatch) {
+          Serial.printf("[LATCH] Suppress %s -- vibOk=%d thrCfg=%d decisionValid=%d warmup=%u runHoldoff=%u\n",
+                        suppressLatch ? "ON" : "OFF",
+                        (int)latchVibOk, (int)vibThresholdsConfigured(),
+                        (int)vibDecisionValid, (unsigned)g_sensorWarmupReads,
                         (unsigned)g_motorRunFaultLatchHoldoff);
+          s_prevSuppressLatch = suppressLatch;
         }
         const bool latchBearing = false;  // [v16.3l] ปิดถาวร
 
@@ -6180,16 +7277,36 @@ void taskNetwork(void* parameter) {
           modem.waitForNetwork(10000L);
           esp_task_wdt_reset();
           network = modem.isNetworkConnected();
+          // [minimal-fix, keepalive-starvation] service MQTT keepalive
+          // immediately after this <=10s blocking call, independent of
+          // whatever the rest of this status-check block still has to do.
+          // Safe unconditionally -- MQTTClient::loop() no-ops when not
+          // connected (MQTTClient.cpp:507-511). Does not touch mqttConnSnap
+          // or any existing cache-write; purely additive.
+          mqttClient.loop();
         }
 
         // Try to reconnect GPRS if network is up but GPRS is down
         if (network && !gprs) {
           Serial.println("[CORE 1] Reconnecting GPRS...");
+          // [v16.5d] Graceful MQTT close before the PDP context churns --
+          // gprsConnectImpl() internally issues AT+NETCLOSE (closes all
+          // sockets) before AT+NETOPEN, orphaning any still-"connected"
+          // local MQTT/TLS state without the broker ever seeing a clean
+          // disconnect (session-takeover root cause). Bounded via
+          // BOUNDED_STOP_MS above -- see GsmTLSClient::stop()/resetTLS().
+          if (mqttClient.connected()) {
+            Serial.println("[MQTT] Graceful disconnect before GPRS reconnect");
+            mqttClient.disconnect();
+          }
           esp_task_wdt_reset();   // v15.4: gprsConnect อาจใช้เวลา
           modem.gprsConnect(g_cfgApn, GPRS_USER, GPRS_PASS);
           vTaskDelay(pdMS_TO_TICKS(5000));
           esp_task_wdt_reset();
           gprs = modem.isGprsConnected();
+          // [minimal-fix, keepalive-starvation] same rationale as above --
+          // services keepalive after this 5s blocking call too.
+          mqttClient.loop();
         }
 
         g_network.gprsConnected = gprs;
@@ -6608,7 +7725,15 @@ void taskNetwork(void* parameter) {
 
         int         snapAlarmCode  = 0;
         const char* snapAlarmLevel = "NORMAL";
-        int         snapHealth     = 100;
+        // [M1A-CLEANUP] Was 100. This default is what the fault-latch-pending
+        // replay payload publishes whenever the motor is NOT RUNNING, since
+        // the assignment below is gated on motor_state == 2. Leaving it at 100
+        // reproduced the same contradiction just fixed in computeHealthScore():
+        // a "healthy" score asserted on a message carrying no vibration
+        // evidence. UNKNOWN is the honest default; it is published only, never
+        // compared against FL_HEALTH_LOW_THOLD (see checkAndLatchFault(),
+        // which takes latchHealth, not this value).
+        int         snapHealth     = HEALTH_SCORE_UNKNOWN;
         {
           // [v16.5.4] Improvement 2: read the atomic snapshot (ONE mutex take)
           // instead of separate g_vibData + g_systemState copies, and use its
@@ -6688,6 +7813,32 @@ void taskNetwork(void* parameter) {
       }
     }
     // ── End Fault Latch replay ────────────────────────────────────────────────
+
+#ifdef DEBUG_MODEM_DIAG
+    // [v16.5b] Issue #2 Phase 1 -- read-only modem diagnostics.
+    // Runs at the very END of a loop iteration, after every publish/replay
+    // path above has completed, and only inside a quiet window: at least
+    // MODEM_DIAG_QUIET_MS since the last publish AND at least that much
+    // before the next one is due. This keeps the probe out of the
+    // publish/PUBACK window whose timing Issue #2 is measuring.
+    // Consequence (accepted, per Issue #2 decision): the second condition
+    // requires publishInterval >= 2 * MODEM_DIAG_QUIET_MS, so this samples in
+    // the NORMAL 30 s cadence only -- never in WARNING (10 s) or CRITICAL
+    // (5 s). No fallback is provided by design.
+    {
+      static uint32_t lastModemDiag = 0;
+      uint32_t dnow     = millis();
+      uint32_t sincePub = dnow - lastPublish;
+      if ((dnow - lastModemDiag >= MODEM_DIAG_PERIOD_MS) &&
+          (sincePub >= MODEM_DIAG_QUIET_MS) &&
+          (publishInterval > sincePub) &&
+          ((publishInterval - sincePub) >= MODEM_DIAG_QUIET_MS)) {
+        modemDiagPoll(mqttConnSnap20, g_network.gprsConnected,
+                      sincePub, publishInterval);
+        lastModemDiag = millis();
+      }
+    }
+#endif
 
     // -- 100ms sleep -- ให้ FreeRTOS scheduler ทำงาน tasks อื่น --
     // v15.4: WDT reset ย้ายไปอยู่ที่ TOP ของ loop + ทุก blocking operation
@@ -6929,25 +8080,15 @@ void taskButtonHandler(void* parameter) {
         // subsequent third press.
         awaitingSecondEnterClick = false;
 
-        FifoTriggerIntent_t buttonIntent{};
-        buttonIntent.source = FifoTriggerSource::OPERATOR_BUTTON;
-        const char* buttonTag = "operator_btn";
-        for (size_t ti = 0; ti < FIFO_TAG_MAXLEN && buttonTag[ti] != '\0'; ti++) {
-          buttonIntent.tag[ti] = buttonTag[ti];
-        }
-        buttonIntent.requirePermissive = true;
-        // The depth-1, non-blocking send IS the duplicate/queue-depth
-        // guard (same pattern as Commit 1's commissioning producer and
-        // Commit 5's FAULT_LATCH producer) -- never calls
-        // FifoDriver_Request() directly, never retried if rejected here
-        // or later by the driver's own admission gates (ACTIVE/COOLDOWN
-        // -> ERR_BUSY, fifo_driver.cpp, unmodified).
-        // [ARCH-INVARIANT] producer #3/3 -- enqueue only, never FifoDriver_Request().
-        if (xQueueSend(queueFifoTrigger, &buttonIntent, 0) != pdTRUE) {
-          Serial.println("[CORE 1] ENTER: double-click -> FifoTriggerIntent enqueue SKIPPED (queue full -- capture already pending)");
-        } else {
-          Serial.println("[CORE 1] ENTER: double-click -> FifoTriggerIntent enqueued source=OPERATOR_BUTTON");
-        }
+        // [ADR-0006 D-1, Phase 2A] The OPERATOR_BUTTON FIFO producer that
+        // stood here has been REMOVED -- periodic SCHEDULED capture is the
+        // sole FIFO initiator, so the double-click can no longer start a
+        // capture. The GESTURE itself is unchanged: the same debounce, the
+        // same ENTER_DOUBLECLICK_WINDOW_MS window, and the same
+        // consume-before-acting reset above all still run, and the operator
+        // still gets Serial acknowledgement that the gesture was recognised.
+        Serial.println("[CORE 1] ENTER: double-click recognised -- operator-initiated FIFO "
+                       "capture disabled; periodic capture is the sole initiator (ADR-0006)");
       }
     }
 
@@ -7768,12 +8909,19 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     s["sensor_status"]       = "ONLINE";
     s["deglitch_count"]      = g_deglitchCount;  // [v16.3y] อัตรา VRMS glitch สะสม
 
-    // Estimated RMS velocity (Peak / √2)
+    // [M1A DEPRECATED] rms / vx / vy / vz / peak / peak_velocity_* below are
+    // the legacy VRMS-register metric. They are NO LONGER the alarm source --
+    // see vibration_source on /decision and the accel_rms event. Retained
+    // unchanged for backward compatibility only; removal no earlier than
+    // Phase 5. New consumers must use velocity_rms_* from the accel_rms event.
     // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
     s["rms"]   = round(reportedRms * 100) / 100.0f;
     s["vx"]    = round(reportedVx  * 100) / 100.0f;
     s["vy"]    = round(reportedVy  * 100) / 100.0f;
     s["vz"]    = round(reportedVz  * 100) / 100.0f;
+    // [M1A] Marks the above four as legacy-sourced, in-band, so a consumer
+    // does not have to infer it from documentation.
+    s["vibration_source_legacy"] = "vrms_register";
 
     // True peak velocity hold [mm/s] -- v15.0
     s["peak"]       = round(currentPeak            * 100) / 100.0f;
@@ -7787,6 +8935,17 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 
     s["temp"]  = round(data->temperature *  10) /  10.0f;
     s["rpm"]   = data->rpm;
+
+    // [v16.6i] CT-compensated engineering current (see compensateCurrent()) --
+    // first telemetry export of current_a. current_valid=true means current_a
+    // came from a successful fresh CTR4A01 read this cycle; current_valid=false
+    // means current_a must NOT be trusted as a fresh measurement -- it may be
+    // the last successfully read value (read failure / FifoDriver bus
+    // ownership) or an uninitialized/zeroed value (pre-first-read / WTVB02
+    // offline path), depending on lifecycle state. No fabricated current
+    // value is ever generated.
+    s["current_a"]     = round(data->current_a * 100) / 100.0f;
+    s["current_valid"] = data->current_valid;
 
     // Harmonic feature extraction
     s["freq_x"]       = freqX;
@@ -7847,20 +9006,33 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 #endif
 
     size_t szSensor = serializeJson(s, buf, sizeof(buf));
-    if (szSensor == 0 || szSensor >= sizeof(buf) - 1) {
-      Serial.printf("[WARN] /sensor JSON truncated! sz=%u buf=%u\n",
+    // [M1B-7 E5/F1] FAIL CLOSED. เดิม guard นี้ warn แล้ว "ส่งต่อ" buffer ที่ถูกตัด
+    // ออกไปจริง -- consumer ได้ JSON พังและ JSON.parse() throw ทันที ซึ่งแย่กว่า
+    // ไม่ได้รับ message เสียอีก (ไม่มีทางแยกจาก outage ได้) เทียบกับ
+    // enqueueMqttOutbound() ที่ REJECT payload เกินขนาดมาตลอด -- direct-publish
+    // path จึงปลอดภัยน้อยกว่า queued path มาโดยตลอด บรรทัดนี้ปิดช่องว่างนั้น
+    // short-circuit && ทำให้ mqttClient.publish() ไม่ถูกเรียกเลยเมื่อ JSON ไม่ครบ
+    const bool sensorJsonOk = (szSensor > 0 && szSensor < sizeof(buf) - 1);
+    if (!sensorJsonOk) {
+      Serial.printf("[WARN] /sensor JSON truncated -- NOT PUBLISHED! sz=%u buf=%u\n",
                     (unsigned)szSensor, (unsigned)sizeof(buf));
     }
+    bool connBefore6 = mqttClient.connected();  // [v16.5c] sampled before the call -- see dbgLogMqttPublish
 #ifdef DEBUG_MQTT_TIMING
     uint32_t t0_pub6 = millis();
 #endif
-    bool pubOk6 = mqttClient.publish(g_mqttTopicSensor, buf, (int)szSensor, false, MQTT_QOS);
+    bool pubOk6 = sensorJsonOk &&
+                  mqttClient.publish(g_mqttTopicSensor, buf, (int)szSensor, false, MQTT_QOS);
 #ifdef DEBUG_MQTT_TIMING
     dbgLogMqttPublish(g_mqttTopicSensor, szSensor, MQTT_QOS, pubOk6,
-                      mqttClient.lastError(), millis() - t0_pub6);
+                      mqttClient.lastError(), millis() - t0_pub6, connBefore6);
 #endif
-    if (pubOk6)
+    if (!sensorJsonOk)
+      { /* [M1B-7] warning printed above -- ไม่ report เป็น publish failure */ }
+    else if (pubOk6)
       Serial.printf("[MQTT] /sensor %u B\n", (unsigned)szSensor);
+    else if (!connBefore6)
+      Serial.printf("[MQTT] /sensor NOT_CONNECTED (skipped, no send attempt)\n");
     else
       Serial.printf("[MQTT] /sensor FAILED (err=%d)\n", mqttClient.lastError());
   }
@@ -7884,7 +9056,10 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       snapFlCount   = g_flCount;
     }
 
-    StaticJsonDocument<800> d;
+    // [M1B-2] 800 -> 1024, same reasoning as /trend: measured max 618 B plus
+    // the four additive velocity_ema_* keys (~110 B) leaves too little headroom
+    // to risk truncating the existing decision payload.
+    StaticJsonDocument<1024> d;
     d["plant"]               = PLANT_ID;
     d["machine_id"]          = MACHINE_ID;
     d["sensor_id"]           = SENSOR_ID;
@@ -7893,7 +9068,44 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 
     d["alarm_code"]          = alarmCode;
     d["alarm_level"]         = alarmLevel;
-    d["health_score"]        = healthScore;
+    d["health_score"]        = healthScore;   // [M1A] -1 == UNKNOWN, see HEALTH_SCORE_UNKNOWN
+
+    // [M1A] Which engine is the alarm source of record, and whether it is
+    // currently able to make a decision at all. A consumer must read
+    // vibration_status before interpreting alarm_level: with status
+    // UNAVAILABLE or THRESHOLDS_UNSET, alarm_level reflects a HELD previous
+    // state, not a fresh evaluation of current vibration.
+    // [M1B-5] TTW from FIFO-DSP velocity + M1B-4 slope. ADDITIVE: the legacy
+    // ttw_estimate_h below keeps its VRMS-derived meaning until M1B-8.
+    // Read status FIRST, then hours -- see the ordered-publication note at
+    // g_ttwHours. The numeric field is published ONLY when status is VALID;
+    // every other state omits it entirely, which is the existing "unknown"
+    // idiom on this topic and costs no payload.
+    {
+      const uint8_t twStatus = g_ttwStatus;
+      const float   twHours  = g_ttwHours;
+      d["velocity_ttw_status"] = VibTtw_StatusStr(twStatus);
+      if (twStatus == (uint8_t)VIB_TTW_VALID) {
+        d["velocity_ttw_hours"] = roundf(twHours * 10.0f) / 10.0f;
+      }
+    }
+    d["vibration_source"]    = "fifo_dsp";
+    d["vibration_status"]    = g_vibUnavailable      ? "UNAVAILABLE"
+                             : !vibThresholdsConfigured() ? "THRESHOLDS_UNSET"
+                             : "OK";
+
+    // [M1B-2] Timestamp-aware EMA over the M1B-1 history ring. ADDITIVE:
+    // `ema_rms` on /trend keeps its legacy VRMS-derived meaning untouched --
+    // these are new keys, not a redefinition. velocity_ema_valid is the sole
+    // authority; when false, velocity_ema_mms is 0.0f meaning "not computed",
+    // never "no vibration".
+    {
+      const VibEmaState em = VibEma_Get();
+      d["velocity_ema_mms"]          = roundf(em.ema_mms * 1000.0f) / 1000.0f;
+      d["velocity_ema_valid"]        = em.valid;
+      d["velocity_ema_reseeded"]     = em.reseeded;
+      d["velocity_ema_timestamp_ms"] = em.timestampMs;
+    }
 
     d["bearing_alert"]              = bearingAlert;
     d["kurtosis_max"]               = kmax;
@@ -7919,20 +9131,31 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // Telemetry buffer backlog (volatile read — mutex not needed for a display counter)
     d["telemetry_buffer_pending"] = (uint8_t)g_telemBufCount;
 
-    char buf[800];
+    char buf[1024];  // [M1B-2] 800 -> 1024, matches the enlarged /decision doc
     size_t szStatus = serializeJson(d, buf, sizeof(buf));
-    if (szStatus == 0 || szStatus >= sizeof(buf) - 1)
-      Serial.printf("[WARN] /status JSON truncated! sz=%u\n", (unsigned)szStatus);
+    // [M1B-7 E5/F1] FAIL CLOSED -- เหตุผลเดียวกับ /sensor ด้านบน
+    // topic นี้ถือ alarm_level/health_score/vibration_status ซึ่งเป็น safety
+    // semantics โดยตรง ส่ง JSON ที่ถูกตัดออกไปอันตรายกว่าทุก topic
+    const bool statusJsonOk = (szStatus > 0 && szStatus < sizeof(buf) - 1);
+    if (!statusJsonOk)
+      Serial.printf("[WARN] /status JSON truncated -- NOT PUBLISHED! sz=%u buf=%u\n",
+                    (unsigned)szStatus, (unsigned)sizeof(buf));
+    bool connBefore7 = mqttClient.connected();  // [v16.5c] sampled before the call -- see dbgLogMqttPublish
 #ifdef DEBUG_MQTT_TIMING
     uint32_t t0_pub7 = millis();
 #endif
-    bool pubOk7 = mqttClient.publish(g_mqttTopicDecision, buf, (int)szStatus, false, MQTT_QOS);
+    bool pubOk7 = statusJsonOk &&
+                  mqttClient.publish(g_mqttTopicDecision, buf, (int)szStatus, false, MQTT_QOS);
 #ifdef DEBUG_MQTT_TIMING
     dbgLogMqttPublish(g_mqttTopicDecision, szStatus, MQTT_QOS, pubOk7,
-                      mqttClient.lastError(), millis() - t0_pub7);
+                      mqttClient.lastError(), millis() - t0_pub7, connBefore7);
 #endif
-    if (pubOk7)
+    if (!statusJsonOk)
+      { /* [M1B-7] warning printed above -- ไม่ report เป็น publish failure */ }
+    else if (pubOk7)
       Serial.printf("[MQTT] /status %u B\n", (unsigned)szStatus);
+    else if (!connBefore7)
+      Serial.printf("[MQTT] /status NOT_CONNECTED (skipped, no send attempt)\n");
     else
       Serial.printf("[MQTT] /status FAILED (err=%d)\n", mqttClient.lastError());
   }
@@ -7947,6 +9170,29 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     doc["plant"]      = PLANT_ID;
     doc["machine_id"] = MACHINE_ID;
     doc["sensor_id"]  = SENSOR_ID;
+    // [M1B-7 E1] topic เดียวที่ยังไม่มี stage -- /sensor, /decision, /trend มีครบแล้ว
+    // ทำให้ consumer routing ด้วย stage ใช้กับ /vibration ได้เหมือนกัน
+    doc["stage"]      = "vibration";
+
+    // [M1B-7 E2/E3] PROVENANCE -- ประกาศ "ใครเป็นเจ้าของตัวเลขไหน" ใน payload เอง
+    //
+    // ปัญหาเดิม: /vibration ส่ง rms/vx/vy/vz จาก legacy VRMS register อยู่ข้าง ๆ
+    // alarm_code/alarm_level/health_score ที่มาจาก FIFO-DSP (M1A ย้ายไปแล้ว)
+    // โดยไม่มี label อะไรเลย -- dashboard ที่อ่าน topic นี้ topic เดียวแยกไม่ออกว่า
+    // ค่าสั่นสะเทือนกับ alarm มาจากคนละ engine กัน /sensor ได้ label นี้ตอน M1A
+    // แต่ /vibration ตกหล่นไป
+    //
+    // vibration_source = engine ที่เป็น alarm source of record (ดู g_velCarrier)
+    // vibration_status ต้องอ่านก่อน alarm_level เสมอ: ถ้าเป็น UNAVAILABLE หรือ
+    // THRESHOLDS_UNSET แปลว่า alarm_level คือ state ที่ HELD ไว้ ไม่ใช่ผลประเมินสด
+    // -- semantics เดียวกับ /decision ทุกประการ (คัด ternary มาตรง ๆ)
+    doc["vibration_source"]        = "fifo_dsp";
+    doc["vibration_status"]        = g_vibUnavailable          ? "UNAVAILABLE"
+                                   : !vibThresholdsConfigured() ? "THRESHOLDS_UNSET"
+                                   : "OK";
+    // [M1B-7 E3] rms/vx/vy/vz/peak ด้านล่างเป็น legacy VRMS register ทั้งหมด
+    // ยัง DEPRECATED (M1A) ไม่ใช่ alarm source -- ลบไม่ก่อน Phase 5
+    doc["vibration_source_legacy"] = "vrms_register";
 
     // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
     doc["rms"]   = round(reportedRms * 100) / 100.0f;
@@ -7957,6 +9203,17 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
     doc["temp"]  = round(data->temperature *  10) /  10.0f;
     doc["rpm"]   = data->rpm;
+
+    // [v16.6i] CT-compensated engineering current (see compensateCurrent()) --
+    // first telemetry export of current_a. current_valid=true means current_a
+    // came from a successful fresh CTR4A01 read this cycle; current_valid=false
+    // means current_a must NOT be trusted as a fresh measurement -- it may be
+    // the last successfully read value (read failure / FifoDriver bus
+    // ownership) or an uninitialized/zeroed value (pre-first-read / WTVB02
+    // offline path), depending on lifecycle state. No fabricated current
+    // value is ever generated.
+    doc["current_a"]     = round(data->current_a * 100) / 100.0f;
+    doc["current_valid"] = data->current_valid;
     doc["freq_x"] = freqX; doc["freq_y"] = freqY; doc["freq_z"] = freqZ;
     doc["freq_ratio_x"] = freqRatioX;
     doc["freq_ratio_y"] = freqRatioY;
@@ -8010,24 +9267,30 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     doc["freq_drift_y"]   = freqGateOpen ? g_trendResult.freq_drift_y : 0.0f;
     doc["freq_drift_z"]   = freqGateOpen ? g_trendResult.freq_drift_z : 0.0f;
     doc["freq_alert"]     = freqGateOpen && g_trendResult.freq_alert;
-    doc["freq_gate_open"] = freqGateOpen;  // debug: บอกว่า gate เปิด/ปิด
+    // [M1B-7.1] freq_gate_open ถูกถอดออก -- เป็น debug field (คอมเมนต์เดิมระบุเอง)
+    // และไม่มี consumer ทางเทคนิคที่ต้องใช้ ดู transport budget note ด้านล่าง
     if (g_trendResult.ttw_hours > 0.0f)
       doc["ttw_hours"]    = g_trendResult.ttw_hours;
     doc["trend_window_s"] = (g_trendResult.window_samples * 250) / 1000;
 
-    doc["slope_1s"]          = roundf(g_trendResult.slope_1s  * 100000.0f) / 100000.0f;
-    doc["slope_10s"]         = roundf(g_trendResult.slope_10s * 100000.0f) / 100000.0f;
+    // ── [M1B-7.1] TRANSPORT BUDGET: /vibration JSON <= 1320 B ────────────────
+    // M1B-7 เพิ่ม provenance 130 B แล้ว payload โตเป็น ~1457 B -> ตกไปอยู่เหนือ
+    // ขีดที่ A7670 รับได้ใน CIPSEND ครั้งเดียว (TinyGSM ไม่ chunk) ผลคือ
+    // LWMQTT_NETWORK_FAILED_WRITE (-6) แล้ว MQTTClient::publish() สั่ง close()
+    // ทำให้หลุด/ต่อใหม่วนซ้ำ -- /vibration ส่งสำเร็จแค่ 3 จาก 29 ครั้ง
+    //
+    // 11 field ที่ถอดออกด้านล่างเป็น "ของซ้ำ" ทั้งหมด มีอยู่บน /trend อยู่แล้ว
+    // (ชื่อคีย์ต่างกันบางตัว: slope_ready_* -> ready_*, agg_buf_* -> buf_*)
+    // ไม่มี field ของ legacy VRMS, alarm, หรือ M1B-1..6 ถูกแตะ
+    //
+    // ที่ยังเก็บไว้ตรงนี้โดยตั้งใจ:
+    //   slope_60s  -- /vibration ส่งทุกครั้ง แต่ /trend ส่งเฉพาะตอน
+    //                 slope_ready_60s เป็นจริง (.ino:10039) ถอดออกจะหายช่วง warm-up
+    //   ema_dir / ema_rms -- อยู่บน /trend ก็จริง แต่ budget ไม่ได้บังคับให้ถอด
+    //                 (worst case 1309 B ผ่าน 1320 B แล้ว) จึงไม่ถอดเกินความจำเป็น
     doc["slope_60s"]         = roundf(g_trendResult.slope_60s * 100000.0f) / 100000.0f;
-    doc["slope_ready_1s"]    = g_trendResult.slope_ready_1s;
-    doc["slope_ready_10s"]   = g_trendResult.slope_ready_10s;
-    doc["slope_ready_60s"]   = g_trendResult.slope_ready_60s;
     doc["ema_dir"]           = g_trendResult.ema_dir;
     doc["ema_rms"]           = g_trendResult.ema_rms;
-    doc["stddev_1min"]       = roundf(g_trendResult.stddev_1min   * 1000.0f) / 1000.0f;
-    doc["max_rms_10min"]     = roundf(g_trendResult.max_rms_10min * 100.0f)  / 100.0f;
-    doc["agg_buf_1s"]        = g_buf1sCount;
-    doc["agg_buf_10s"]       = g_buf10sCount;
-    doc["agg_buf_60s"]       = g_buf60sCount;
 
 
     doc["timestamp"]   = tsBuf;
@@ -8037,16 +9300,29 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 
     char   jsonBuffer[2048];
     size_t jsonSize = serializeJson(doc, jsonBuffer, sizeof(jsonBuffer));
+    // [M1B-7 E5/F1] FAIL CLOSED. topic นี้เดิม "ไม่มี guard เลย" -- serializeJson()
+    // ตัด payload แล้ว publish ออกไปเงียบ ๆ ไม่มีแม้แต่ warning ต่างจาก /sensor และ
+    // /decision ที่อย่างน้อยยัง warn M1B-7 เพิ่ม field provenance เข้ามาใน doc นี้
+    // (~120 B) จึงต้องมี guard ก่อน ไม่ใช่ตามหลัง
+    // วัดจริงก่อนแก้: max 1378 B จาก 12 message -- เหลือ headroom ~670 B
+    const bool vibJsonOk = (jsonSize > 0 && jsonSize < sizeof(jsonBuffer) - 1);
+    if (!vibJsonOk)
+      Serial.printf("[WARN] /vibration JSON truncated -- NOT PUBLISHED! sz=%u buf=%u\n",
+                    (unsigned)jsonSize, (unsigned)sizeof(jsonBuffer));
+    bool connBefore8 = mqttClient.connected();  // [v16.5c] sampled before the call -- see dbgLogMqttPublish
 #ifdef DEBUG_MQTT_TIMING
     uint32_t t0_pub8 = millis();
 #endif
-    success = mqttClient.publish(g_mqttTopic, jsonBuffer, (int)jsonSize, false, MQTT_QOS);
+    success = vibJsonOk &&
+              mqttClient.publish(g_mqttTopic, jsonBuffer, (int)jsonSize, false, MQTT_QOS);
 #ifdef DEBUG_MQTT_TIMING
     dbgLogMqttPublish(g_mqttTopic, jsonSize, MQTT_QOS, success,
-                      mqttClient.lastError(), millis() - t0_pub8);
+                      mqttClient.lastError(), millis() - t0_pub8, connBefore8);
 #endif
 
-    if (success) {
+    if (!vibJsonOk) {
+      /* [M1B-7] warning printed above -- ไม่ report เป็น publish failure */
+    } else if (success) {
       // [v16.5] ใช้ reportedRms (ค่าที่ gate แล้ว) แทน data->rms_overall (raw)
       // เพื่อให้ debug log ตรงกับค่าที่ publish จริงใน doc["rms"]
       Serial.printf("[MQTT] /vibration %d B | %s rms=%.2f peak=%.2f rpm=%.1f "
@@ -8057,6 +9333,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
                     data->motor_state,
                     healthScore, freqRatioX, freqRatioY, freqRatioZ,
                     crestFactor, kmax, kaxis, bearingAlert);
+    } else if (!connBefore8) {
+      Serial.printf("[MQTT] /vibration NOT_CONNECTED (skipped, no send attempt)\n");
     } else {
       Serial.printf("[MQTT] Publish FAILED (err=%d)\n", mqttClient.lastError());
     }
@@ -8098,6 +9376,217 @@ static uint32_t computeSlotDurMs(float rpm) {
   return dur;
 }
 
+// ----------------------------------------------------------------------------
+// [Phase 3B] Core 1 half of the waveform hand-off: consume one snapshot, run
+// the acceleration RMS, publish. Called once per taskAnalytics tick (1 Hz)
+// against a ~0.5 Hz capture cadence, so it keeps up with a 2x margin.
+//
+// Runs entirely on Core 1 and never touches FifoDriver -- by the time this
+// sees a sample, Core 0 has already released the arena. This is where every
+// floating-point operation in the Phase 3B pipeline happens.
+//
+// Publishes a SEPARATE /event message rather than extending the existing
+// "fifo_capture" event: that event is built and enqueued on Core 0 before the
+// DSP has run, so the acceleration figures cannot exist yet at that point.
+// The two are correlated by capture_id. Nothing in the legacy payload is
+// touched, and `rms`/`vx`/`vy`/`vz` on the other topics are not written here.
+// ----------------------------------------------------------------------------
+static void processPendingAccelSnapshot() {
+  if (queueAccelSnapshot == NULL || mutexAccelSnap == NULL) {
+    return;  // best-effort path unavailable (Phase 3 decision #3)
+  }
+
+  AccelSnapshotReady_t ready;
+  if (xQueueReceive(queueAccelSnapshot, &ready, 0) != pdTRUE) {
+    return;  // nothing new this tick -- normal for ~half of all ticks
+  }
+
+  // [Phase 3C] Copy out, release, THEN compute -- the mutex is held for one
+  // ~6 KB memcpy only. No DSP of any kind runs under this lock (Phase 3C
+  // architecture requirement), so Core 0's timeout-0 take can never collide
+  // with an FFT.
+  if (xSemaphoreTake(mutexAccelSnap, pdMS_TO_TICKS(50)) == pdTRUE) {
+    memcpy(&g_accelWork, &g_accelSnap, sizeof(g_accelWork));
+    xSemaphoreGive(mutexAccelSnap);
+  } else {
+    return;  // Core 0 mid-copy; the next capture's notification will follow
+  }
+
+  const uint32_t captureId   = g_accelWork.captureId;
+  const uint16_t sampleCount = g_accelWork.sampleCount;
+  const uint32_t srHz        = g_accelWork.srHz;   // per-capture provenance, never a literal
+
+  // Both computations run lock-free against Core 1's private copy.
+  // [Phase 3B] acceleration -- arithmetic untouched by Phase 3C.
+  VibAccelRms rms;
+  const bool aOk = VibAccel_ComputeRms(g_accelWork.x, g_accelWork.y, g_accelWork.z,
+                                       sampleCount, srHz, &rms);
+  // [Phase 3C] velocity -- frequency-domain integration.
+  VibVelocityRms vel;
+  const bool vOk = VibVelocity_ComputeRms(g_accelWork.x, g_accelWork.y, g_accelWork.z,
+                                          sampleCount, srHz, &vel);
+
+  // `valid` is the sole authority -- a false here publishes zeros WITH the flag
+  // clear, so a consumer that honors vibration_data_valid can never read a
+  // "not computed" 0.0 as a measured zero.
+  //
+  // [Phase 3C] vibration_data_valid keeps its EXACT Phase 3B meaning
+  // (acceleration validity). Velocity gets its own flag rather than being
+  // folded into the existing one: widening vibration_data_valid would silently
+  // change what an already-deployed consumer sees for the acceleration fields,
+  // which the "keep acceleration RMS fields unchanged" requirement forbids.
+  const bool dataValid    = (aOk && rms.valid);
+  const bool velDataValid = (vOk && vel.valid);
+
+  StaticJsonDocument<512> aDoc;
+  aDoc["plant_id"]                 = PLANT_ID;
+  aDoc["machine_id"]               = MACHINE_ID;
+  aDoc["event"]                    = "accel_rms";
+  aDoc["capture_id"]               = captureId;
+  aDoc["vibration_data_valid"]     = dataValid;
+  aDoc["acceleration_rms_x"]       = rms.rms_x;
+  aDoc["acceleration_rms_y"]       = rms.rms_y;
+  aDoc["acceleration_rms_z"]       = rms.rms_z;
+  aDoc["acceleration_rms_overall"] = rms.rms_overall;
+  // [Phase 3C] additive velocity block -- new keys only. Legacy `rms`/`vx`/
+  // `vy`/`vz` live on other topics and are not written anywhere in this
+  // function, then or now.
+  aDoc["velocity_data_valid"]      = velDataValid;
+  aDoc["velocity_rms_x"]           = vel.rms_x;
+  aDoc["velocity_rms_y"]           = vel.rms_y;
+  aDoc["velocity_rms_z"]           = vel.rms_z;
+  aDoc["velocity_rms_overall"]     = vel.rms_overall;
+  aDoc["sample_rate_hz"]           = srHz;
+  aDoc["sample_count"]             = sampleCount;
+  // [M1A] Declares which engine produced these vibration figures, so a
+  // consumer can distinguish them from the deprecated VRMS-register values
+  // still present on /sensor and /vibration.
+  aDoc["vibration_source"]         = "fifo_dsp";
+
+  char aBuf[600];
+  size_t szA = serializeJson(aDoc, aBuf, sizeof(aBuf));
+  enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_EVENT, aBuf, szA, MQTT_QOS);
+
+  // [M1A] Hand the velocity figure to Core 0's alarm/health/latch path.
+  // Published AFTER the MQTT enqueue so telemetry is never delayed by mutex
+  // contention, and published on EVERY capture -- including invalid ones,
+  // because Core 0 must learn that this capture produced no usable velocity
+  // (that is what drives VIBRATION_UNAVAILABLE) rather than silently
+  // continuing to age the previous value.
+  //
+  // timeout 0: taskAnalytics must not block. If Core 0 holds the mutex, skip
+  // -- the carrier keeps its previous contents and simply ages, which the
+  // freshness check on the reader side already handles correctly.
+  if (mutexVelCarrier != NULL) {
+    if (xSemaphoreTake(mutexVelCarrier, 0) == pdTRUE) {
+      g_velCarrier.overall     = velDataValid ? vel.rms_overall : 0.0f;
+      g_velCarrier.valid       = velDataValid;
+      g_velCarrier.captureId   = captureId;
+      g_velCarrier.timestampMs = millis();
+      // [M1B-6] Per-axis + provenance for the outage buffer. Written under the
+      // same mutex and in the same store as `overall`, so a reader taking the
+      // mutex always sees a self-consistent set.
+      g_velCarrier.x            = velDataValid ? vel.rms_x : 0.0f;
+      g_velCarrier.y            = velDataValid ? vel.rms_y : 0.0f;
+      g_velCarrier.z            = velDataValid ? vel.rms_z : 0.0f;
+      g_velCarrier.sampleRateHz = srHz;
+      g_velCarrier.sampleCount  = sampleCount;
+      xSemaphoreGive(mutexVelCarrier);
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+// [M1B-1] THE ONE AND ONLY append point for the new trend pipeline.
+//
+// Runs on Core 1 inside taskAnalytics (1 Hz). Nothing else in this firmware
+// calls VibHistory_Append()/VibHistory_AppendGap() -- that single-writer
+// property is what makes the ring's ordering and gap invariants provable, and
+// it mirrors handleFifoCaptureCompletion()'s "exactly one acquire/release
+// site" contract.
+//
+// Idempotent by captureId: this ticks at 1 Hz while captures arrive every
+// ~2.1-3.9 s, so most ticks see the same capture twice or three times. Rather
+// than re-appending (and being refused as a duplicate, inflating the reject
+// counter), it simply returns when the carrier's captureId has not advanced.
+//
+// Ordering of the three branches is deliberate:
+//   1. motor not RUNNING  -> gap, and NO vibration sample. Checked FIRST
+//      because a stale carrier from before the motor stopped must not be
+//      mistaken for a live reading.
+//   2. velocity invalid/stale -> gap.
+//   3. new capture -> append.
+// None of these paths can ever append a zero: branches 1 and 2 record a NaN
+// gap marker (see vib_history.h), and branch 3 only stores a value the DSP
+// declared valid.
+//
+// M1B-1 SCOPE: this fills the ring and nothing else. No EMA, no slope, no TTW,
+// no windowing -- those read the ring in M1B-2..M1B-5.
+// ----------------------------------------------------------------------------
+static uint32_t s_lastIngestedCaptureId = 0;
+
+static void vibHistoryIngest() {
+  const uint32_t nowMs = millis();
+
+  // 1. Motor gate (rule C).
+  if (g_motorRunState != MOTOR_RUNNING) {
+    VibHistory_AppendGap(nowMs, VIB_GAP_MOTOR_NOT_RUNNING);
+    return;
+  }
+
+  if (mutexVelCarrier == NULL) {
+    return;
+  }
+  VelocityCarrier_t snap;
+  if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) != pdTRUE) {
+    return;  // try again next tick; not a gap -- we learned nothing
+  }
+  snap = g_velCarrier;   // whole-struct copy, no torn read
+  xSemaphoreGive(mutexVelCarrier);
+
+  // 2. Validity + freshness (rule B). Same deadline constant the M1A alarm
+  // path uses, so trend and alarm can never disagree about what "stale" means.
+  // Unsigned subtraction is millis()-rollover correct.
+  const uint32_t age = nowMs - snap.timestampMs;
+  if (!snap.valid || snap.timestampMs == 0u || age > VIB_VELOCITY_MAX_AGE_MS_TBD) {
+    VibHistory_AppendGap(nowMs, snap.valid ? VIB_GAP_STALE : VIB_GAP_VELOCITY_INVALID);
+    return;
+  }
+
+  // 3. Only advance on a genuinely new capture.
+  if (snap.captureId == s_lastIngestedCaptureId) {
+    return;
+  }
+
+  // dt is carried entirely by snap.timestampMs (rules D/E): the producer's own
+  // completion time, NOT this tick's time and NOT a nominal 2 s period. That is
+  // what preserves the measured bimodal 2.1 s / 3.9 s spacing instead of
+  // quantising every sample onto the 1 Hz analytics grid.
+  if (VibHistory_Append(snap.overall, snap.timestampMs, snap.captureId) == VIB_HIST_OK) {
+    s_lastIngestedCaptureId = snap.captureId;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// [M1B-2] Advance the timestamp-aware EMA.
+//
+// Reads the M1B-1 ring ONLY -- VibEma_Update() takes no arguments and pulls
+// every new entry from VibHistory_*. It never sees g_velCarrier, and this
+// function passes it nothing, so there is no path by which the EMA could
+// bypass the ring. That is deliberate: the ring is the recorded truth, and an
+// EMA computed from anything else could disagree with the history it claims to
+// summarise.
+//
+// Idempotent, so calling it once per 1 Hz analytics tick against a ~0.32 Hz
+// sample rate costs nothing on the majority of ticks that bring no new data.
+//
+// Touches neither g_emaRms nor any legacy trend state -- the legacy EMA
+// continues to run untouched on the legacy VRMS path until M1B-8.
+// ----------------------------------------------------------------------------
+static void vibEmaTick() {
+  VibEma_Update();
+}
+
 void taskAnalytics(void* parameter) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xPeriod = pdMS_TO_TICKS(1000);  // 1 Hz — unchanged
@@ -8121,6 +9610,23 @@ void taskAnalytics(void* parameter) {
 
   while (1) {
     vTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+    // [Phase 3B] Non-blocking; returns immediately when no waveform is pending.
+    // Placed first so acceleration RMS is never delayed by the rest of the
+    // tick, and deliberately outside every analytics FREEZE/RUNNING gate --
+    // a FIFO capture's acceleration RMS is a property of the capture, not of
+    // the trend engine's state.
+    processPendingAccelSnapshot();
+
+    // [M1B-1] Ingest into the trend history ring, immediately after the
+    // velocity carrier may have been refreshed above. Non-blocking; no slope
+    // or TTW is computed here -- M1B-1 only records what happened.
+    vibHistoryIngest();
+
+    // [M1B-2] Then advance the EMA over whatever the ring just gained.
+    // Strictly after the ingest so a sample recorded this tick is folded in on
+    // this tick rather than waiting a second.
+    vibEmaTick();
 
 #ifdef VERIFY_TEST
     // [VERIFY_TEST] Checkpoint 5E: one-shot, non-blocking consumption of the
@@ -8504,7 +10010,18 @@ analytics_publish:
     // Doc   : 640 B stack
     // ──────────────────────────────────────────────────────────────────────
     {
-      StaticJsonDocument<640> t;
+      // [M1B-3] 1024 -> 1536: /trend measured 857 B after M1B-2 and the twelve
+      // window keys add ~354 B. Sized together with MQTT_OUTBOUND_PAYLOAD_MAX
+      // (also 1536) and buf[] below, so document capacity, buffer size and the
+      // enqueue limit can never disagree.
+      // [M1B-2] 640 -> 1024. NOT cosmetic: /trend was measured at up to 630 B
+      // on hardware against a 640 B document, and the eight additive
+      // history_* keys add ~227 B. Leaving 640 would have silently truncated
+      // the EXISTING trend payload -- the "[WARN] /trend JSON truncated" path
+      // below -- breaking current consumers rather than just omitting the new
+      // fields. buf[1024] already downstream, and the enqueue limit
+      // (MQTT_OUTBOUND_PAYLOAD_MAX 1024) still bounds the worst case ~857 B.
+      StaticJsonDocument<1536> t;
       t["plant"]               = PLANT_ID;
       t["machine_id"]          = MACHINE_ID;
       t["sensor_id"]           = SENSOR_ID;
@@ -8561,6 +10078,123 @@ analytics_publish:
       t["ema_dir"]   = g_emaDir;
       t["ema_delta"] = roundf(g_emaDelta * 100000.0f) / 100000.0f;
       t["spike_count"]  = g_trendResult.spike_count;
+
+      // [M1B-2 / part B] Low-rate history-ring observability.
+      //
+      // Hosted on /trend precisely because /trend already publishes on a 60 s
+      // cadence -- that satisfies "at most once every 60 seconds" structurally,
+      // with no rate-limiter to get wrong and no new topic. Nothing here is
+      // printed per capture and no Serial output is added.
+      //
+      // Purely additive and read-only: these keys are new, and none of the
+      // existing /trend fields change meaning. Their sole purpose is to let the
+      // combined M1B-1/M1B-2 hardware run verify the ring's invariants
+      // (append/gap/reject counts, captureId and timestamp advance, latest
+      // value and validity) which are otherwise unobservable on hardware.
+      //
+      // Summary only -- deliberately NOT a ring dump.
+      {
+        const VibHistoryStats hs = VibHistory_GetStats();
+        const VibHistorySample* hl = VibHistory_Latest();
+        t["history_count"]         = VibHistory_Count();
+        t["history_valid_count"]   = hs.appended;
+        t["history_gap_count"]     = hs.gaps;
+        t["history_reject_count"]  = hs.rejected;
+        t["history_latest_capture_id"]  = hl ? hl->captureId   : 0;
+        t["history_latest_timestamp_ms"] = hl ? hl->timestampMs : 0;
+        // A gap's stored value is NaN, which is not representable in JSON.
+        // Publish 0.0 ONLY when the entry is explicitly flagged invalid, so
+        // history_latest_valid=false is what a consumer must branch on -- the
+        // number is meaningless in that case and must never be read as a
+        // measurement of zero vibration.
+        t["history_latest_velocity_mms"] =
+            (hl && hl->valid) ? roundf(hl->velocity_rms_overall * 1000.0f) / 1000.0f : 0.0f;
+        t["history_latest_valid"]  = hl ? hl->valid : false;
+      }
+
+      // [M1B-3] Time-based trend windows over the M1B-1 ring.
+      //
+      // Computed here, at publish time, from the ring's own timestamps -- there
+      // is no accumulator to keep in sync and no cadence assumption anywhere.
+      // Both windows are evaluated against the SAME `nowW` so 60 s and 300 s
+      // describe the same instant.
+      //
+      // Purely additive: the legacy slope_1s/10s/60s, ema_rms and rms fields
+      // above keep their existing VRMS-derived meanings untouched until M1B-8.
+      // The legacy 1 s window is NOT migrated -- at ~0.32 Hz a 1-second window
+      // cannot contain a sample, so publishing one would be meaningless.
+      //
+      // velocity_status_* is the sole authority. On INSUFFICIENT_DATA every
+      // statistic is 0 meaning "not computed", never "measured zero"; the
+      // sample count is still reported so a consumer can tell "sensor down"
+      // from "still filling".
+      {
+        const uint32_t nowW = millis();
+        VibWindowStats w60, w300;
+        VibWindow_Compute(VIB_WIN_60S_MS,  nowW, &w60);
+        VibWindow_Compute(VIB_WIN_300S_MS, nowW, &w300);
+
+        t["velocity_mean_60s_mms"]    = roundf(w60.mean_mms   * 1000.0f) / 1000.0f;
+        t["velocity_min_60s_mms"]     = roundf(w60.min_mms    * 1000.0f) / 1000.0f;
+        t["velocity_max_60s_mms"]     = roundf(w60.max_mms    * 1000.0f) / 1000.0f;
+        t["velocity_stddev_60s_mms"]  = roundf(w60.stddev_mms * 100000.0f) / 100000.0f;
+        t["velocity_samples_60s"]     = w60.sample_count;
+        t["velocity_status_60s"]      = VibWindow_StatusStr(w60.status);
+
+        t["velocity_mean_300s_mms"]   = roundf(w300.mean_mms   * 1000.0f) / 1000.0f;
+        t["velocity_min_300s_mms"]    = roundf(w300.min_mms    * 1000.0f) / 1000.0f;
+        t["velocity_max_300s_mms"]    = roundf(w300.max_mms    * 1000.0f) / 1000.0f;
+        t["velocity_stddev_300s_mms"] = roundf(w300.stddev_mms * 100000.0f) / 100000.0f;
+        t["velocity_samples_300s"]    = w300.sample_count;
+        t["velocity_status_300s"]     = VibWindow_StatusStr(w300.status);
+
+      // [M1B-4] Timestamp-aware velocity slope over the M1B-1 ring.
+      //
+      // Regressed on ELAPSED SECONDS, so the unit is mm/s per second and is
+      // independent of the bimodal 2.1 s / 3.9 s spacing. The legacy
+      // rms_slope / slope_1s / slope_10s / slope_60s fields above are NOT
+      // touched: they remain sample-index based over the legacy VRMS buffer
+      // until M1B-8. These are new keys with a different unit, deliberately
+      // named so the two can never be confused.
+      //
+      // Window is VIB_SLOPE_WINDOW_MS (300 s), stated explicitly in
+      // vib_slope.h rather than inherited from TREND_WINDOW_SAMPLES -- those
+      // 120 samples meant 30 s at 4 Hz but would span ~6.2 min at this cadence.
+      //
+      // velocity_slope_valid is the sole authority. On INSUFFICIENT_DATA the
+      // slope is 0.0 meaning "not computed", never "flat trend".
+      // velocity_slope_reseeded reports that a >90 s outage inside the window
+      // truncated the regression to the newest contiguous segment.
+      {
+        VibSlopeResult sl;
+        VibSlope_Compute(nowW, &sl);
+        t["velocity_slope_mms_per_s"]  = roundf(sl.slope_mms_per_s * 1000000.0f) / 1000000.0f;
+        t["velocity_slope_valid"]      = sl.valid;
+        t["velocity_slope_reseeded"]   = sl.reseeded;
+        t["velocity_slope_timestamp_ms"] = sl.timestamp_ms;
+
+      // [M1B-5] Time-To-Warning. Computed HERE (taskAnalytics) because it reads
+      // the M1B-1 ring via VibHistory_LatestValid(); the result travels to
+      // /decision through g_ttwHours/g_ttwStatus. Shares `nowW` and `sl` with
+      // the windows and slope above, so all four describe the same instant.
+      //
+      // In the current build VIB_WARNING_MMS and VIB_TTW_MIN_SLOPE are both
+      // UNSET sentinels, so this can only produce THRESHOLDS_UNSET -- numeric
+      // TTW is disabled by construction, with no fallback path.
+      {
+        VibTtwResult tw;
+        VibTtw_Compute(g_motorRunState == MOTOR_RUNNING, &sl, VIB_WARNING_MMS,
+                       nowW, VIB_VELOCITY_MAX_AGE_MS_TBD, &tw);
+        if (tw.status == VIB_TTW_VALID) {
+          g_ttwHours  = tw.hours;                 // value first ...
+          g_ttwStatus = (uint8_t)tw.status;       // ... then VALID
+        } else {
+          g_ttwStatus = (uint8_t)tw.status;       // non-VALID first ...
+          g_ttwHours  = 0.0f;                     // ... then clear
+        }
+      }
+      }
+      }
       t["trend_gap_s"]  = (uint32_t)g_lastResumeGapS;  // [v16.3ab] gap ครั้งล่าสุด (วินาที) — consumer รู้ว่า time-series ไม่ต่อเนื่องช่วงไหน
 
       // v16.1 FIX: snapshot ผ่าน mutex ก่อน access [v16.5.4: g_telemSnapshot, was g_vibData]
@@ -8588,7 +10222,7 @@ analytics_publish:
       t["timestamp"] = tsA;
  
       // buf[1024] >> StaticJsonDocument<640>  (v14.3: was buf[700])
-      char buf[1024];
+      char buf[1536];  // [M1B-3] 1024 -> 1536, matches the enlarged /trend doc
       size_t sz = serializeJson(t, buf, sizeof(buf));
       if (sz == 0 || sz >= sizeof(buf) - 1)
         Serial.printf("[WARN] /trend JSON truncated! sz=%u buf=%u\n",
@@ -8836,6 +10470,15 @@ void setup() {
     Serial.printf ("Motor Source  : %s\n", motorSrcStr);
     Serial.println("================================================");
     Serial.printf ("BUILD_ID: %s\n\n", getBuildId());
+#ifdef DEBUG_MODEM_DIAG
+    // [v16.5b] Issue #2 Phase 1 -- announce the diagnostic build in the boot
+    // banner so a capture can never be mistaken for a plain production log.
+    Serial.printf("[MODEM-DIAG] ENABLED -- read-only A7670E probe: period=%lums "
+                  "quiet=%lums at_timeout=%lums (NORMAL 30s cadence only)\n\n",
+                  (unsigned long)MODEM_DIAG_PERIOD_MS,
+                  (unsigned long)MODEM_DIAG_QUIET_MS,
+                  (unsigned long)MODEM_DIAG_AT_TMO_MS);
+#endif
   }
 
   // Print CPU info
@@ -9077,6 +10720,10 @@ void setup() {
   mutexAggBufs    = xSemaphoreCreateMutex();  // Phase 2: guard g_buf1s/10s/60s
   mutexFaultLatch = xSemaphoreCreateMutex();  // v3 hardened: guard g_fl/g_flCount + fault_latch NVS namespace
   mutexTelemBuf   = xSemaphoreCreateMutex();  // guards telemetry ring buffer
+  mutexAccelSnap  = xSemaphoreCreateMutex();  // [Phase 3B] guards g_accelSnap
+  mutexVelCarrier = xSemaphoreCreateMutex();  // [M1A] guards g_velCarrier (Core1->Core0)
+  VibHistory_Init();                          // [M1B-1] trend history ring (Core 1 only)
+  VibEma_Init();                              // [M1B-2] timestamp-aware EMA over that ring
 
   if (mutexVibData == NULL || mutexSystemState == NULL ||
       mutexI2C == NULL || mutexModem == NULL || mutexAggBufs == NULL ||
@@ -9093,6 +10740,12 @@ void setup() {
   queueDisplayUpdate = xQueueCreate(QUEUE_SIZE_DISPLAY, sizeof(DisplayCommand_t));
   queueMaintEvent = xQueueCreate(QUEUE_SIZE_MAINT, sizeof(MaintenanceEvent_t));  // V14.4
   queueFifoTrigger = xQueueCreate(QUEUE_SIZE_FIFO_TRIGGER, sizeof(FifoTriggerIntent_t));  // [Broker, Commit 1]
+  // [Phase 3B] Depth 1: analytics consumes at 1 Hz, captures arrive at ~0.5 Hz,
+  // so a backlog means Core 1 is already behind and the freshest waveform is
+  // the only one worth keeping. Deliberately NOT in the FATAL check below --
+  // Phase 3 decision #3 makes the whole FIFO/acceleration path best-effort, so
+  // failing to create it must degrade acceleration RMS only, never halt boot.
+  queueAccelSnapshot = xQueueCreate(1, sizeof(AccelSnapshotReady_t));
 
   if (queueSensorData == NULL || queueButtonEvent == NULL || queueDisplayUpdate == NULL
       || queueMaintEvent == NULL || queueFifoTrigger == NULL) {

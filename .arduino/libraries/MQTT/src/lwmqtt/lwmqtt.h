@@ -18,7 +18,7 @@
  * A PRODUCTION BUILD. With it undefined, every LWMQTT_DBG() expands to nothing
  * and no behavior, timing, or control flow changes.
  * ========================================================================= */
-#define LWMQTT_DEBUG_TIMING
+// #define LWMQTT_DEBUG_TIMING   // [production-clean] disabled -- see V16_5C_VERIFIED.md
 
 #ifdef LWMQTT_DEBUG_TIMING
 #ifdef __cplusplus

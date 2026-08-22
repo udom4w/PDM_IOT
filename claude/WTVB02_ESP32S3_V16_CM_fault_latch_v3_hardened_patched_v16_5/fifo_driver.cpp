@@ -128,7 +128,13 @@ static const uint32_t T_INTER_BYTE_MS       = 500;   // K-13: mid-frame stall bu
 static const uint32_t T_POLL_INTERVAL_MS    = 250;   // SS11.1 S7's sole exit condition
 static const uint32_t T_DRAIN_QUIET_MS      = 300;   // SS11.1 S10's sole exit condition
 static const uint32_t T_RESULT_HOLD_MAX_MS  = 30000; // SS17.5 watchdog
-static const uint32_t T_COOLDOWN_MS         = 60000; // SS17.4
+// [ADR-0006 D-3/D-4, Phase 1A TEMPORARY DEV CONFIG] 60000 -> 0. The 60 s rest
+// throttled EVENT-triggered capture storms; the periodic architecture makes the
+// fixed cadence itself the rate limit. Set to 0, deliberately NOT deleted:
+// S12_COOLDOWN hosts the ONLY circuit-breaker trip in this driver (see
+// HandleS12Cooldown() below), so the state, s_cooldownEnteredAtMs, and both
+// comparisons all remain -- only the wait duration changes. Revert = 60000.
+static const uint32_t T_COOLDOWN_MS         = 0;     // SS17.4, amended by ADR-0006
 static const uint8_t  FIFO_MAX_RETRIES      = 2;     // SS17.3: 3 attempts total
 static const uint8_t  FIFO_BREAKER_THRESHOLD = 5;    // SS17.6
 
@@ -449,6 +455,17 @@ static void HandleS1Idle() {
   for (size_t i = 0; i < FIFO_TAG_MAXLEN; i++) {
     s_result.tag[i] = s_pendingRequest.tag[i];
   }
+  // [Phase 3A] Sample-rate provenance -- copied VERBATIM from the request,
+  // alongside captureId/triggerSource/tag, at the one point the SDS calls
+  // "Provenance latched". The driver deliberately does not derive, validate,
+  // default or range-check these: it has no knowledge of the sensor's
+  // register map and must remain portable. If the caller could not establish
+  // the rate it passes srHz == 0 / FIFO_SR_INDEX_UNKNOWN, and that "unknown"
+  // is propagated faithfully rather than being papered over with a nominal
+  // 2000 Hz. Pure metadata: no protocol, timing, retry, breaker or admission
+  // behaviour reads these fields.
+  s_result.srIndexAtCapture = s_pendingRequest.srIndexAtCapture;
+  s_result.srHz             = s_pendingRequest.srHz;
   s_attemptFillBaseline = 0;
 
   s_state = FifoState::S2_ARMED;  // "Provenance latched, gates passed"

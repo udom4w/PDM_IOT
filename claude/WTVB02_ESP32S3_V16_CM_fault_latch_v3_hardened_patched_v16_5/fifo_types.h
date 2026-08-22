@@ -168,7 +168,28 @@ struct FifoCaptureRequest {
   bool                 requirePermissive;
   uint8_t              maxRetries;
   FifoAdmissionContext admissionContext;  // [v1.1] the ONLY admission input Request() reads
+
+  // [Phase 3A] Sample-rate provenance, supplied BY THE CALLER and copied
+  // verbatim onto FifoCaptureResult at admission (SDS D-3: "provenance is
+  // captured at request time, not publish time"). The driver never derives,
+  // validates or defaults these -- it does not know the sensor's register
+  // map and must stay portable (this file compiles host-side under plain
+  // g++ with no Arduino). They are NOT admission inputs: FifoDriver_Request()
+  // does not read them for any gate, so a capture is never rejected for
+  // missing provenance -- it is merely reported as having none.
+  //
+  // FAIL-CLOSED CONTRACT: srHz == 0 means "sample rate NOT established for
+  // this capture". Any consumer MUST treat that as invalid provenance and
+  // MUST NOT substitute a nominal rate. srIndexAtCapture uses
+  // FIFO_SR_INDEX_UNKNOWN for the same purpose.
+  uint16_t             srIndexAtCapture;  // raw REG_SAMPLE_RATE value, or UNKNOWN
+  uint32_t             srHz;              // decoded Hz, or 0 == not established
 };
+
+// [Phase 3A] Sentinel for "SR index not established". 0x0000 is a REAL SR
+// index (SR0 = 32 kHz per WTVB02-485 manual Sec 6.4.12), so zero cannot be
+// overloaded as "unknown" the way srHz == 0 legitimately can.
+#define FIFO_SR_INDEX_UNKNOWN 0xFFFFu
 
 // ----------------------------------------------------------------------------
 // FifoCaptureResult -- the validity-gated result object (SDS SS8.2, D-8).

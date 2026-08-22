@@ -650,6 +650,15 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
     if (waitResponse(timeout_ms, GF(AT_NL "+CIPOPEN:")) != 1) { return false; }
     uint8_t opened_mux    = streamGetIntBefore(',');
     uint8_t opened_result = streamGetIntBefore('\n');
+#ifdef DEBUG_MQTT_TIMING
+    // [diagnostic-only, err=-3 investigation] Reveal the raw AT+CIPOPEN
+    // result before it is discarded by the check below. Read-only: does not
+    // alter opened_mux/opened_result, the AT command, the timeout, or the
+    // return value -- purely an additional Serial.printf(). Compiles to
+    // nothing when DEBUG_MQTT_TIMING is undefined (production default).
+    Serial.printf("[CIPOPEN-DIAG] requested_mux=%u opened_mux=%u opened_result=%u\n",
+                  (unsigned)mux, (unsigned)opened_mux, (unsigned)opened_result);
+#endif
     if (opened_mux != mux || opened_result != 0) return false;
     return true;
   }
@@ -758,6 +767,12 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
 
   size_t modemGetAvailable(uint8_t mux) {
     if (!sockets[mux]) return 0;
+#ifdef DEBUG_RXPATH
+    // [P1] Entry ts taken AFTER the no-op guard, so only invocations that
+    // actually issue AT+CIPRXGET=4 are timed. Observational only: no extra AT
+    // command, no duplicated waitResponse(), no control-flow change.
+    uint32_t dbgAvailT0 = millis();
+#endif
     sendAT(GF("+CIPRXGET=4,"), mux);
     size_t result = 0;
     if (waitResponse(GF("+CIPRXGET:")) == 1) {
@@ -768,6 +783,15 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
     }
     // DBG("### Available:", result, "on", mux);
     if (!result) { sockets[mux]->sock_connected = modemGetConnected(mux); }
+#ifdef DEBUG_RXPATH
+    // Logged AFTER the !result branch on purpose: elapsed then INCLUDES the
+    // modemGetConnected() round trip (AT+CIPCLOSE?), which is incurred on
+    // exactly the result==0 case under investigation.
+    Serial.printf("[P1 modemGetAvail] t=%lu mux=%u result=%u elapsed=%lums%s\n",
+                  (unsigned long)dbgAvailT0, (unsigned)mux, (unsigned)result,
+                  (unsigned long)(millis() - dbgAvailT0),
+                  result ? "" : " (incl modemGetConnected)");
+#endif
     return result;
   }
 
@@ -798,6 +822,13 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
         int8_t mux = streamGetIntBefore('\n');
         if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
           sockets[mux]->got_data = true;
+#ifdef DEBUG_RXPATH
+          // [P5] Timestamp the data-arrival PUSH. If this never appears during
+          // a stalled wait, discovery is 100% poll-bound (500ms gate at
+          // TinyGsmTCP.tpp:149) rather than URC-driven.
+          Serial.printf("[P5 URC] t=%lu +CIPRXGET:1 mux=%d (data-arrival push)\n",
+                        (unsigned long)millis(), (int)mux);
+#endif
         }
         data = "";
         // DBG("### Got Data:", mux);
@@ -812,6 +843,12 @@ class TinyGsmSim7600 : public TinyGsmModem<TinyGsmSim7600>,
       if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
         sockets[mux]->got_data = true;
         if (len >= 0 && len <= 1024) { sockets[mux]->sock_available = len; }
+#ifdef DEBUG_RXPATH
+        // [P5] Alternate data-arrival PUSH (+RECEIVE carries the length
+        // directly and sets sock_available without an AT round trip).
+        Serial.printf("[P5 URC] t=%lu +RECEIVE mux=%d len=%d (data-arrival push)\n",
+                      (unsigned long)millis(), (int)mux, (int)len);
+#endif
       }
       data = "";
       // DBG("### Got Data:", len, "on", mux);
