@@ -615,6 +615,11 @@ struct FaultLatch_t {
 #define MQTT_PORT 8883                           // TLS port
 #define MQTT_CLIENT_ID "pump01"           // -> "PLANT01-ESP01"
 #define MQTT_QOS 1                               // QoS 1 -- at-least-once delivery
+// [P1-S3] /device-health cadence. Fixed and independent of publishInterval
+// (30/10/5 s by alarm state) on purpose: engineering diagnostics must not
+// accelerate with alarm state, and a 4th CIPSEND every 5 s is the A7670 link
+// pressure that historically produced LWMQTT_NETWORK_FAILED_WRITE (-6).
+#define DEVICE_HEALTH_INTERVAL_MS 60000UL
 // [v16.5d] Bounds GsmTLSClient's _tcp.stop() teardown wait (was unbounded
 // 15000ms via TinyGSM default) -- see session-takeover/GPRS-reconnect review.
 #define BOUNDED_STOP_MS 1000UL
@@ -2754,6 +2759,7 @@ static char g_mqttTopicDecision  [128];  // factory/.../decision
 static char g_mqttTopicTrend     [128];  // factory/.../trend
 static char g_mqttTopicEvent     [128];  // factory/.../vibration/event (V14.4 maintenance audit)
 static char g_mqttTopicCommand   [128];  // [Commit 7A] factory/.../vibration/command -- inbound, subscribed only
+static char g_mqttTopicDeviceHealth[128];  // [P1-S3] factory/.../device-health -- engineering diagnostics, NOT the Product-1 contract
 // ─────────────────────────────────────────────────────────────────────────────
 
 // [Commit 7A] MQTT inbound command callback. Fires from mqttClient.loop()
@@ -9215,6 +9221,53 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // ยัง DEPRECATED (M1A) ไม่ใช่ alarm source -- ลบไม่ก่อน Phase 5
     doc["vibration_source_legacy"] = "vrms_register";
 
+    // ── [P1-S1] PRODUCT-1 SOURCE OF RECORD: FIFO-DSP velocity, ADDITIVE ─────
+    // The canonical vibration metric finally lands on the canonical customer
+    // topic. Until now velocity_rms_* existed ONLY on the /event accel_rms
+    // message and the outage-replay path, so /vibration carried alarm_level
+    // and vibration_status derived from FIFO-DSP velocity without ever
+    // carrying the velocity itself.
+    //
+    // NO NEW CALCULATION. This is a pure read of g_velCarrier, the same value
+    // taskAnalytics already computed once and published on /event -- read
+    // idiom copied from pushTelemBuf() (.ino:3307-3329): same task
+    // (taskNetwork/Core 1), same mutex, same 5 ms timeout, same
+    // VIB_VELOCITY_MAX_AGE_MS_TBD freshness deadline, so "stale" means one
+    // thing everywhere and the value matches the /event message for the same
+    // capture bit-for-bit before rounding.
+    //
+    // VALIDITY: velocity_data_valid is ALWAYS present and is the sole
+    // authority. The four floats are published ONLY when it is true --
+    // omitted entirely otherwise, matching the replay serializer at
+    // .ino:3594-3607. No zero, no null, no NaN is ever fabricated: a consumer
+    // cannot mistake "not measured" for "measured zero". Legacy rms/vx/vy/vz
+    // below are untouched and remain vrms_register-sourced.
+    {
+      bool  velOk = false;
+      float vOverall = 0.0f, vX = 0.0f, vY = 0.0f, vZ = 0.0f;
+      if (mutexVelCarrier != NULL) {
+        VelocityCarrier_t vc;
+        bool got = false;
+        if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) == pdTRUE) {
+          vc  = g_velCarrier;          // whole-struct copy: no torn read
+          got = true;
+          xSemaphoreGive(mutexVelCarrier);
+        }
+        if (got && vc.valid && vc.timestampMs != 0u &&
+            (uint32_t)(millis() - vc.timestampMs) <= VIB_VELOCITY_MAX_AGE_MS_TBD) {
+          velOk    = true;
+          vOverall = vc.overall; vX = vc.x; vY = vc.y; vZ = vc.z;
+        }
+      }
+      doc["velocity_data_valid"] = velOk;
+      if (velOk) {
+        doc["velocity_rms_overall"] = roundf(vOverall * 1000.0f) / 1000.0f;
+        doc["velocity_rms_x"]       = roundf(vX * 1000.0f) / 1000.0f;
+        doc["velocity_rms_y"]       = roundf(vY * 1000.0f) / 1000.0f;
+        doc["velocity_rms_z"]       = roundf(vZ * 1000.0f) / 1000.0f;
+      }
+    }
+
     // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
     doc["rms"]   = round(reportedRms * 100) / 100.0f;
     doc["vx"]    = round(reportedVx  * 100) / 100.0f;
@@ -9235,89 +9288,65 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // value is ever generated.
     doc["current_a"]     = round(data->current_a * 100) / 100.0f;
     doc["current_valid"] = data->current_valid;
-    doc["freq_x"] = freqX; doc["freq_y"] = freqY; doc["freq_z"] = freqZ;
-    doc["freq_ratio_x"] = freqRatioX;
-    doc["freq_ratio_y"] = freqRatioY;
-    doc["freq_ratio_z"] = freqRatioZ;
-    // [v16.3v] แก้ชื่อ field สับสน: key "state" จริง ๆ เก็บ motor_state (0=STOPPED,1=STARTING,
-    // 2=RUNNING,3=STOPPING) ไม่ใช่ system state (NORMAL/WARNING/CRITICAL) → เพิ่ม key ชื่อชัดเจน
-    // "motor_state" ควบคู่ไป และคง "state" ไว้ชั่วคราวเป็น DEPRECATED alias เพื่อไม่ให้ Grafana เดิมพัง
-    // เมื่อย้าย dashboard ไปใช้ "motor_state" แล้ว ลบบรรทัด doc["state"] ทิ้งได้
+    // [P1-S2] freq_x/y/z, freq_ratio_x/y/z REMOVED from /vibration -- still
+    // published unchanged on /sensor. Raw Hz is not a customer-actionable
+    // number; the order-ratio form is Phase-2 diagnostic. Calculations
+    // (freqX/Y/Z, freqRatioX/Y/Z) are UNTOUCHED and still feed /sensor.
     doc["motor_state"]         = data->motor_state;
-    doc["state"]               = data->motor_state;  // [DEPRECATED] ใช้ motor_state แทน
+    // [P1-S2] "state" (DEPRECATED alias of motor_state) REMOVED -- the source
+    // comment already said to delete it once dashboards moved to motor_state.
     doc["operating_hours_total"] = data->runtime_hour;
-    doc["rotation_signal_ok"]  = data->prox;
-    doc["alarm_code"]          = alarmCode;
+    // [P1-S2] rotation_signal_ok REMOVED -- still on /sensor.
+    // [P1-S2] alarm_code REMOVED -- numeric duplicate of alarm_level, and both
+    // are on /decision. health_score REMOVED -- on /decision, and it returns
+    // HEALTH_SCORE_UNKNOWN(-1) on 100% of publishes while thresholds are unset.
     doc["alarm_level"]         = alarmLevel;
-    doc["health_score"]        = healthScore;
-    // v15.1: CF และ Kurtosis ครบ 3 แกน + derived
-    doc["crest_factor"]     = crestFactor;                           // = cf_max
-    // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน crestFactor/rms/peak/kurtosis --
-    // ป้องกัน per-axis CF garbage ตอน STOPPED/STARTING/STOPPING
-    doc["cf_x"]             = (data->motor_state == 2) ? round(data->cf_x * 100) / 100.0f : 0.0f;
-    doc["cf_y"]             = (data->motor_state == 2) ? round(data->cf_y * 100) / 100.0f : 0.0f;
-    doc["cf_z"]             = (data->motor_state == 2) ? round(data->cf_z * 100) / 100.0f : 0.0f;
-    // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING
-    doc["kurtosis_x"]       = kx;
-    doc["kurtosis_y"]       = ky;
-    doc["kurtosis_z"]       = kz;
-    doc["kurtosis_max"]     = kmax;
-    doc["kurtosis_axis"]           = kaxis;
-    doc["kurtosis_valid"]          = kurtosisValid;
-    doc["dominant_vibration_axis"] = domVibAxis;
+    // [P1-S2] crest_factor, cf_x/y/z, kurtosis_x/y/z, kurtosis_max/axis/valid
+    // and dominant_vibration_axis REMOVED -- all still on /sensor (kurtosis_*
+    // and dominant_vibration_axis also on /decision). Their customer-actionable
+    // distillate is bearing_alert, which is kept below. No calculation deleted:
+    // crestFactor/kx/ky/kz/kmax/kaxis/kurtosisValid/domVibAxis are all still
+    // computed and still consumed by /sensor and /decision.
+    //
+    // NOTE dominant_vibration_axis is derived from LEGACY rms_x/y/z, not from
+    // FIFO-DSP velocity -- a further reason not to surface it as Product-1.
     doc["bearing_alert"]           = bearingAlert;
-    doc["sensor_status"]    = "ONLINE";
-    doc["deglitch_count"]   = g_deglitchCount;  // [v16.3y] อัตรา VRMS glitch สะสม
-    doc["analysis_ready"]   = isAnalysisReady();          // [v16.3ab] วิเคราะห์อยู่ไหม (derived)
-    doc["freeze_reason"]    = analysisReasonStr(analysisReason());  // [v16.3ab] ถ้า frozen เพราะอะไร
-
-    doc["rms_slope"]      = g_trendResult.rms_slope;
-    doc["temp_slope"]     = g_trendResult.temp_slope;
-    doc["current_slope"]  = g_trendResult.current_slope;  // [v16.6a] CTR4A01, A/s
-    // [v16.6b] Remote diagnostics for current_slope=0 ambiguity -- if current_buf_count
-    // stays 0 while current_read_errors keeps climbing, CTR4A01 Modbus reads are failing
-    // (check slave address/wiring/baud); if both stay 0, the 500ms cadence itself never fired.
-    doc["current_buf_count"]    = g_currentCount;   // 0..CURRENT_BUF_SIZE, buffer fill level
-    doc["current_read_errors"]  = g_ctReadErrors;    // cumulative CTR4A01 Modbus failures since boot
-    // [P4-02] pure copy, no computation -- see P4_02_DESIGN_CONTRACT.md
-    doc["current_evidence_valid"] = snap->currentEvidenceValid;
-    doc["trend_dir"]      = trendDirStr;
-    doc["spike_count"]    = g_trendResult.spike_count;
-    // v15.2 Fix 17: suppress freq fields เมื่อ RPM < RPM_FREQ_GATE
-    doc["freq_drift_x"]   = freqGateOpen ? g_trendResult.freq_drift_x : 0.0f;
-    doc["freq_drift_y"]   = freqGateOpen ? g_trendResult.freq_drift_y : 0.0f;
-    doc["freq_drift_z"]   = freqGateOpen ? g_trendResult.freq_drift_z : 0.0f;
-    doc["freq_alert"]     = freqGateOpen && g_trendResult.freq_alert;
-    // [M1B-7.1] freq_gate_open ถูกถอดออก -- เป็น debug field (คอมเมนต์เดิมระบุเอง)
-    // และไม่มี consumer ทางเทคนิคที่ต้องใช้ ดู transport budget note ด้านล่าง
-    if (g_trendResult.ttw_hours > 0.0f)
-      doc["ttw_hours"]    = g_trendResult.ttw_hours;
-    doc["trend_window_s"] = (g_trendResult.window_samples * 250) / 1000;
-
-    // ── [M1B-7.1] TRANSPORT BUDGET: /vibration JSON <= 1320 B ────────────────
-    // M1B-7 เพิ่ม provenance 130 B แล้ว payload โตเป็น ~1457 B -> ตกไปอยู่เหนือ
-    // ขีดที่ A7670 รับได้ใน CIPSEND ครั้งเดียว (TinyGSM ไม่ chunk) ผลคือ
-    // LWMQTT_NETWORK_FAILED_WRITE (-6) แล้ว MQTTClient::publish() สั่ง close()
-    // ทำให้หลุด/ต่อใหม่วนซ้ำ -- /vibration ส่งสำเร็จแค่ 3 จาก 29 ครั้ง
+    // ── [P1-S2] TREND / DIAGNOSTIC / INTERNAL-STATE BLOCK REMOVED ────────────
+    // sensor_status (a hardcoded "ONLINE" constant), deglitch_count,
+    // rms_slope, trend_dir, spike_count, freq_drift_x/y/z, freq_alert,
+    // slope_60s, ema_dir and ema_rms are all still published unchanged on
+    // /sensor, /decision and/or /trend. ttw_hours is still published on
+    // /decision as ttw_estimate_h from the same g_trendResult.ttw_hours.
     //
-    // 11 field ที่ถอดออกด้านล่างเป็น "ของซ้ำ" ทั้งหมด มีอยู่บน /trend อยู่แล้ว
-    // (ชื่อคีย์ต่างกันบางตัว: slope_ready_* -> ready_*, agg_buf_* -> buf_*)
-    // ไม่มี field ของ legacy VRMS, alarm, หรือ M1B-1..6 ถูกแตะ
+    // NOT deleted anywhere: every calculation behind them still runs and is
+    // still consumed by the other topics. This is a customer-contract change,
+    // not a telemetry deletion.
     //
-    // ที่ยังเก็บไว้ตรงนี้โดยตั้งใจ:
-    //   slope_60s  -- /vibration ส่งทุกครั้ง แต่ /trend ส่งเฉพาะตอน
-    //                 slope_ready_60s เป็นจริง (.ino:10039) ถอดออกจะหายช่วง warm-up
-    //   ema_dir / ema_rms -- อยู่บน /trend ก็จริง แต่ budget ไม่ได้บังคับให้ถอด
-    //                 (worst case 1309 B ผ่าน 1320 B แล้ว) จึงไม่ถอดเกินความจำเป็น
-    doc["slope_60s"]         = roundf(g_trendResult.slope_60s * 100000.0f) / 100000.0f;
-    doc["ema_dir"]           = g_trendResult.ema_dir;
-    doc["ema_rms"]           = g_trendResult.ema_rms;
+    // [P1-S3] OBSERVABILITY GAP CLOSED -- these nine had /vibration as their
+    // ONLY publication path and were unpublished between P1-S2 and P1-S3:
+    //   analysis_ready, freeze_reason, temp_slope, current_slope,
+    //   current_buf_count, current_read_errors, current_evidence_valid,
+    //   trend_window_s, sync_age_s
+    // They are engineering diagnostics, not customer data, so they do not
+    // belong on the Product-1 contract. They now ship on /device-health
+    // (PUBLISH 4 of 4, below) at a fixed 60 s cadence -- same values, same
+    // expressions, moved off the customer topic rather than recomputed.
 
-
+    // ── [P1-S2] TRANSPORT BUDGET: /vibration JSON <= 1320 B ──────────────────
+    // Unchanged ceiling, same reason as M1B-7.1: the A7670 accepts one
+    // CIPSEND per publish (TinyGSM does not chunk); exceeding it returns
+    // LWMQTT_NETWORK_FAILED_WRITE (-6), MQTTClient::publish() calls close(),
+    // and the link reconnect-loops -- historically 3 of 29 publishes landed.
+    //
+    // M1B-7.1 met the ceiling by trimming 11 duplicated trend fields from a
+    // 65-field union. P1-S2 replaces that union with an actual product
+    // contract: ~27 fields, worst case ~618 B, leaving ~700 B of headroom.
+    // That headroom is what makes the five FIFO-DSP velocity fields above
+    // affordable -- added alone they would have pushed the old payload to
+    // ~1390-1421 B, i.e. over the ceiling.
     doc["timestamp"]   = tsBuf;
     doc["time_synced"] = g_timeSync.synced;
-    if (g_timeSync.synced)
-      doc["sync_age_s"] = (millis() - g_timeSync.lastSyncMillis) / 1000;
+    // [P1-S2] sync_age_s REMOVED -- see the observability-gap note above.
 
     char   jsonBuffer[2048];
     size_t jsonSize = serializeJson(doc, jsonBuffer, sizeof(jsonBuffer));
@@ -9358,6 +9387,97 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       Serial.printf("[MQTT] /vibration NOT_CONNECTED (skipped, no send attempt)\n");
     } else {
       Serial.printf("[MQTT] Publish FAILED (err=%d)\n", mqttClient.lastError());
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // PUBLISH 4 of 4 - /device-health  (ENGINEERING DIAGNOSTICS, NOT Product-1)
+  //
+  // [P1-S3] Closes the observability gap P1-S2 documented and left open: nine
+  // fields whose only publication path was /vibration, dropped when that topic
+  // was frozen to the ~614 B Product-1 contract. Every value below is a pure
+  // read or copy of state this function already holds -- NO new calculation,
+  // and the same expressions P1-S2 removed, verbatim.
+  //
+  // CADENCE: its own 60 s throttle, deliberately NOT tied to publishInterval.
+  // The telemetry cadence is alarm-driven (30/10/5 s for NORMAL/WARNING/
+  // CRITICAL); diagnostics have no reason to accelerate with alarm state, and
+  // a 4th CIPSEND every 5 s is exactly the A7670 link pressure that produced
+  // LWMQTT_NETWORK_FAILED_WRITE historically. This block therefore rides the
+  // telemetry cycle that first crosses 60 s and skips every cycle in between.
+  // First call after boot publishes immediately (lastDeviceHealthPub == 0), so
+  // a device that never reaches 60 s of MQTT uptime still reports once.
+  //
+  // FAILURE ISOLATION: the publish result stays in a LOCAL and is never folded
+  // into `success`. A /device-health failure must not stall lastPublish or
+  // inflate g_network.publishFailures -- diagnostics must never be able to make
+  // the main telemetry path look broken.
+  {
+    static uint32_t lastDeviceHealthPub = 0;
+    const uint32_t  nowDh = millis();
+    if (lastDeviceHealthPub == 0 ||
+        (uint32_t)(nowDh - lastDeviceHealthPub) >= DEVICE_HEALTH_INTERVAL_MS) {
+      StaticJsonDocument<512> h;
+      h["plant"]              = PLANT_ID;
+      h["machine_id"]         = MACHINE_ID;
+      h["sensor_id"]          = SENSOR_ID;
+      h["stage"]              = "device_health";
+      h["execution_location"] = "edge";
+
+      // [P1-S3] analysisReason() is called ONCE, not twice as the pre-P1-S2
+      // /vibration block did: analysis_ready and freeze_reason are two views of
+      // one state and must not be able to disagree inside a single payload.
+      const AnalysisReason_t anaR = analysisReason();
+      h["analysis_ready"]     = (anaR == ANA_READY);
+      h["freeze_reason"]      = analysisReasonStr(anaR);
+
+      h["temp_slope"]         = g_trendResult.temp_slope;
+      h["current_slope"]      = g_trendResult.current_slope;   // [v16.6a] CTR4A01, A/s
+      // [v16.6b] CTR4A01 remote-diagnosis pair for the current_slope=0 ambiguity:
+      // buf_count stuck at 0 while read_errors climbs => Modbus reads are failing
+      // (slave address/wiring/baud); both stuck at 0 => the 500 ms cadence never fired.
+      h["current_buf_count"]      = g_currentCount;
+      h["current_read_errors"]    = g_ctReadErrors;
+      // [P4-02] pure copy, no computation -- see P4_02_DESIGN_CONTRACT.md
+      h["current_evidence_valid"] = snap->currentEvidenceValid;
+
+      h["trend_window_s"]     = (g_trendResult.window_samples * 250) / 1000;
+
+      h["timestamp"]          = tsBuf;
+      h["time_synced"]        = g_timeSync.synced;
+      if (g_timeSync.synced)
+        h["sync_age_s"]       = (millis() - g_timeSync.lastSyncMillis) / 1000;
+
+      char   hBuf[512];
+      size_t szHealth = serializeJson(h, hBuf, sizeof(hBuf));
+      // FAIL CLOSED -- same idiom as /sensor, /decision and /vibration.
+      const bool healthJsonOk = (szHealth > 0 && szHealth < sizeof(hBuf) - 1);
+      if (!healthJsonOk) {
+        Serial.printf("[WARN] /device-health JSON truncated -- NOT PUBLISHED! sz=%u buf=%u\n",
+                      (unsigned)szHealth, (unsigned)sizeof(hBuf));
+      } else {
+        bool connBefore9 = mqttClient.connected();  // sampled before the call, per dbgLogMqttPublish
+#ifdef DEBUG_MQTT_TIMING
+        uint32_t t0_pub9 = millis();
+#endif
+        bool pubOk9 = mqttClient.publish(g_mqttTopicDeviceHealth, hBuf, (int)szHealth,
+                                         false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+        dbgLogMqttPublish(g_mqttTopicDeviceHealth, szHealth, MQTT_QOS, pubOk9,
+                          mqttClient.lastError(), millis() - t0_pub9, connBefore9);
+#endif
+        if (pubOk9) {
+          // The throttle advances ONLY on a successful publish, so a failed
+          // cycle retries at the next telemetry tick instead of going dark for
+          // another 60 s. g_network counters are deliberately not touched.
+          lastDeviceHealthPub = nowDh;
+          Serial.printf("[MQTT] /device-health %u B\n", (unsigned)szHealth);
+        } else if (!connBefore9) {
+          Serial.printf("[MQTT] /device-health NOT_CONNECTED (skipped, no send attempt)\n");
+        } else {
+          Serial.printf("[MQTT] /device-health FAILED (err=%d)\n", mqttClient.lastError());
+        }
+      }
     }
   }
 
@@ -10535,6 +10655,11 @@ void setup() {
   // string construction.
   snprintf(g_mqttTopicCommand,    sizeof(g_mqttTopicCommand),
            "factory/%s/machine/%s/vibration/command", PLANT_ID, MACHINE_ID);
+  // [P1-S3] Diagnostics topic. Exists because P1-S2 froze /vibration to the
+  // Product-1 contract and nine engineering fields lost their only publication
+  // path with it -- see the PUBLISH 4 of 4 block in publishTelemetry().
+  snprintf(g_mqttTopicDeviceHealth, sizeof(g_mqttTopicDeviceHealth),
+           "factory/%s/machine/%s/device-health", PLANT_ID, MACHINE_ID);
 
   Serial.println("[Init] MQTT Pipeline Topics:");
   Serial.printf("  /vibration (compat): %s\n", g_mqttTopic);
@@ -10543,6 +10668,7 @@ void setup() {
   Serial.printf("  /trend:              %s\n", g_mqttTopicTrend);
   Serial.printf("  /event:              %s\n", g_mqttTopicEvent);            // V14.4
   Serial.printf("  /command (inbound):  %s\n", g_mqttTopicCommand);          // [Commit 7A]
+  Serial.printf("  /device-health:      %s\n", g_mqttTopicDeviceHealth);       // [P1-S3]
 
   // [Commit 7A] Register the inbound message callback once, at boot --
   // independent of connection state (the library dispatches to this
