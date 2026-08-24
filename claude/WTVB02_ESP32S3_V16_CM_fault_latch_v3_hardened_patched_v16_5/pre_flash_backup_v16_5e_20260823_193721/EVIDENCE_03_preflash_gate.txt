@@ -1,0 +1,25 @@
+PRE-FLASH GATE — v16.5e   (evaluated 2026-08-23, no flash performed)
+
+G1 SOURCE SHA256          PASS
+   48f7146e0274bcde88c8017e7a94e8fa2400bd1fdc292b634f8e70f611d43cae
+G2 EXECUTABLE DIFF        PASS  (vs pre-patch snapshot 2f3d5bfd...)
+   removed: `    if (_tcp.connected()) _tcp.stop();`   <- exactly one line
+   added  : (none)
+   all other changes are comment lines only
+G3 ARTIFACT SHA256        PASS  (traceability only, NOT a reproducibility test)
+   6fea07ddfb8788a103d50554e000ecfc134eb1c7dd6c5a9a05bc18b78ea444cf
+   flash 680420 B (21%) / ram 110008 B (33%)
+G4 ROLLBACK app0 SHA256   PASS
+   7b473ec1fdf168090e8ead7e03e070e5056376b654262872e09107c89bad1dbc
+   full backup set re-verified with sha256sum -c : 6/6 OK
+G5 DEVICE MAC             PASS  3c:84:27:e9:98:7c
+G6 PARTITION GEOMETRY     PASS  (decoded from device, not assumed)
+   app0 0x10000 0x300000 | app1 0x310000 0x300000
+   nvs  0x9000  0x5000   | otadata 0xE000 0x2000
+G7 NVS PRESERVATION       PASS (by procedure)
+   flash target = app0 @ 0x10000 ONLY
+   forbidden: erase-flash, erase-region, merged.bin @ 0x0
+   NVS 0x9000-0xE000 holds motor_nvs/"runtime_h" (operating_hours_total)
+   and the fault-latch record; erasing resets operating hours to 0.
+
+RESULT: 7/7 PASS.  No flash command executed.

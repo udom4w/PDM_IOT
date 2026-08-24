@@ -1,0 +1,40 @@
+PRE-FLASH 60-MINUTE BASELINE — current production firmware (v16.5e NOT flashed)
+Local mirror of /opt/iot-stack/evidence/EVIDENCE_02_preflash_baseline.txt
+
+WINDOW
+  START 2026-08-23T13:33:30Z
+  END   2026-08-23T14:33:30Z
+
+TELEMETRY (authoritative: InfluxDB, bucket iot_vibration)
+  measurement=vibration  machine_id=pump01  field=rms
+  TELEMETRY_COUNT  = 117
+  EXPECTED         = ~120 (60 min / 30 s)
+  TELEMETRY_RATE   = 97.5%
+  TELEMETRY_RESULT = PASS  (gate >= 95%)
+
+BROKER COUNTERS
+  protocol_errors    = 0
+  session_takeovers  = 0
+  connects           = 3
+  disconnects        = 3
+  identity_inventory = 3 pump01 connections, ALL from 49.230.110.171
+
+INTERPRETATION
+  1. Telemetry baseline PASSES at 97.5% (>= 95% gate).
+  2. Protocol-error baseline is ZERO. This is the reference for success
+     criterion A. NOTE: with a zero baseline, criterion A (">=70% reduction")
+     is NOT measurable -- there is nothing to reduce. Post-flash criterion A
+     becomes "must remain 0"; a non-zero post-flash count is a REGRESSION.
+  3. No session takeover occurred during the 60-minute baseline.
+  4. All three reconnects originated from ONE source IP (49.230.110.171) and
+     were logged as "connection closed by client" -- device-initiated, not an
+     external client evicting the session. Baseline variance.
+  5. These reconnects are NOT evidence of v16.5e efficacy. v16.5e is not
+     flashed. Firmware during this window = on-device app0
+     7b473ec1fdf168090e8ead7e03e070e5056376b654262872e09107c89bad1dbc
+  6. CONFOUNDER STATUS: no external client presented as pump01 during this
+     window (single source IP). Success criterion B is therefore measurable
+     for the post-flash window PROVIDED external validation clients remain
+     absent. Re-check identity_inventory post-flash before interpreting B.
+  7. Window-1 stabilization takeovers (2) remain unexplained but did NOT
+     recur across the full baseline hour.

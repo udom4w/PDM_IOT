@@ -1,0 +1,50 @@
+POST-BACKUP STABILIZATION EVIDENCE — current PRODUCTION firmware (pre-v16.5e)
+Recorded from broker-side observation. v16.5e NOT flashed.
+
+DEVICE
+  bench/test unit, the ONLY physical pump01 in existence
+  ESP32-S3  MAC 3c:84:27:e9:98:7c   ClientID pump01   COM5
+
+FIRMWARE UNDER OBSERVATION
+  on-device app0 read-back SHA256
+    7b473ec1fdf168090e8ead7e03e070e5056376b654262872e09107c89bad1dbc
+  (differs from both local rebuilds; builds are non-deterministic)
+
+UTC WINDOW
+  START 2026-08-23T13:10:01Z
+  END   2026-08-23T13:20:11Z
+  (read-back reboots ended ~2026-08-23T12:45Z, ~15 min before WINDOW 1 opens)
+
+WINDOW 1  (13:00:01Z - 13:10:01Z)
+  protocol_errors = 0
+  takeovers       = 2      <-- UNEXPLAINED, see note
+  connects        = 2
+  disconnects     = 2
+  publishes       = UNMEASURED (broker counter unreliable)
+
+WINDOW 2  (13:10:11Z - 13:20:11Z)
+  protocol_errors = 0
+  takeovers       = 0
+  connects        = 0
+  disconnects     = 0
+  telemetry       = 20  (Node-RED 'DROP - health_score', ~30s cadence) CONFIRMED
+
+VERDICT: STABILIZATION PASS (on WINDOW 2)
+
+NOTES
+  1. WINDOW 2 is clean on all measured counters.
+  2. WINDOW 1 takeovers are NOT attributable to the read-back reboots: those
+     ended ~15 min before the window opened. Cause unresolved. Two candidates,
+     not distinguished by these counters:
+       (a) device reconnecting after an ungraceful drop, evicting its own
+           stale broker session (2 connects + 2 disconnects + 2 takeovers fits)
+       (b) an external client connecting with ClientID pump01
+     Discriminator = source-IP/ClientID inventory over 13:00-13:10Z.
+  3. Telemetry continuity CONFIRMED for WINDOW 2 via Node-RED drop log:
+     20 messages / 10 min, matching the 30 s publish cadence. The Mosquitto
+     'Received PUBLISH' counter is unreliable and was NOT used. Node-RED drop
+     count is the authoritative message-count signal from here on.
+  3b. WINDOW 1 telemetry remains unmeasured; W1 is retained only as known
+     pre-existing variance (2 takeovers), attribution still OPEN.
+  4. The disappearance of takeovers between W1 and W2 must NOT be attributed
+     to v16.5e. v16.5e has not been flashed. Firmware was identical in both.

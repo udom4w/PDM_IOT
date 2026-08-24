@@ -1,0 +1,52 @@
+v16.5e FLASH + POST-FLASH VERIFICATION
+Device: ESP32-S3 MAC 3c:84:27:e9:98:7c, COM5, only physical pump01
+
+FLASH
+  UTC_FLASH_START = 2026-08-23T15:59:53Z
+  UTC_FLASH_END   = 2026-08-23T16:00:10Z
+  command: esptool --port COM5 --chip esp32s3 --no-stub --baud 115200
+           --before default-reset --after hard-reset
+           write-flash --flash-mode keep --flash-freq keep --flash-size keep
+           0x10000 <v16.5e app image>
+  artifact SHA256 (verified immediately before flash)
+    6fea07ddfb8788a103d50554e000ecfc134eb1c7dd6c5a9a05bc18b78ea444cf  (680576 B)
+  erase range reported by esptool: 0x00010000 -> 0x000b6fff  (inside app0 only)
+  result: Wrote 680576 bytes in 11.1 s; "Hash of data verified"; exit 0
+  NOT used: --erase-all, merged.bin, any offset below 0x10000
+
+POST-FLASH READ-BACK
+  app0 @0x10000 len 0x300000
+    SHA256 = fe4d2b0a9afaadd1d952f0a90a4cddd3334fc9fb7af54383340fea778e7525d0
+    first 680576 B == flashed artifact  -> BYTE-IDENTICAL (identity PROVEN)
+    differs from pre-flash app0 7b473ec1... -> confirmed changed
+    image magic e9 -> valid app image
+  partition_table @0x8000 : IDENTICAL to pre-flash  (unmodified)
+  otadata        @0xE000 : IDENTICAL to pre-flash  (active slot unchanged)
+  nvs            @0x9000 : NOT erased. 8610 non-0xFF bytes.
+    namespace "motor_nvs" present; keys runtime_h (206 records),
+    ev_pending/ev_rms/ev_magic/ev_kurt/ev_ts/ev_code present.
+    Byte-differs from pre-flash backup -- EXPECTED, the device writes
+    runtime_h during normal operation between backup and flash. Difference
+    is evidence of continued operation, NOT of erasure.
+
+GATE RESULTS
+  Rule 1  flash only v16.5e app image            PASS
+  Rule 2  write only to app0 0x10000             PASS
+  Rule 3  no erase-flash                         PASS
+  Rule 4  no merged.bin                          PASS
+  Rule 5  NVS 0x9000 untouched                   PASS
+  Rule 6  partition table unmodified             PASS
+  Rule 7  artifact SHA re-verified pre-flash     PASS
+  Rule 8  command verified before execution      PASS
+  Rule 9  app0 read back                         PASS
+  Rule 10 read-back SHA recorded                 PASS
+  Rule 11 NVS verified untouched                 PASS
+  Rule 12 no commit                              PASS
+
+DEVICE OFFLINE WINDOW (flash + verification read-backs)
+  approx 2026-08-23T15:59:53Z -> 2026-08-23T16:09Z (~10 min)
+  Post-flash 60-minute observation must START AFTER telemetry resumes.
+
+NOTE: serial boot log was NOT captured. esptool's hard-reset occurred before
+any capture was attached, and the subsequent read-backs reset the device
+again. MQTT/telemetry verification via broker is non-invasive and preferred.

@@ -1,0 +1,180 @@
+v16.5e FINAL NON-REGRESSION — READ-ONLY PRE-COMMIT CHECK
+Recorded 2026-08-24. No flash, no rollback, no container restart, no ACL/cert
+change, no firmware modification performed. Verification only.
+
+Device: ESP32-S3 MAC 3c:84:27:e9:98:7c, COM5, only physical pump01
+Branch : feature/rs485-115200-validation   HEAD f51fea5
+
+================================================================================
+SECTION 1 — LOCALLY VERIFIED IN THIS SESSION (commands re-run, output recorded)
+================================================================================
+
+1. CURRENT PRODUCTION SOURCE SHA256                                       PASS
+   file: claude/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5/
+         WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino
+   measured 48f7146e0274bcde88c8017e7a94e8fa2400bd1fdc292b634f8e70f611d43cae
+   expected 48f7146e0274bcde88c8017e7a94e8fa2400bd1fdc292b634f8e70f611d43cae
+   MATCH. Unchanged since the pre-flash G1 gate.
+
+2. EXECUTABLE DIFF vs PRE-PATCH SNAPSHOT                                  PASS
+   baseline located by content hash, not by filename:
+     baseline_v16_5.ino.bak
+     2f3d5bfd0158a46c71b5e579d5eef52e0b242f2a441ec01fafe528ce8f7d19fe
+   diff baseline -> current:
+     hunks         = 1
+     removed lines = 1
+     added lines   = 15
+   removed (verbatim, sole executable change in the entire file):
+         if (_tcp.connected()) _tcp.stop();
+   added: 15 lines, ALL comment or blank. Verified mechanically -- every added
+   line was tested against ^[[:space:]]*(//.*)?$ and zero lines failed, so no
+   executable statement was introduced anywhere in the patch.
+   Residual textual occurrence of the removed statement in the current source
+   is at line 980 and is INSIDE the [v16.5e] explanatory comment, not code.
+   CONCLUSION: the executable diff is still exactly one removed line, nothing else.
+
+3. FLASHED ARTIFACT IDENTITY INSIDE app0                                  PASS
+   app0 read-back (postflash_verify_v16_5e_20260823/app0_post.bin, 3145728 B)
+     SHA256   fe4d2b0a9afaadd1d952f0a90a4cddd3334fc9fb7af54383340fea778e7525d0
+     expected fe4d2b0a9afaadd1d952f0a90a4cddd3334fc9fb7af54383340fea778e7525d0
+     MATCH.
+   identity proof (stronger than the partition hash alone):
+     sha256(first 680576 B of app0_post.bin)
+       = 6fea07ddfb8788a103d50554e000ecfc134eb1c7dd6c5a9a05bc18b78ea444cf
+       = sha256(flashed artifact)          -> BYTE-IDENTICAL
+   image magic byte 0 = 0xE9 (valid ESP32 app image).
+
+4. FLASHED ARTIFACT SHA256 (recorded)                                     PASS
+   build/esp32.esp32.esp32s3/
+     WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino.bin
+   size 680576 B
+   SHA256 6fea07ddfb8788a103d50554e000ecfc134eb1c7dd6c5a9a05bc18b78ea444cf
+   Re-measured on disk this session; matches the value recorded at flash time.
+
+5. ROLLBACK app0 SHA256 (recorded)                                        PASS
+   pre_flash_backup_v16_5e_20260823_193721/app0.bin
+   SHA256 7b473ec1fdf168090e8ead7e03e070e5056376b654262872e09107c89bad1dbc
+   Full rollback set re-verified with sha256sum -c SHA256SUMS.txt : 6/6 OK
+   (app0, app1, bootloader, nvs, otadata, partition_table). Rollback path is
+   intact and byte-verified as of this check.
+
+   BUILD-IDENTITY CROSS-CHECK (independent of the SHAs above)
+   GIT_COMMIT_HASH literal recovered directly from the binaries:
+     flashed artifact .ino.bin      -> "f51fea5-dirty"
+     post-flash app0 read-back      -> "f51fea5-dirty"   (agrees with artifact)
+     pre-flash rollback app0.bin    -> "8cd2d85-dirty"   (the superseded build)
+   working-tree build_info.h        -> "f51fea5-dirty"   (agrees with what is
+                                       actually running on the device)
+   This is a second, independent line of evidence that the device is running the
+   v16.5e artifact and not the pre-flash image.
+
+6. PRODUCTION SOURCE OF TRUTH PATH                                        PASS
+   Declared in claude/FINAL_MERGE_CHECKLIST.md line 28 as
+     claude/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5/
+     WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino
+   ("only file touched"; "No other source file was modified").
+   The file verified in item 1 IS that path. PASS.
+   DOC DEFECT (not a blocker, NOT corrected here -- read-only check):
+   CLAUDE.md's Architecture line still names
+     WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_3v.ino (~6,600 lines)
+   No such file exists at the production path; the only copy of that name is a
+   stale tree under "New folder/". The real sketch is the v16_5 file above.
+   CLAUDE.md is stale and should be corrected in a separate documentation commit.
+
+7. NO SECOND / DIVERGENT COPY MODIFIED BY THIS CHANGE                     PASS
+   Second copy: claude/firmware/Commit8_CurrentEvidenceFix_RC/
+                WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino
+     SHA256 363c84492516d1e0f407697dc396407f017ae01ee10d2df11fa27e39df51ce0c
+     mtime  2026-08-06 20:08:11 +0700
+   The v16.5e patch was applied 2026-08-23 (baseline snapshot 18:52, patched
+   source 19:01). The second copy predates it by 17 days -> NOT touched by this
+   change. PASS as asked.
+   STANDING DIVERGENCE (pre-existing, flagged not fixed):
+     - still contains the executable line at its line 892:
+           if (_tcp.connected()) _tcp.stop();
+     - contains zero "v16.5e" tags
+   It is an unpatched RC snapshot. It is dirty vs HEAD from earlier work, so a
+   `git commit -a` would sweep those unrelated Aug-06 edits into the v16.5e
+   commit. Stage explicitly by path.
+
+8. NO TinyGSM DEPENDENCY MODIFIED BY THIS CHANGE                          PASS
+   Two copies exist:
+   a) .arduino/libraries/TinyGSM/src/TinyGsmClientSIM7600.h   <- COMPILE PATH
+      (arduino-cli.yaml sets directories.user = C:\Users\HP\Downloads\PDM_IOT\.arduino)
+      git status: CLEAN vs HEAD.  mtime 2026-08-11 02:10, predates the patch.
+      -> the dependency actually linked into the flashed artifact is unmodified.
+   b) T-Vending-master/T-Vending-master/lib/TinyGSM/src/TinyGsmClientSIM7600.h
+      git status: MODIFIED vs HEAD (+44/-3), DEBUG_MQTT_TIMING instrumentation.
+      mtime 2026-08-06 20:08:49 -> predates the patch by 17 days, NOT this change.
+      This copy is NOT in the compile path.
+   Additionally DEBUG_MQTT_TIMING is commented out at production sketch line 129,
+   so that instrumentation is compiled out regardless of which copy is reached.
+   CONCLUSION: this change modified no TinyGSM file. PASS.
+
+   WORKING-TREE DIRTY INVENTORY (source files, vendor WitMotion excluded)
+     M T-Vending-master/.../TinyGsmClientSIM7600.h          (Aug 06, unrelated)
+     M claude/.../v16_5/...v16_5.ino                        (Aug 23, THIS change)
+     M claude/.../v16_5/build_info.h                        (Aug 24, generated)
+     M claude/firmware/Commit8_.../...v16_5.ino             (Aug 06, unrelated)
+   Only two of these belong to v16.5e: the sketch and its generated build_info.h.
+
+================================================================================
+SECTION 2 — OPERATOR-SUPPLIED FIGURES (recorded as given; NOT verified here)
+================================================================================
+PROVENANCE WARNING. The figures below were supplied by the operator for the
+record. They were NOT measured, re-queried, or independently confirmed in this
+session. This session attempted a fresh 10-minute live broker/Influx observation
+and could not perform it: SSH to the broker host was denied by the local
+permission gate, and there is no docker / mosquitto_sub / influx client on this
+workstation. No broker or Influx counter in this file was read by the verifier.
+Treat Section 2 as transcription, Section 1 as verification.
+
+  PRE-FLASH  telemetry                  117/120 = 97.5%
+  PRE-FLASH  pump01 protocol errors     0
+  PRE-FLASH  pump01 takeovers           0
+  POST-FLASH telemetry                  119/120 = 99.17%
+  POST-FLASH operating_hours_total      64.3573 -> 65.8982  (delta 1.5409 h)
+  POST-FLASH latest 60m protocol errors 0
+  POST-FLASH latest 60m takeovers       0
+  Current pump01 session                1 active connection
+
+  Arithmetic consistency (the only thing checkable offline):
+    117/120 = 97.500%   consistent with 97.5%
+    119/120 = 99.167%   consistent with 99.17%
+    operating-hours delta 1.5409 h = 92.5 min of continued runtime, consistent
+    with a device that stayed up across the window.
+  The pre-flash rows also match EVIDENCE_02 (117 count, protocol_errors 0,
+  takeovers 0), so the pre-flash figures are corroborated by an existing
+  artifact. The post-flash rows have no corroborating artifact in this
+  repository.
+
+================================================================================
+SECTION 3 — RESULT
+================================================================================
+
+  RESULT = NON-REGRESSION PASS
+  PROTOCOL_ERROR_FIX = NOT PROVEN
+
+  Basis for NON-REGRESSION PASS: items 1-8 all PASS on re-measurement. The
+  change is one removed executable line plus comments; it modified no second
+  firmware copy and no TinyGSM dependency; the artifact on the device is proven
+  byte-identical to the intended build by two independent methods (SHA prefix
+  identity and baked GIT_COMMIT_HASH); the rollback set verifies 6/6.
+
+  Basis for NOT PROVEN: the pre-flash protocol-error baseline was ZERO
+  (EVIDENCE_02 note 2). There is no error rate to reduce, so no post-flash
+  observation of zero can demonstrate that v16.5e fixed anything. A zero
+  post-flash count is CONSISTENT WITH the fix and is sufficient to show no
+  regression -- it is not evidence of efficacy. Proving the fix requires a
+  window in which the pre-change firmware demonstrably produces protocol errors.
+  Additionally, criterion-B interpretation still depends on the identity
+  inventory being free of any external client presenting as pump01
+  (EVIDENCE_02 note 6); that confounder was not re-checked in this session.
+
+  Two open items carried forward, neither blocking this commit:
+    - the unexplained 2 session takeovers in stabilization WINDOW 1 remain
+      unattributed (EVIDENCE_01 note 2);
+    - the divergent unpatched RC copy in claude/firmware/Commit8_.../ (item 7).
+
+  NOT PERFORMED, as instructed: flash, rollback, container restart, ACL or
+  certificate modification, firmware modification, and any git commit.

@@ -1,0 +1,35 @@
+PRE-FLASH READ-BACK BACKUP — v16.5e field test
+Captured: 2026-08-23 19:37-19:44 +0700 (local)
+
+DEVICE
+  Port            COM5   (USB VID_303A PID_1001, ESP32-S3 native USB-Serial/JTAG)
+  Chip            ESP32-S3 (QFN56) rev v0.2, Dual Core + LP Core, 240MHz
+  PSRAM           Embedded 8MB (AP_3v3)
+  Crystal         40MHz
+  MAC             3c:84:27:e9:98:7c
+  Flash           Manufacturer c8, Device 4018, 16MB, quad (eFuse), 3.3V
+
+PARTITION TABLE (read from device 0x8000, decoded with gen_esp32part.py)
+  nvs       data nvs       0x9000    0x5000   (20K)
+  otadata   data ota       0xE000    0x2000   (8K)
+  app0      app  ota_0     0x10000   0x300000 (3M)   <- ACTIVE (magic e9)
+  app1      app  ota_1     0x310000  0x300000 (3M)   <- ERASED (all 0xFF)
+  ffat      data fat       0x610000  0x9E0000 (10112K)
+  coredump  data coredump  0xFF0000  0x10000  (64K)
+
+ROLLBACK ARTIFACT = app0.bin  -> restore to offset 0x10000, app partition ONLY.
+  Do NOT erase-flash. Do NOT write merged.bin at 0x0. NVS must be preserved
+  (motor_nvs/"runtime_h" = operating_hours_total; fault-latch record).
+
+READS PERFORMED (esptool v5.3.1, read-flash only)
+  0x0      0x8000    bootloader.bin
+  0x8000   0x1000    partition_table.bin
+  0x9000   0x5000    nvs.bin
+  0xE000   0x2000    otadata.bin
+  0x10000  0x300000  app0.bin     (--no-stub @115200; stub @921600/460800 failed)
+  0x310000 0x300000  app1.bin
+  full 16MB image NOT captured.
+
+NOTE: on-device app0 differs from both locally rebuilt images starting at byte 30
+  (header/app-descriptor region). Expected: builds are non-deterministic. This is
+  why the read-back, not a rebuild, is the authoritative rollback artifact.
