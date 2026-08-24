@@ -976,7 +976,21 @@ public:
     // -- Always reset SSL session before connecting --
     // arduino-mqtt does NOT call stop() before retry, so _ssl/_conf may be
     // dirty from a previous failed handshake. Reset them unconditionally.
-    if (_tcp.connected()) _tcp.stop();
+    //
+    // [v16.5e] `if (_tcp.connected()) _tcp.stop();` REMOVED from this block.
+    //
+    // INVARIANT: taskNetwork() calls gsmClient.resetTLS() immediately before the
+    // file's ONLY mqttClient.connect() call site, and resetTLS() unconditionally
+    // performs _tcp.stop(BOUNDED_STOP_MS). The TCP socket is therefore already
+    // closed on entry here, so the removed check could never do useful work.
+    //
+    // It was not merely redundant. _tcp is a TinyGsmClient, and its connected()
+    // dispatches GsmClient::connected() -> available() -> maintain() ->
+    // modemGetAvailable(), which sends AT+CIPRXGET=4,<mux>, and on an empty RX
+    // buffer additionally modemGetConnected() -> AT+CIPCLOSE?. Right after
+    // resetTLS()'s stop() that buffer is guaranteed empty, so BOTH AT round-trips
+    // fired -- into a modem still settling its own CIPCLOSE, and against the
+    // FIX-4 rule this class documents on connected() below.
     _freeSession();
     mbedtls_ssl_init(&_ssl);
     mbedtls_ssl_config_init(&_conf);
