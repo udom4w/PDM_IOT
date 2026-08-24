@@ -4713,7 +4713,7 @@ static uint32_t sensorSrIndexToHz(uint16_t srIndex) {
   }
 }
 
-static bool reconfigSensorAfterRestart() {
+static bool reconfigSensorAfterRestart(bool sensorWasRestarted = true) {
   // [Phase 3A] INVALIDATE sample-rate provenance for the whole duration of
   // reconfiguration. Entering here means the sensor is being (re)configured
   // -- possibly after a restart that reverted its NVM -- so any previously
@@ -4721,8 +4721,34 @@ static bool reconfigSensorAfterRestart() {
   // re-establishes it. Fail-closed: if this function is interrupted, fails,
   // or the read-back mismatches, provenance simply stays UNKNOWN and captures
   // taken meanwhile report srHz == 0 rather than a stale or assumed rate.
-  g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
-  g_sensorSrHzVerified    = 0;
+  //
+  // [v16.5f] The unconditional form of this invalidation destroyed a VERIFIED
+  // rate on a path that could never re-establish it. Observed in production
+  // 2026-08-24T12:50-12:51Z: five consecutive ERR_NO_RESPONSE captures ->
+  // sensor restart/reconfig -> the very next capture reported error=NONE and
+  // sample_count=1024 but srHz=0, and stayed at srHz=0 for the remaining
+  // 38 minutes. Downstream, the producer gate ("result.srHz != 0u") then
+  // rejected every snapshot: 732 captures at srHz=0 produced 0 accel_rms
+  // hand-offs, versus 420 of 425 at srHz=2000. The velocity carrier was
+  // never refreshed again, so velocity_data_valid stayed false.
+  //
+  // The rate itself was never wrong -- SENSOR_SR_PRODUCTION (SR4 / 2 kHz) is
+  // correct and unchanged. What was wrong is that a reconfiguration which does
+  // NOT restart the sensor still forgot the rate it had already verified.
+  //
+  // sensorWasRestarted == true  (default, boot + full-restart callers):
+  //     behaviour is byte-for-byte the previous behaviour -- fail-closed,
+  //     because a restarted sensor may genuinely have reverted its NVM.
+  // sensorWasRestarted == false (quick-reconfig, sensor NOT restarted):
+  //     keep the previously verified rate until this run produces POSITIVE
+  //     evidence that it is wrong or unknowable. See the three invalidation
+  //     sites in the SR read-back block below. Provenance is still never
+  //     fabricated: g_sensorSrHzVerified is only ever assigned from a real
+  //     decoded read-back, exactly as before.
+  if (sensorWasRestarted) {
+    g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+    g_sensorSrHzVerified    = 0;
+  }
 
   // [PATCHED v16.1] reconfigSensorAfterRestart()
   //
@@ -4833,6 +4859,12 @@ static bool reconfigSensorAfterRestart() {
         Serial.printf("[SR] Readback = %s\n", srLabel);
       } else {
         Serial.printf("[SR] Unexpected value = 0x%04X\n", srReadback);
+        // [v16.5f] POSITIVE EVIDENCE #1: the sensor answered with an
+        // undocumented SR index, so the running rate is genuinely unknown.
+        // Invalidate regardless of sensorWasRestarted. Idempotent on the
+        // restarted path, where entry already cleared these.
+        g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+        g_sensorSrHzVerified    = 0;
       }
       // [PD-0005] Transaction success alone does not prove the sensor is
       // actually running at the intended rate -- compare the decoded value
@@ -4861,10 +4893,19 @@ static bool reconfigSensorAfterRestart() {
         Serial.printf("[SR] MISMATCH: readback=0x%04X expected=0x%04X (SENSOR_SR_PRODUCTION) -- SR config FAILED\n",
                       srReadback, SENSOR_SR_PRODUCTION);
         allOk = false;
+        // [v16.5f] POSITIVE EVIDENCE #2: the sensor is demonstrably NOT at the
+        // intended rate, so any previously verified rate is now false.
+        g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+        g_sensorSrHzVerified    = 0;
       }
     } else {
       Serial.println("[SR] Readback FAILED");
       allOk = false;
+      // [v16.5f] POSITIVE EVIDENCE #3: the SR write was attempted above but the
+      // read-back did not complete, so the running rate cannot be confirmed.
+      // Fail closed here even on the quick-reconfig path.
+      g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+      g_sensorSrHzVerified    = 0;
     }
   }
 
@@ -6343,7 +6384,14 @@ void taskModbusRead(void* parameter) {
         // → fail-fast: รอสั้น + ลองครั้งเดียว แล้วปล่อยให้ ALL-ZERO detector (5 reads=1.25s)
         //   escalate ไป full restart path ที่ฟื้นได้จริง (ไม่เสียเวลา ~5s เปล่า ๆ ในเส้นทางที่ล้มเหลวแน่)
         vTaskDelay(pdMS_TO_TICKS(500));
-        bool reOk = reconfigSensorAfterRestart();
+        // [v16.5f] sensorWasRestarted=false: this is the QUICK reconfig -- no
+        // restart command (reg 0x00=0x00FF) is issued on this path, as the
+        // comment above states, so the sensor cannot have reverted its NVM and
+        // a previously VERIFIED sample rate is still true. Passing false stops
+        // this path from destroying that provenance on its way to failing,
+        // which is what left srHz=0 permanently in the 2026-08-24T12:51Z event.
+        // The full-restart path below still calls with the default (true).
+        bool reOk = reconfigSensorAfterRestart(false);
         if (!reOk) {
           Serial.println("[MODBUS] WARNING: Sensor reconfig failed -- CF/VRMS may be 0 until next restart");
           // [v16.3m] reconfig fail → extend warmup suppress window
