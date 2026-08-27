@@ -1,0 +1,77 @@
+# [v16.5g] SR-verify block, extracted verbatim (read-only evidence, not for compilation)
+# Source: claude/backups/WTVB02_v16_5.ino_PRESERVED_SRVERIFY_EVIDENCE_20260827_022228Z
+# Source SHA256: 06e4d9e91034459ab0ed0b2b1e342109a7f437ba4965354cd58e18746d877b4d
+# Block 1 (declaration state): lines 490-501 (12 lines)
+# Block 2 (re-verification logic): lines 6421-6476 (56 lines)
+# ---------------------------------------------------------------
+# BLOCK 1 -- lines 490-501
+// [v16.5g] READ-ONLY SR re-verification backoff state. Closes exactly the gap
+// this file's own comment above already named ("Closing that would need a
+// periodic SR re-read... deliberately out of Phase 3A scope"): once srHz==0,
+// nothing previously re-attempted verification on a healthy sensor -- only a
+// reboot or a stuck-sensor restart could restore it (see b603c2f). This state
+// belongs to the read-only re-verification block in taskModbusRead() only;
+// Core 0 / single-task, same no-mutex contract as g_sensorSr*Verified above.
+static uint32_t s_srVerifyNextMs    = 0;      // eligible immediately once gated conditions hold
+static uint32_t s_srVerifyBackoffMs = 30000UL;
+static uint32_t s_srVerifyAttempts  = 0;
+static const uint32_t SR_VERIFY_BACKOFF_BASE_MS = 30000UL;   // 30 s
+static const uint32_t SR_VERIFY_BACKOFF_MAX_MS  = 900000UL;  // 15 min cap
+
+# BLOCK 2 -- lines 6421-6476
+      // [v16.5g] READ-ONLY SR provenance re-verification. Fires only while
+      // provenance is UNKNOWN (srHz==0); once VERIFIED this is a no-op every
+      // cycle until provenance is lost again. Runs inside the same RS485
+      // window Transaction 7 above already used -- EN has been asserted
+      // since rs485Enable("NORMAL-POLL") at the top of this branch, so no
+      // new enable/disable pair is needed here, and the EN-pin defect on the
+      // quick-reconfig path (.ino:6459, tracked separately) does not apply.
+      //
+      // Read-only by construction: ONE readHoldingRegisters(REG_SAMPLE_RATE)
+      // transaction. No REG_UNLOCK, no writeSingleRegister(), no
+      // SENSOR_CMD_SAVE -- reconfigSensorAfterRestart() is not called and no
+      // sensor-side state changes as a result of this block running. Reuses
+      // the existing sensorSrIndexToHz() decoder unmodified; introduces no
+      // new decoding logic. A rate is latched ONLY on a real decoded read-back
+      // that matches SENSOR_SR_PRODUCTION -- 2000 Hz is never assumed. On any
+      // failure the existing g_sensorSrIndexVerified/g_sensorSrHzVerified are
+      // left untouched (both branches below only ever leave a 0/UNKNOWN
+      // value as 0/UNKNOWN, never overwrite an already-verified value with
+      // anything). handleFifoCaptureCompletion()'s `result.srHz != 0u` DSP
+      // gate (.ino:5936) is not modified by this block.
+      if (g_sensorSrHzVerified == 0u &&
+          success &&
+          g_modbusConsecErrors == 0 &&
+          anaSensorHealthy() &&
+          (int32_t)(millis() - s_srVerifyNextMs) >= 0) {
+
+        s_srVerifyAttempts++;
+        uint8_t srResult = modbus.readHoldingRegisters(REG_SAMPLE_RATE, 1);
+
+        if (srResult != modbus.ku8MBSuccess) {
+          Serial.printf("[SR-VERIFY] READ_FAIL attempt=%lu result=%d next_in_ms=%lu\n",
+                        (unsigned long)s_srVerifyAttempts, (int)srResult,
+                        (unsigned long)s_srVerifyBackoffMs);
+          s_srVerifyNextMs    = millis() + s_srVerifyBackoffMs;
+          s_srVerifyBackoffMs = min(s_srVerifyBackoffMs * 2, SR_VERIFY_BACKOFF_MAX_MS);
+        } else {
+          uint16_t srReadback = modbus.getResponseBuffer(0);
+          uint32_t decodedHz  = sensorSrIndexToHz(srReadback);  // reuse existing decoder
+
+          if (decodedHz != 0u && srReadback == SENSOR_SR_PRODUCTION) {
+            g_sensorSrIndexVerified = srReadback;
+            g_sensorSrHzVerified    = decodedHz;
+            Serial.printf("[SR-VERIFY] VERIFIED index=%u hz=%lu attempt=%lu\n",
+                          srReadback, (unsigned long)decodedHz,
+                          (unsigned long)s_srVerifyAttempts);
+            s_srVerifyBackoffMs = SR_VERIFY_BACKOFF_BASE_MS;  // reset on success
+            s_srVerifyAttempts  = 0;
+          } else {
+            Serial.printf("[SR-VERIFY] UNEXPECTED index=%u hz=%lu attempt=%lu next_in_ms=%lu\n",
+                          srReadback, (unsigned long)decodedHz,
+                          (unsigned long)s_srVerifyAttempts, (unsigned long)s_srVerifyBackoffMs);
+            s_srVerifyNextMs    = millis() + s_srVerifyBackoffMs;
+            s_srVerifyBackoffMs = min(s_srVerifyBackoffMs * 2, SR_VERIFY_BACKOFF_MAX_MS);
+          }
+        }
+      }
