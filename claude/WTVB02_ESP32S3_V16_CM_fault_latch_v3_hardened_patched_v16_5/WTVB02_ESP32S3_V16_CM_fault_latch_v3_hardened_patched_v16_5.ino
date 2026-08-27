@@ -486,6 +486,7 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 // and break the whole build.
 static volatile uint16_t g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
 static volatile uint32_t g_sensorSrHzVerified    = 0;  // 0 == NOT established
+
 #define REG_DRM           0x002B  // Displacement range mode register §6.4.11
 #define SENSOR_DRM_FREQ   0x0002  // 0x02 = Frequency domain algorithm
                                   // จำเป็นสำหรับ VRMS (0x50/0x5C/0x68) ให้คำนวณถูกต้อง
@@ -750,8 +751,55 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 // accidentally removed the vibThresholdsConfigured() gate. Fail-closed by
 // construction rather than by convention.
 #define VIB_THRESHOLD_UNSET (-1.0f)
-#define VIB_WARNING_MMS     VIB_THRESHOLD_UNSET   // TBD -- pending re-baselining
-#define VIB_CRITICAL_MMS    VIB_THRESHOLD_UNSET   // TBD -- pending re-baselining
+
+// ============================================================================
+// [v16.6 S21] PROMLOGIX PROVISIONAL V1 THRESHOLD
+//             ISO-INFORMED / NOT ISO-CERTIFIED
+// ============================================================================
+// These are PROVISIONAL PRODUCT values chosen to enable live evaluation. They
+// are ISO-INFORMED -- the magnitudes are drawn from the velocity-RMS band
+// structure that ISO 20816-class guidance popularised -- but they are NOT an
+// ISO limit, NOT ISO certified, and NOT ISO compliant. No ISO standard
+// document exists in this repository and no ISO machine class has been
+// established for this asset. Do not describe them as an ISO threshold in
+// firmware, telemetry, API, UI or customer documentation.
+//
+// PROVENANCE OF THE MEASURED BASELINE (S13/S20, this bench, 1485 rpm):
+//   healthy, bolts removed : velocity_rms_overall ~= 0.322 mm/s (n=805,
+//                            8 independent starts, across-start CV 4.24%)
+//   known unbalance, bolts installed : ~= 1.025 mm/s (n=550, 3 starts)
+// Both sit BELOW the WARNING value below, so on the present bench this
+// firmware is expected to report NORMAL in both configurations. These
+// thresholds are therefore NOT yet calibrated severity anchors -- the S20
+// multi-level unbalance ladder remains the work that would make them so.
+// ============================================================================
+#define VIB_WARNING_MMS       2.1f   // WARNING_ON   -- provisional V1
+#define VIB_CRITICAL_MMS      4.5f   // CRITICAL_ON  -- provisional V1
+
+// Hysteresis OFF (de-escalation) points. Provisional engineering values.
+// REASON: within-condition CV measured 8.7% (sigma ~= 0.028 mm/s at baseline).
+// A bare threshold makes a machine sitting near a boundary flip state -- and
+// the buzzer -- on measurement spread alone, at the 250 ms decision cadence.
+// The deadband must exceed that spread by a wide margin; 0.2 / 0.3 mm/s do.
+#define VIB_WARNING_OFF_MMS   1.9f   // WARNING_OFF  -- provisional V1
+#define VIB_CRITICAL_OFF_MMS  4.2f   // CRITICAL_OFF -- provisional V1
+
+// Documented reference value only. Deliberately NOT a fourth alarm state:
+// the state machine has exactly three vibration levels (NORMAL/WARNING/
+// CRITICAL) and adding a state would change the alarm contract, the telemetry
+// enum and the API. Recorded here so the intended high-severity reference is
+// preserved with the thresholds it belongs to.
+#define VIB_REFERENCE_HIGH_MMS 7.1f  // reference / high-severity -- NOT a state
+
+// [S21] Escalation persistence, counted in DISTINCT FIFO CAPTURES.
+// The alarm decision runs every ~250 ms but the velocity carrier only
+// refreshes on a new FIFO capture (~2.1 s), so the SAME measurement is
+// re-evaluated ~8 times. Counting decision ticks would count one measurement
+// eight times and prevent nothing. Counting captureId transitions makes "two
+// consecutive observations" mean two genuinely independent measurements
+// (~4.2 s). De-escalation is deliberately NOT persistence-gated -- clearing an
+// alarm promptly is the safe direction, and test 12 requires it.
+#define VIB_ALARM_PERSIST_CAPTURES 2u
 
 // [M1A] Freshness deadline for the velocity carrier.
 // *** TBD PLACEHOLDER -- this is NOT a product SLA. ***
@@ -813,8 +861,18 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define MODEM_RETRY_DELAY 10000     // 10 seconds between retries
 
 // --- Time Sync Configuration ---
-#define NTP_SYNC_INTERVAL 86400000UL       // 24 hours between NTP syncs (ms)
-#define NTP_SYNC_RETRY_INTERVAL 1800000UL  // 30 minutes retry on failure (ms)
+// [v16.5j] NTP retry-loop fix: previously a single pair of constants
+// (NTP_SYNC_INTERVAL=24h, NTP_SYNC_RETRY_INTERVAL=30min) governed the
+// post-sync and pre-sync cadence respectively, but the scheduling gate in
+// checkAndSyncTime() never actually respected either value while sync kept
+// failing (see lastCheckMillis below) -- renamed here to the cadence they
+// actually now drive, with values re-baselined: fast retry while the modem
+// has not yet produced a first valid time (was 30 min, now 30 s -- 30 min
+// to acquire a first RTC sync after boot was too slow), normal interval
+// once synced (was 24h, now 30 min, matching this device's expected drift
+// characteristics).
+#define NTP_CHECK_INTERVAL_MS 1800000UL    // 30 minutes between re-checks once synced
+#define NTP_RETRY_INTERVAL_MS 30000UL      // 30 seconds retry while not yet synced
 #define NTP_DRIFT_WARN_SEC 5               // Warn if drift exceeds 5 seconds
 #define NTP_DRIFT_MAX_SEC 30               // Force-correct if drift > 30 seconds
 
@@ -1906,6 +1964,7 @@ typedef struct {
   MachineState_t  alarm_level;   // effective g_systemState.state at capture (incl. MAINTENANCE) -- not present in VibrationData_t
   VibrationData_t vib;           // full measurement record -- all other fields (rms_x/y/z, cf_max, kurtosis_max, temperature, current_a, timestamp, valid, ...) read from here
   bool            currentEvidenceValid;  // [P4-02] telemetry mirror of g_currentEvidenceValid at capture time -- pure copy, no computation
+  float           currentFilteredA;      // [v16.5i] telemetry mirror of g_currentFilteredA at capture time -- pure copy, no computation; paired 1:1 with currentEvidenceValid above
 } TelemetrySnapshot;
 
 // Network status (Core 1 only) - Modified for 4G
@@ -1927,6 +1986,12 @@ typedef struct {
   bool synced;              // Has time been synced at least once?
   bool ntpReachable;        // Was last NTP/network-time fetch successful?
   uint32_t lastSyncMillis;  // millis() of last successful sync
+  // [v16.5j] millis() of last check ATTEMPT (success or failure) -- this is
+  // what checkAndSyncTime() schedules against. Deliberately separate from
+  // lastSyncMillis (success-only): a failed attempt must still advance the
+  // retry clock, or the interval gate never engages while sync keeps
+  // failing (root cause of the pre-fix busy-retry-every-loop-tick bug).
+  uint32_t lastCheckMillis;
   uint32_t syncCount;       // Total successful syncs
   uint32_t syncFailures;    // Total failed sync attempts
   int32_t lastDriftSec;     // Drift detected at last sync (seconds)
@@ -2428,6 +2493,13 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 #define CURRENT_MIN_SAMPLES         10     // minimum samples before slope reported (5s)
 #define CURRENT_SAMPLE_INTERVAL_MS 500     // acquisition cadence (matches CTR4A01_SENSOR.ino SAMPLE_RATE_HZ=2)
 #define CURRENT_SAMPLE_INTERVAL_S  0.5f    // same, in seconds (for linRegSlope())
+
+// [v16.6j] Hoisted to file scope -- was a function-local static const inside
+// buildMotorStateEvidence() only. Same name, same value, unchanged meaning;
+// moved here so publishTelemetry()'s telemetry-freshness check (see
+// [v16.6j] CURRENT TELEMETRY FRESHNESS below) can share this single
+// definition instead of duplicating the "500ms x 10 = 5s" constant.
+constexpr uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10;
 #define TEMP_SLOPE_WARN     0.001f   //  degC per sample -> temp rising (0.004 degC/s)
 
 // [Commit 4A] EMA smoothing for the Current evidence path -- CTR4A01's raw
@@ -2471,6 +2543,13 @@ static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of 
 // and consumer both run on Core 0 in taskStateMachine(), same cycle, sequential
 // -- no cross-core read of this variable exists (see P4_02_DESIGN_CONTRACT.md §5).
 static bool               g_currentEvidenceValid = false;
+// [v16.5i] Telemetry mirror of s_currentFiltered (buildMotorStateEvidence(),
+// MOTOR_SRC_CURRENT case) -- the held/EMA current magnitude paired with
+// g_currentEvidenceValid above. Written at the exact same two update sites,
+// in the same statement group, so the two mirrors can never describe
+// different cycles. Same no-mutex contract as g_currentEvidenceValid: Core 0,
+// same task, same cycle, sequential producer/consumer.
+static float              g_currentFilteredA     = 0.0f;
 
 // ============================================================================
 // MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
@@ -3790,7 +3869,7 @@ static void checkAndLatchFault(const VibrationData_t* data,
   // indeterminate if that invariant is ever broken by a future edit.
   {
     float latchedVel = 0.0f;
-    if (!readVelocityForAlarm(&latchedVel, NULL)) {
+    if (!readVelocityForAlarm(&latchedVel, NULL, NULL)) {
       latchedVel = 0.0f;
     }
     g_fl.rms = latchedVel;   // [mm/s] velocity_rms_overall (unit unchanged)
@@ -3935,7 +4014,9 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       // vs. FORCE_STOP_TIMEOUT_MS for RPM: two different concerns (evidence
       // freshness vs. FSM business-timeout) sharing one knob would let a
       // future change to one silently change the other.
-      static const uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10;
+      // [v16.6j] Now defined at file scope (see near CURRENT_SAMPLE_INTERVAL_MS)
+      // so publishTelemetry() can share this exact same definition for the
+      // telemetry-freshness check -- was a local static const here only.
 
       // [P4-01] Function-local statics, confined entirely to this branch --
       // not globals, not visible outside buildMotorStateEvidence(). Detects
@@ -3976,6 +4057,7 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
           s_currentLatched       = false;
           s_currentEvidenceValid = false;
           g_currentEvidenceValid = s_currentEvidenceValid;  // [P4-02] telemetry mirror only
+          g_currentFilteredA     = s_currentFiltered;       // [v16.5i] paired mirror, same statement group
         } else if (isFreshSample) {
           if (!s_currentEvidenceValid) {
             // [P4-01] Recovery from Expired/Uninitialized: reseed directly from
@@ -3990,6 +4072,7 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
           }
           s_currentEvidenceValid = true;
           g_currentEvidenceValid = s_currentEvidenceValid;  // [P4-02] telemetry mirror only
+          g_currentFilteredA     = s_currentFiltered;       // [v16.5i] paired mirror, same statement group
         }
         // [P4-01] else: Valid, no new poll this cycle -- hold s_currentFiltered
         // unchanged rather than re-feeding the same stale engineeringCurrentA
@@ -4462,9 +4545,17 @@ static inline bool vibThresholdsConfigured() {
 // Short mutex timeout: this runs in the 250 ms Core 0 poll loop, so it must
 // never stall the Modbus cadence. A timeout is treated as unavailable, which
 // is the fail-closed direction.
-static bool readVelocityForAlarm(float* outMmS, uint32_t* outAgeMs) {
-  if (outMmS)   *outMmS   = 0.0f;
-  if (outAgeMs) *outAgeMs = UINT32_MAX;
+// [S21] outCaptureId is additive: the alarm-persistence counter must advance
+// once per genuinely new measurement, not once per 250 ms poll of the same
+// one. Nothing else about this function's contract changes. Deliberately NOT
+// a defaulted parameter -- the .ino auto-prototype generator does not carry
+// default arguments into the forward declaration, which breaks every caller
+// that appears above this definition. All call sites pass it explicitly.
+static bool readVelocityForAlarm(float* outMmS, uint32_t* outAgeMs,
+                                 uint32_t* outCaptureId) {
+  if (outMmS)      *outMmS      = 0.0f;
+  if (outAgeMs)    *outAgeMs    = UINT32_MAX;
+  if (outCaptureId) *outCaptureId = 0u;
 
   if (mutexVelCarrier == NULL) {
     return false;
@@ -4490,6 +4581,7 @@ static bool readVelocityForAlarm(float* outMmS, uint32_t* outAgeMs) {
   }
 
   if (outMmS) *outMmS = snap.overall;
+  if (outCaptureId) *outCaptureId = snap.captureId;   // [S21]
   return true;
 }
 
@@ -4531,7 +4623,7 @@ static int computeHealthScore(const VibrationData_t* data) {
   }
 
   float vibMmS = 0.0f;
-  if (!readVelocityForAlarm(&vibMmS, NULL)) {
+  if (!readVelocityForAlarm(&vibMmS, NULL, NULL)) {
     return HEALTH_SCORE_UNKNOWN;   // VIBRATION_UNAVAILABLE
   }
   if (!vibThresholdsConfigured()) {
@@ -4564,6 +4656,7 @@ static void captureTelemetrySnapshot(const VibrationData_t* data, MachineState_t
   snap.health_score = computeHealthScore(data);
   memcpy(&snap.vib, data, sizeof(VibrationData_t));
   snap.currentEvidenceValid = g_currentEvidenceValid;  // [P4-02] pure copy, no computation
+  snap.currentFilteredA     = g_currentFilteredA;       // [v16.5i] pure copy, no computation; same cycle as the line above
 
   if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(10)) == pdTRUE) {
     memcpy(&g_telemSnapshot, &snap, sizeof(TelemetrySnapshot));
@@ -5405,6 +5498,7 @@ bool syncRTCFromModem() {
     g_timeSync.ntpReachable = false;
     return false;
   }
+  Serial.println("[NTP] GSM time valid");
 
   // Parse the GSM time string
   DateTime networkUTC;
@@ -5443,6 +5537,7 @@ bool syncRTCFromModem() {
                "%04d-%02d-%02dT%02d:%02d:%02dZ",
                networkUTC.year(), networkUTC.month(), networkUTC.day(),
                networkUTC.hour(), networkUTC.minute(), networkUTC.second());
+      Serial.println("[NTP] Time synchronized");
       return true;
     }
 
@@ -5456,6 +5551,7 @@ bool syncRTCFromModem() {
                "%04d-%02d-%02dT%02d:%02d:%02dZ",
                networkUTC.year(), networkUTC.month(), networkUTC.day(),
                networkUTC.hour(), networkUTC.minute(), networkUTC.second());
+      Serial.println("[NTP] Time synchronized");
       return true;
     }
 
@@ -5491,6 +5587,7 @@ bool syncRTCFromModem() {
            networkUTC.hour(), networkUTC.minute(), networkUTC.second());
 
   Serial.printf("[NTP] + RTC synced successfully (total syncs: %lu)\n", g_timeSync.syncCount);
+  Serial.println("[NTP] Time synchronized");
   return true;
 }
 
@@ -5500,13 +5597,26 @@ bool syncRTCFromModem() {
  */
 void checkAndSyncTime() {
   uint32_t now = millis();
-  uint32_t interval = g_timeSync.synced ? NTP_SYNC_INTERVAL : NTP_SYNC_RETRY_INTERVAL;
+  uint32_t interval = g_timeSync.synced ? NTP_CHECK_INTERVAL_MS : NTP_RETRY_INTERVAL_MS;
 
-  // On first run or after interval
-  if (g_timeSync.lastSyncMillis == 0 || (now - g_timeSync.lastSyncMillis >= interval)) {
+  // [v16.5j] Gate on lastCheckMillis, which advances on every attempt
+  // (success or failure) -- see its declaration comment. The prior version
+  // gated on lastSyncMillis == 0, which stays true forever while sync keeps
+  // failing (lastSyncMillis is success-only), so the interval was never
+  // actually enforced once the modem reported an invalid/epoch time: this
+  // function was being called every taskNetwork() loop tick (~100ms) and
+  // firing a sync attempt on every single call instead of waiting for
+  // NTP_RETRY_INTERVAL_MS between attempts.
+  if (g_timeSync.lastCheckMillis == 0 || (now - g_timeSync.lastCheckMillis >= interval)) {
+    g_timeSync.lastCheckMillis = now;
     Serial.printf("[NTP] Time sync check (interval=%lus, synced=%s)\n",
                   interval / 1000, g_timeSync.synced ? "yes" : "no");
-    syncRTCFromModem();
+    if (!syncRTCFromModem()) {
+      // synced is still false at this point on every failure path, so the
+      // next scheduled attempt will use NTP_RETRY_INTERVAL_MS regardless of
+      // which check inside syncRTCFromModem() rejected this attempt.
+      Serial.printf("[NTP] Next retry in %lus\n", NTP_RETRY_INTERVAL_MS / 1000);
+    }
   }
 }
 
@@ -6391,7 +6501,18 @@ void taskModbusRead(void* parameter) {
         // this path from destroying that provenance on its way to failing,
         // which is what left srHz=0 permanently in the 2026-08-24T12:51Z event.
         // The full-restart path below still calls with the default (true).
+        // [v16.5h] EN-pin fix: rs485Disable("NORMAL-POLL") has already run
+        // (above) by the time this branch is reached, so every Modbus
+        // transaction inside reconfigSensorAfterRestart() below was executing
+        // with RS485_EN_PIN de-asserted -- the exact cause of the "err=226 /
+        // ku8MBResponseTimedOut every time" behaviour the v16.3w comment
+        // above misattributed to a noise-stuck sensor. Bracket matches the
+        // already-correct STUCK-RESTART pattern (rs485Enable/rs485Disable
+        // around restartSensorViaModbus()) exactly, including its settle delay.
+        rs485Enable("QUICK-RECONFIG");
+        vTaskDelay(pdMS_TO_TICKS(5));
         bool reOk = reconfigSensorAfterRestart(false);
+        rs485Disable("QUICK-RECONFIG");
         if (!reOk) {
           Serial.println("[MODBUS] WARNING: Sensor reconfig failed -- CF/VRMS may be 0 until next restart");
           // [v16.3m] reconfig fail → extend warmup suppress window
@@ -7013,8 +7134,17 @@ void taskStateMachine(void* parameter) {
       // [M1A] The Product Phase-1 vibration alarm source.
       float    vibMmS  = 0.0f;
       uint32_t vibAge  = 0;
-      const bool vibOk = readVelocityForAlarm(&vibMmS, &vibAge);
+      uint32_t vibCaptureId = 0;                             // [S21]
+      const bool vibOk = readVelocityForAlarm(&vibMmS, &vibAge, &vibCaptureId);
       g_vibUnavailable = !vibOk;   // exposed on telemetry/display
+
+      // [S21] Escalation-persistence state. Touched ONLY here, inside
+      // taskStateMachine (Core 0), so it needs no lock. s_vibLastCaptureId
+      // makes the counter advance once per new FIFO capture rather than once
+      // per 250 ms poll of the same measurement.
+      static uint32_t       s_vibLastCaptureId = 0;
+      static MachineState_t s_vibPendState     = STATE_NORMAL;
+      static uint8_t        s_vibPendCount     = 0;
 
       // [M1A] Gate on whether a vibration alarm DECISION may be made at all.
       // This is separate from newState: when false, newState is not applied,
@@ -7035,6 +7165,17 @@ void taskStateMachine(void* parameter) {
 
       // [M1A] Vibration alarm decision tree. Reads vibMmS (FIFO RAW -> DSP
       // velocity_rms_overall). Does NOT read rms/sensorData.rms_overall.
+      // [S21] Any branch that does not perform a real threshold comparison
+      // must also drop a part-accumulated escalation. Requirement: an
+      // observation with velocity_data_valid == 0 is NOT an alarm
+      // observation, so it can neither count toward nor bridge a run of two.
+      if (g_motorRunState != MOTOR_RUNNING || g_sensorWarmupReads > 0 ||
+          !vibOk || !vibThresholdsConfigured()) {
+        s_vibPendCount     = 0;
+        s_vibPendState     = STATE_NORMAL;
+        s_vibLastCaptureId = 0;
+      }
+
       if (g_motorRunState != MOTOR_RUNNING) {
         newState = STATE_NORMAL;  // STOPPED/STARTING/STOPPING → ไม่ประเมิน alarm
         // Legitimate NORMAL: the machine genuinely is not running. This is a
@@ -7059,12 +7200,59 @@ void taskStateMachine(void* parameter) {
         // strength of a comparison that was never performed.
         newState = STATE_NORMAL;      // placeholder only -- NOT applied below
         vibDecisionValid = false;
-      } else if (vibMmS < VIB_WARNING_MMS) {
-        newState = STATE_NORMAL;
-      } else if (vibMmS < VIB_CRITICAL_MMS) {
-        newState = STATE_WARNING;
       } else {
-        newState = STATE_CRITICAL;
+        // ── [S21] HYSTERESIS + ESCALATION PERSISTENCE ───────────────────────
+        // Same single evaluation engine as before -- this replaces the bare
+        // three-way comparison in place; no second engine is introduced.
+        //
+        // HYSTERESIS: the band a sample is compared against depends on the
+        // state already held, so a machine sitting on a boundary cannot flip
+        // state (and the buzzer) on measurement spread at the 250 ms cadence.
+        // PERSISTENCE: escalation additionally requires
+        // VIB_ALARM_PERSIST_CAPTURES distinct FIFO captures agreeing, so one
+        // transient sample can never raise an alarm. De-escalation applies
+        // immediately -- clearing is the safe direction.
+        const MachineState_t prevVib =
+            (g_systemState.state == STATE_WARNING ||
+             g_systemState.state == STATE_CRITICAL) ? g_systemState.state
+                                                    : STATE_NORMAL;
+
+        MachineState_t cand;
+        if (prevVib == STATE_CRITICAL) {
+          if      (vibMmS <  VIB_WARNING_OFF_MMS)  cand = STATE_NORMAL;
+          else if (vibMmS <  VIB_CRITICAL_OFF_MMS) cand = STATE_WARNING;
+          else                                     cand = STATE_CRITICAL;
+        } else if (prevVib == STATE_WARNING) {
+          if      (vibMmS >= VIB_CRITICAL_MMS)     cand = STATE_CRITICAL;
+          else if (vibMmS <  VIB_WARNING_OFF_MMS)  cand = STATE_NORMAL;
+          else                                     cand = STATE_WARNING;
+        } else {  // held NORMAL -- use the ON edges
+          if      (vibMmS >= VIB_CRITICAL_MMS)     cand = STATE_CRITICAL;
+          else if (vibMmS >= VIB_WARNING_MMS)      cand = STATE_WARNING;
+          else                                     cand = STATE_NORMAL;
+        }
+
+        if (cand <= prevVib) {
+          // Same level or de-escalation: apply now, drop any pending count.
+          newState = cand;
+          s_vibPendCount = 0;
+          s_vibPendState = cand;
+        } else if (vibCaptureId != s_vibLastCaptureId) {
+          // Escalation, and this is genuinely NEW evidence -- count it once.
+          s_vibLastCaptureId = vibCaptureId;
+          if (cand == s_vibPendState) {
+            if (s_vibPendCount < 0xFFu) s_vibPendCount++;
+          } else {
+            s_vibPendState = cand;
+            s_vibPendCount = 1;
+          }
+          newState = (s_vibPendCount >= VIB_ALARM_PERSIST_CAPTURES)
+                       ? cand : prevVib;
+        } else {
+          // Escalation candidate, but this capture was already counted.
+          // Hold the current state; never double-count one measurement.
+          newState = prevVib;
+        }
       }
 
       // Update system state (with mutex)
@@ -7121,7 +7309,7 @@ void taskStateMachine(void* parameter) {
         // manufacture a health fault out of missing data -- the exact
         // inversion M1A requirement 7 forbids.
         float      latchVibMmS = 0.0f;
-        const bool latchVibOk  = readVelocityForAlarm(&latchVibMmS, NULL);
+        const bool latchVibOk  = readVelocityForAlarm(&latchVibMmS, NULL, NULL);
         const bool healthUsable = (latchVibOk && vibThresholdsConfigured());
 
         if (healthUsable && sensorData.motor_state == 2 &&
@@ -7300,7 +7488,15 @@ void taskNetwork(void* parameter) {
       Serial.println("[CORE 1] Performing initial NTP time sync...");
       // Wait a moment for modem to receive network time
       vTaskDelay(pdMS_TO_TICKS(3000));
-      syncRTCFromModem();
+      // [v16.5j] Routed through checkAndSyncTime() instead of calling
+      // syncRTCFromModem() directly -- this was the second, independent
+      // runtime call site, and it never touched lastCheckMillis, so it sat
+      // outside the fixed scheduler entirely. g_timeSync.lastCheckMillis is
+      // still 0 at this point (nothing has run yet), so checkAndSyncTime()'s
+      // own "lastCheckMillis == 0" first-run gate performs the check
+      // immediately here -- identical timing to the direct call it replaces
+      // -- while now going through the single scheduling/logging path.
+      checkAndSyncTime();
     }
   }
 
@@ -7513,7 +7709,17 @@ void taskNetwork(void* parameter) {
           // Trigger time sync when GPRS comes back up
           if (gprs && !lastGprsState) {
             Serial.println("[CORE 1] GPRS reconnected -- scheduling NTP sync");
-            g_timeSync.lastSyncMillis = 0;  // Force immediate sync check
+            // [v16.5j] Forces checkAndSyncTime()'s NEXT call to fire
+            // immediately, bypassing whatever interval wait was in
+            // progress. Was "lastSyncMillis = 0" -- that field no longer
+            // drives scheduling (see lastCheckMillis), so this line had
+            // silently stopped forcing anything once the gate moved off
+            // lastSyncMillis. Resetting lastCheckMillis instead is also
+            // more correct than the original: lastSyncMillis (last
+            // successful sync) is left untouched, so a GPRS blip no longer
+            // makes the device look like it has "never synced" -- only the
+            // next check's timing is affected, exactly as intended.
+            g_timeSync.lastCheckMillis = 0;
           }
           lastGprsState = gprs;
         }
@@ -8838,6 +9044,25 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
   const VibrationData_t* data  = &snap->vib;
   const MachineState_t   state = snap->alarm_level;
 
+  // [v16.6j] CURRENT TELEMETRY FRESHNESS -- data->current_valid (VibrationData_t)
+  // is a raw per-250ms-tick flag: true only on the exact tick CTR4A01 was
+  // sampled (~500ms cadence), false every other tick even though current_a is
+  // still a perfectly fresh measurement. That flag is deliberately kept as-is
+  // for its OTHER consumer (the trend-buffer append gate in taskStateMachine,
+  // which needs exactly this "new sample this tick" meaning to avoid
+  // double-counting one 500ms sample across multiple 250ms ticks in
+  // calcTrend()'s regression) -- so it is not repurposed here.
+  // The EXPORTED current_valid instead reflects genuine age-based freshness,
+  // reusing the same g_lastCurrentSampleMs timestamp and the same
+  // CURRENT_EVIDENCE_MAX_AGE_MS (5 s) window buildMotorStateEvidence() already
+  // uses -- no new state, just read at the export boundary. current_a itself
+  // is untouched: it already always holds the last successfully measured
+  // value and is never fabricated to 0.
+  const uint32_t currentAgeMs   = millis() - g_lastCurrentSampleMs;
+  const bool     currentFresh   = (g_lastCurrentSampleMs != 0) &&
+                                   (currentAgeMs < CURRENT_EVIDENCE_MAX_AGE_MS);
+  const float    currentAgeS    = currentAgeMs / 1000.0f;
+
   // ── Shared pre-computes ───────────────────────────────────────────────────
   // v16.0: gate alarm + health ด้วย MOTOR_RUNNING
   // STARTING/STOPPING: RMS transient สูง → ไม่ประเมิน alarm/health
@@ -9022,16 +9247,20 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     s["temp"]  = round(data->temperature *  10) /  10.0f;
     s["rpm"]   = data->rpm;
 
-    // [v16.6i] CT-compensated engineering current (see compensateCurrent()) --
-    // first telemetry export of current_a. current_valid=true means current_a
-    // came from a successful fresh CTR4A01 read this cycle; current_valid=false
-    // means current_a must NOT be trusted as a fresh measurement -- it may be
-    // the last successfully read value (read failure / FifoDriver bus
-    // ownership) or an uninitialized/zeroed value (pre-first-read / WTVB02
-    // offline path), depending on lifecycle state. No fabricated current
-    // value is ever generated.
+    // [v16.6i] CT-compensated engineering current (see compensateCurrent()).
+    // [v16.6j] current_valid is now AGE-BASED freshness (currentFresh, computed
+    // above from g_lastCurrentSampleMs / CURRENT_EVIDENCE_MAX_AGE_MS) rather
+    // than "was this the exact tick CTR4A01 was sampled" -- current_valid=true
+    // means the last successful CTR4A01 read is within the 5 s freshness
+    // window; current_valid=false means either no successful read has ever
+    // happened, or the last one is older than that window. current_a is
+    // unaffected by this change -- it always holds the last successfully
+    // measured value and is never fabricated to 0. current_age_s gives the
+    // exact elapsed time so downstream systems can distinguish fresh /
+    // temporarily stale / never-received without a new API field per state.
     s["current_a"]     = round(data->current_a * 100) / 100.0f;
-    s["current_valid"] = data->current_valid;
+    s["current_valid"] = currentFresh;
+    s["current_age_s"] = round(currentAgeS * 10) / 10.0f;
 
     // Harmonic feature extraction
     s["freq_x"]       = freqX;
@@ -9340,16 +9569,14 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     doc["temp"]  = round(data->temperature *  10) /  10.0f;
     doc["rpm"]   = data->rpm;
 
-    // [v16.6i] CT-compensated engineering current (see compensateCurrent()) --
-    // first telemetry export of current_a. current_valid=true means current_a
-    // came from a successful fresh CTR4A01 read this cycle; current_valid=false
-    // means current_a must NOT be trusted as a fresh measurement -- it may be
-    // the last successfully read value (read failure / FifoDriver bus
-    // ownership) or an uninitialized/zeroed value (pre-first-read / WTVB02
-    // offline path), depending on lifecycle state. No fabricated current
-    // value is ever generated.
+    // [v16.6i] CT-compensated engineering current (see compensateCurrent()).
+    // [v16.6j] current_valid is now AGE-BASED freshness -- see the matching
+    // comment on the /sensor export above for the full rationale. current_a
+    // is unaffected -- always the last successfully measured value, never
+    // fabricated to 0.
     doc["current_a"]     = round(data->current_a * 100) / 100.0f;
-    doc["current_valid"] = data->current_valid;
+    doc["current_valid"] = currentFresh;
+    doc["current_age_s"] = round(currentAgeS * 10) / 10.0f;
     // [P1-S2] freq_x/y/z, freq_ratio_x/y/z REMOVED from /vibration -- still
     // published unchanged on /sensor. Raw Hz is not a customer-actionable
     // number; the order-ratio form is Phase-2 diagnostic. Calculations
@@ -11093,10 +11320,28 @@ void setup() {
   Serial.printf("  QoS:       %d\n", MQTT_QOS);
   Serial.printf("  Topic:     %s\n\n", g_mqttTopic);
 
-  Serial.println("Vibration Thresholds:");
-  Serial.printf("  Baseline: %.1f mm/s\n", BASELINE_RMS);
-  Serial.printf("  Warning:  %.1f mm/s\n", WARNING_RMS);
-  Serial.printf("  Critical: %.1f mm/s\n\n", CRITICAL_RMS);
+  // [S21b] Banner text only -- no threshold, logic or evaluation change.
+  // Previously this block printed BASELINE_RMS/WARNING_RMS/CRITICAL_RMS under
+  // the heading "Vibration Thresholds:", which reads as the active Product-1
+  // alarm limits. They are not: they are legacy VRMS-register constants and
+  // have never driven the vibration alarm. Every value below is printed from
+  // its own #define so the banner can never drift from the constants.
+  Serial.println("Product-1 Vibration Thresholds (PROMLOGIX PROVISIONAL V1):");
+  Serial.println("  ISO-INFORMED / NOT ISO-CERTIFIED -- not an ISO limit");
+  Serial.printf ("  WARNING        : %.1f mm/s RMS  (clears below %.1f)\n",
+                 VIB_WARNING_MMS,  VIB_WARNING_OFF_MMS);
+  Serial.printf ("  CRITICAL       : %.1f mm/s RMS  (clears below %.1f)\n",
+                 VIB_CRITICAL_MMS, VIB_CRITICAL_OFF_MMS);
+  Serial.printf ("  REFERENCE HIGH : %.1f mm/s RMS  (reference only -- not an alarm state)\n",
+                 VIB_REFERENCE_HIGH_MMS);
+  Serial.printf ("  Escalation     : %u consecutive FIFO captures\n",
+                 (unsigned)VIB_ALARM_PERSIST_CAPTURES);
+  Serial.printf ("  Source         : FIFO-DSP velocity_rms_overall\n\n");
+
+  Serial.println("Legacy VRMS-register constants (NOT alarm thresholds):");
+  Serial.printf ("  [LEGACY/VRMS ONLY] Baseline: %.1f mm/s\n", BASELINE_RMS);
+  Serial.printf ("  [LEGACY/VRMS ONLY] Warning:  %.1f mm/s\n", WARNING_RMS);
+  Serial.printf ("  [LEGACY/VRMS ONLY] Critical: %.1f mm/s\n\n", CRITICAL_RMS);
 
   Serial.println("Adaptive Sending:");
   Serial.println("  NORMAL:   30 seconds");
@@ -11113,8 +11358,8 @@ void setup() {
 
 
   Serial.println("NTP Time Sync:");
-  Serial.printf("  Sync Interval:  %lu hours\n", NTP_SYNC_INTERVAL / 3600000UL);
-  Serial.printf("  Retry Interval: %lu minutes\n", NTP_SYNC_RETRY_INTERVAL / 60000UL);
+  Serial.printf("  Check Interval: %lu minutes (once synced)\n", NTP_CHECK_INTERVAL_MS / 60000UL);
+  Serial.printf("  Retry Interval: %lu seconds (while unsynced)\n", NTP_RETRY_INTERVAL_MS / 1000UL);
   Serial.printf("  Drift Warn:     %d seconds\n", NTP_DRIFT_WARN_SEC);
   Serial.printf("  Drift Max:      %d seconds\n\n", NTP_DRIFT_MAX_SEC);
 
