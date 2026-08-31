@@ -2030,6 +2030,18 @@ typedef struct {
   float    z;
   uint32_t sampleRateHz; // provenance of the capture these values came from
   uint16_t sampleCount;
+
+  // [Phase 3D] Dominant frequency per axis, from the SAME capture and the SAME
+  // spectrum as the velocity figures above -- same captureId, same timestamp,
+  // no second FIFO read. Appended, so no existing reader is disturbed.
+  // Each *Valid flag is the sole authority for its paired _hz field: when it is
+  // false the value is 0.0f meaning "not computed", never "0 Hz measured".
+  float    domFreqX;     // [Hz]
+  float    domFreqY;
+  float    domFreqZ;
+  bool     domFreqXValid;
+  bool     domFreqYValid;
+  bool     domFreqZValid;
 } VelocityCarrier_t;
 
 // ----------------------------------------------------------------------------
@@ -9140,6 +9152,21 @@ static void processPendingAccelSnapshot() {
   aDoc["velocity_rms_overall"]     = vel.rms_overall;
   aDoc["sample_rate_hz"]           = srHz;
   aDoc["sample_count"]             = sampleCount;
+  // [Phase 3D] Dominant frequency, additive and per-axis. Published ONLY when
+  // that axis's flag is true -- an invalid axis has its key OMITTED entirely
+  // rather than sent as 0, null or NaN, matching how velocity_rms_* is handled
+  // on the replay path: a consumer must never be able to read "not measured"
+  // as a measurement. Derived from the same spectrum as velocity_rms_* above,
+  // so capture_id and sample_rate_hz describe these figures too.
+  if (velDataValid && vel.dominant_frequency_x_valid) {
+    aDoc["dominant_frequency_x_hz"] = roundf(vel.dominant_frequency_x_hz * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.dominant_frequency_y_valid) {
+    aDoc["dominant_frequency_y_hz"] = roundf(vel.dominant_frequency_y_hz * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.dominant_frequency_z_valid) {
+    aDoc["dominant_frequency_z_hz"] = roundf(vel.dominant_frequency_z_hz * 1000.0f) / 1000.0f;
+  }
   // [M1A] Declares which engine produced these vibration figures, so a
   // consumer can distinguish them from the deprecated VRMS-register values
   // still present on /sensor and /vibration.
@@ -9173,6 +9200,16 @@ static void processPendingAccelSnapshot() {
       g_velCarrier.z            = velDataValid ? vel.rms_z : 0.0f;
       g_velCarrier.sampleRateHz = srHz;
       g_velCarrier.sampleCount  = sampleCount;
+      // [Phase 3D] Written under the SAME mutex, in the SAME store, from the
+      // SAME capture as every field above -- a reader that takes the mutex can
+      // never see a dominant frequency belonging to a different capture than
+      // the velocity beside it.
+      g_velCarrier.domFreqX      = velDataValid ? vel.dominant_frequency_x_hz : 0.0f;
+      g_velCarrier.domFreqY      = velDataValid ? vel.dominant_frequency_y_hz : 0.0f;
+      g_velCarrier.domFreqZ      = velDataValid ? vel.dominant_frequency_z_hz : 0.0f;
+      g_velCarrier.domFreqXValid = velDataValid && vel.dominant_frequency_x_valid;
+      g_velCarrier.domFreqYValid = velDataValid && vel.dominant_frequency_y_valid;
+      g_velCarrier.domFreqZValid = velDataValid && vel.dominant_frequency_z_valid;
       xSemaphoreGive(mutexVelCarrier);
     }
   }

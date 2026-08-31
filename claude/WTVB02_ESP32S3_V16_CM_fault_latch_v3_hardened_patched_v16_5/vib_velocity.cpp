@@ -104,8 +104,34 @@ void Fft() {
   }
 }
 
+// ---- [Phase 3D] velocity power of ONE bin, from the FFT already in s_re/s_im
+// ----------------------------------------------------------------------------
+// Reproduces, for a single k, exactly the quantity the RMS loop accumulates:
+//     ms_a = |X[k]|^2 / denom, doubled on interior bins,
+//     ms_v = ms_a / (2*pi*k*dF)^2
+// It is a pure read of s_re/s_im -- it transforms nothing and mutates nothing,
+// so calling it cannot perturb the RMS result that was computed before it.
+//
+// Caller must guarantee VIB_VEL_HP_BIN <= k <= NHALF; that bound is enforced
+// at both call sites rather than silently clamped here, so an out-of-range k
+// is a caller bug that shows up as one, not as a plausible-looking number.
+double VelocityPowerAtBin(uint16_t k, double dF, double denom) {
+  const double re = (double)s_re[k];
+  const double im = (double)s_im[k];
+  double ms_a = (re * re + im * im) / denom;
+  if (k != 0u && k != NHALF) {
+    ms_a *= 2.0;
+  }
+  const double f     = (double)k * dF;
+  const double omega = 2.0 * M_PI * f;
+  return ms_a / (omega * omega);
+}
+
 // ---- One axis: DC-removed acceleration -> velocity RMS (m/s) ----------------
-double AxisVelocityRms(const int16_t* s, uint32_t srHz) {
+// [Phase 3D] outDomHz / outDomValid are OUTPUT-ONLY additions. Everything that
+// produces the return value is byte-for-byte the Phase 3C code.
+double AxisVelocityRms(const int16_t* s, uint32_t srHz,
+                       float* outDomHz, bool* outDomValid) {
   const double toMs2 = VIB_ACCEL_G_MS2 / VIB_ACCEL_LSB_PER_G;
 
   // Step 1 -- identical conversion and mean removal to Phase 3B. Same
@@ -151,6 +177,58 @@ double AxisVelocityRms(const int16_t* s, uint32_t srHz) {
     msvSum += ms_a / (omega * omega);                     // step 7
   }
 
+  // ==========================================================================
+  // [Phase 3D] SECOND SCAN -- everything above this line is Phase 3C, unchanged.
+  // ==========================================================================
+  // A second pass over the SAME s_re/s_im the loop above just read. No FFT is
+  // performed here and msvSum is already final, so the velocity RMS returned
+  // below cannot be affected by anything in this block.
+  if (outDomHz != NULL)    { *outDomHz = 0.0f; }
+  if (outDomValid != NULL) { *outDomValid = false; }
+
+  uint16_t peakBin   = 0u;
+  double   peakPower = -1.0;
+  for (uint16_t k = VIB_VEL_HP_BIN; k <= NHALF; k++) {
+    const double p = VelocityPowerAtBin(k, dF, denom);
+    if (p > peakPower) {
+      peakPower = p;
+      peakBin   = k;
+    }
+  }
+
+  // Both neighbours must exist for the interpolation, and a peak sitting on
+  // either boundary is refused outright: at the HP floor it is indistinguishable
+  // from residual DC that the floor exists to suppress, and at Nyquist it is an
+  // aliasing indicator rather than a measurement.
+  if (peakBin > VIB_VEL_HP_BIN && peakBin < NHALF && peakPower > 0.0) {
+    const double pPrev = VelocityPowerAtBin((uint16_t)(peakBin - 1u), dF, denom);
+    const double pPeak = peakPower;
+    const double pNext = VelocityPowerAtBin((uint16_t)(peakBin + 1u), dF, denom);
+
+    double delta = 0.0;   // 0 == report the raw bin centre
+    if (pPrev > 0.0 && pPeak > 0.0 && pNext > 0.0 &&
+        isfinite(pPrev) && isfinite(pPeak) && isfinite(pNext)) {
+      const double y1  = log(pPrev);
+      const double y2  = log(pPeak);
+      const double y3  = log(pNext);
+      const double den = y1 - 2.0 * y2 + y3;
+      if (isfinite(den) && fabs(den) > 1e-12) {
+        const double d = 0.5 * (y1 - y3) / den;
+        // A true parabola vertex cannot lie further than half a bin from the
+        // sample that won the argmax; anything outside that is numerical noise.
+        if (isfinite(d) && fabs(d) <= 0.5) {
+          delta = d;
+        }
+      }
+    }
+
+    const double fHz = ((double)peakBin + delta) * dF;
+    if (isfinite(fHz) && fHz > 0.0) {
+      if (outDomHz != NULL)    { *outDomHz = (float)fHz; }
+      if (outDomValid != NULL) { *outDomValid = true; }
+    }
+  }
+
   return sqrt(msvSum);                                    // step 9 (m/s)
 }
 
@@ -171,6 +249,12 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
   out->rms_z       = 0.0f;
   out->rms_overall = 0.0f;
   out->valid       = false;
+  out->dominant_frequency_x_hz    = 0.0f;
+  out->dominant_frequency_y_hz    = 0.0f;
+  out->dominant_frequency_z_hz    = 0.0f;
+  out->dominant_frequency_x_valid = false;
+  out->dominant_frequency_y_valid = false;
+  out->dominant_frequency_z_valid = false;
 
   if (x == NULL || y == NULL || z == NULL) {
     return false;
@@ -185,9 +269,13 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
   BuildTables();
 
   // Step 9's mm/s conversion applied once per axis.
-  const double vx = AxisVelocityRms(x, srHz) * VIB_VEL_MS_TO_MMS;
-  const double vy = AxisVelocityRms(y, srHz) * VIB_VEL_MS_TO_MMS;
-  const double vz = AxisVelocityRms(z, srHz) * VIB_VEL_MS_TO_MMS;
+  // [Phase 3D] the two extra arguments are outputs; the returned RMS is
+  // computed by the same statements as before.
+  float dfx = 0.0f, dfy = 0.0f, dfz = 0.0f;
+  bool  dvx = false, dvy = false, dvz = false;
+  const double vx = AxisVelocityRms(x, srHz, &dfx, &dvx) * VIB_VEL_MS_TO_MMS;
+  const double vy = AxisVelocityRms(y, srHz, &dfy, &dvy) * VIB_VEL_MS_TO_MMS;
+  const double vz = AxisVelocityRms(z, srHz, &dfz, &dvz) * VIB_VEL_MS_TO_MMS;
   const double vo = sqrt(vx * vx + vy * vy + vz * vz);
 
   if (!isfinite(vx) || !isfinite(vy) || !isfinite(vz) || !isfinite(vo)) {
@@ -199,5 +287,15 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
   out->rms_z       = (float)vz;
   out->rms_overall = (float)vo;
   out->valid       = true;
+
+  // [Phase 3D] dominant frequency rides on the same validity as the RMS it was
+  // derived from: if the waveform was not good enough to produce a velocity
+  // figure, its spectrum peak is not reportable either.
+  out->dominant_frequency_x_hz    = dfx;
+  out->dominant_frequency_y_hz    = dfy;
+  out->dominant_frequency_z_hz    = dfz;
+  out->dominant_frequency_x_valid = dvx;
+  out->dominant_frequency_y_valid = dvy;
+  out->dominant_frequency_z_valid = dvz;
   return true;
 }

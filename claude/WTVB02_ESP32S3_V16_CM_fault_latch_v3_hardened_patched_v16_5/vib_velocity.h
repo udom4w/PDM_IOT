@@ -27,6 +27,24 @@
 //   8. sum
 //   9. sqrt(sum) * 1000 -> mm/s
 //
+// [Phase 3D] DOMINANT FREQUENCY -- an ADDITIVE second scan of the SAME
+// spectrum, after the velocity RMS above is complete:
+//  10. argmax over ms_v[k] for k = VIB_VEL_HP_BIN .. N/2, recomputed from the
+//      untouched s_re/s_im with the identical expression the RMS loop used.
+//      The RMS loop itself is not modified in any way -- not even its
+//      formatting -- so the velocity figures are bit-identical to Phase 3C.
+//      This is a second SCAN of one FFT result, never a second FFT.
+//  11. parabolic interpolation on log-power over bins (k-1, k, k+1):
+//          delta = 0.5 * (ln P[k-1] - ln P[k+1])
+//                      / (ln P[k-1] - 2*ln P[k] + ln P[k+1])
+//      falling back to delta = 0 (the raw bin centre) whenever any guard
+//      fails. f = (k + delta) * srHz / N.
+//
+// Phase 3D deliberately reports a FREQUENCY ONLY. There is no SNR, no noise
+// floor, no peak-to-mean and no combined across-axis figure: none of those
+// can be given a defensible threshold without field data that does not exist
+// yet, and a fabricated threshold is worse than no threshold.
+//
 // The high-pass floor is what makes step 7 safe: 1/(2*pi*f)^2 diverges as
 // f->0, so the near-DC bins would amplify residual offset and window leakage
 // without bound. Gating at bin 8 removes k=0 (division by zero) and the first
@@ -65,6 +83,20 @@ struct VibVelocityRms {
   float rms_z;
   float rms_overall;   // sqrt(x^2 + y^2 + z^2)
   bool  valid;
+
+  // ---- [Phase 3D] dominant frequency, APPENDED -- existing fields above are
+  // unchanged and unreordered, so every existing reader is unaffected.
+  //
+  // Each axis carries its own validity flag, and that flag is the sole
+  // authority exactly as `valid` is for the RMS fields: when it is false the
+  // paired _hz field is 0.0f meaning "not computed", NEVER "0 Hz measured".
+  // A caller must not publish the number without checking the flag.
+  float dominant_frequency_x_hz;      // Hz, velocity-power spectrum peak
+  float dominant_frequency_y_hz;
+  float dominant_frequency_z_hz;
+  bool  dominant_frequency_x_valid;
+  bool  dominant_frequency_y_valid;
+  bool  dominant_frequency_z_valid;
 };
 
 // ----------------------------------------------------------------------------
@@ -86,8 +118,15 @@ struct VibVelocityRms {
 // taskAnalytics (Core 1) only -- the single-caller contract that makes this
 // safe. Never call it from two tasks concurrently.
 //
-// Contains no reference to any WTVB02 VRMS register (0x50/0x5C/0x68) -- the
-// only input is the RAW FIFO waveform passed in.
+// Contains no reference to any WTVB02 VRMS register (0x50/0x5C/0x68), nor to
+// the sensor's own frequency registers (0x44-0x46) -- the only input is the
+// RAW FIFO waveform passed in. The dominant frequency reported here is derived
+// entirely from that waveform and is independent of anything the sensor
+// reports about frequency.
+//
+// [Phase 3D] The signature is UNCHANGED: dominant frequency rides in the
+// existing out-struct rather than in a new function, because a new function
+// would have to transform the waveform again.
 // ----------------------------------------------------------------------------
 bool VibVelocity_ComputeRms(const int16_t*  x,
                             const int16_t*  y,
