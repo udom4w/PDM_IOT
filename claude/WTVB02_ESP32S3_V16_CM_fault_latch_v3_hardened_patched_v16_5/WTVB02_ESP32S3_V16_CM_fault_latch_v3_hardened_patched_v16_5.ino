@@ -322,7 +322,6 @@ constexpr uint32_t FORCE_CURRENT_STOPPED_MS = 5000;   // [ms] continuous below-O
 // ============================================================================
 // [VERIFY_TEST] RAM-only causal-proof capture for poll_seq / deglitch forensics.
 // Off in production builds; no runtime behavior change when undefined.
-// #define VERIFY_TEST
 
 
 // ============================================================================
@@ -415,8 +414,7 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
                          // CFY=0x53, CFZ=0x5F (ไม่ต่อเนื่อง -- อ่านแยก transaction ถ้าต้องการ)
 #define REG_CFY    0x53  // CFY=Accel Crest Factor Y, KY=Kurtosis Y (0x53~0x54) §6.4.15
 #define REG_CFZ    0x5F  // CFZ=Accel Crest Factor Z, KZ=Kurtosis Z (0x5F~0x60) §6.4.16
-#define REG_PEAK_X 0x3A  // [DESIGN-0004] VX~VZ (vibration speed), 3 consecutive registers
-                         // 0x3A~0x3C, signed, raw/100 -> mm/s, per datasheet §6.4.6
+// [Phase2] REG_PEAK_X (0x3A) REMOVED -- no reader left after peak_velocity_*.
 
 // --- Sensor Re-config Registers (v15.7) ---
 // ใช้หลัง restartSensorViaModbus() เพื่อ restore config ที่อาจกลับเป็น default
@@ -551,7 +549,6 @@ static constexpr const char* GPRS_PASS = "";
 #define ABSENT_STOPPED_MS     30000   // ... > 30s -> STOPPED
 #define STOPPED_CLEAR_MS      (30UL*60UL*1000UL)  // [v16.3aa] หยุด > 30 นาที = clear trend (bearing state เทียบไม่ได้แล้ว)
 #define COLD_START_TEMP_DROP_C 5.0f   // [v16.3ad] temp ลดจากตอนหยุด >= 5°C = bearing เย็นลง = cold start (เทียบ trend ไม่ได้)
-#define RPM_FREQ_GATE         400     // v16.0: RPM floor สำหรับ freq_ratio / freq_alert
                                       // gate หลัก: motor_state == MOTOR_RUNNING (3 จุด)
                                       // gate รอง: rpm >= 400 เป็น safety floor เพิ่มเติม
                                       // ป้องกัน false drift alert ระหว่าง STARTING/STOPPING
@@ -562,7 +559,6 @@ static constexpr const char* GPRS_PASS = "";
 // [v16.3m] RMS sanity cap: ค่าสูงสุดที่เป็นไปได้จริง
 // ถ้า rms > นี้ = garbage จาก sensor reconfig fail → ไม่ update peak hold และไม่ latch
 // ตั้งไว้ที่ 3× CRITICAL threshold = 21.3 mm/s
-#define SANITY_RMS_MAX  (CRITICAL_RMS * 3.0f)
 #define KURTOSIS_CONFIRMED      6.0f  // Kurtosis > 6.0 → CONFIRMED bearing fault
 #define BEARING_STABLE_CYCLES   2     // [v16.3k] ลดจาก 8 → 2 cycles (~1 min @ 30s) หลัง RUNNING
                                       // เพียงพอสำหรับ sensor stabilize หลัง startup transient
@@ -725,7 +721,6 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 
 // --- Machine Configuration ---
 #define MACHINE_NAME MACHINE_ID  // Display uses MACHINE_ID for consistency
-#define BASELINE_RMS 2.8f
 // [M1A LEGACY/TBD] These two thresholds were baselined against the legacy
 // VRMS-register metric, which is max(x,y,z). They are NOT valid for
 // velocity_rms_overall, which is the vector magnitude sqrt(x^2+y^2+z^2) and
@@ -736,8 +731,6 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 // them: computeHealthScore()'s normalization span, SANITY_RMS_MAX, the OLED
 // WARN/CRIT legends, and the trend engine (M1B). They no longer gate any
 // vibration alarm decision.
-#define WARNING_RMS 7.5f    // [M1A LEGACY -- NOT the vibration alarm threshold]
-#define CRITICAL_RMS 11.2f  // [M1A LEGACY -- NOT the vibration alarm threshold]
 
 // [M1A] Product Phase-1 vibration alarm thresholds, in mm/s, applied to
 // velocity_rms_overall (FIFO RAW -> DSP).
@@ -837,9 +830,6 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define QUEUE_SIZE_MAINT 2   // V14.4: maintenance reset events (Button -> Network)
 #define QUEUE_SIZE_MQTT_OUTBOUND 6  // [v16.5] Section 7 Item 3: dormant outbound MQTT queue (Analytics -> Network4G, not wired yet)
 #define QUEUE_SIZE_FIFO_TRIGGER 1  // [Broker, Commit 1] SDS SS14.1 depth-1 request queue (any task -> taskModbusRead)
-#ifdef VERIFY_TEST
-#define QUEUE_SIZE_DIAG_SNAPSHOT 1  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
-#endif
 
 // [M1B-3] 1024 -> 1536. REQUIRED, not cosmetic.
 //
@@ -1763,16 +1753,11 @@ typedef enum {
   ANA_FRZ_STOPPED,
   ANA_FRZ_STARTING,      // รวม warmup + rpm ยังไม่ stable in-band
   ANA_FRZ_STOPPING,
-  ANA_FRZ_VRMS_INVALID
 } AnalysisReason_t;
 
-// [v16.3ac] Point 4: Analytics control command (Core0 → Core1) — แทน boolean flag, ขยายได้
-// ปัจจุบันใช้ CLEAR; FREEZE/RESUME เป็น derived per-tick (analysisReason) ไม่ต้อง queue
-// reserved อนาคต: ANALYTICS_EXPORT, ANALYTICS_REBUILD, ANALYTICS_RECALCULATE
-typedef enum {
-  ANALYTICS_NONE = 0,
-  ANALYTICS_CLEAR        // ล้าง g_buf* + EMA (long stop / cold start)
-} AnalyticsCommand_t;
+// [Phase2] REMOVED: AnalyticsCommand_t / ANALYTICS_NONE / ANALYTICS_CLEAR.
+// The only command was CLEAR, whose job was to wipe g_buf* and the legacy EMA.
+// Both are gone; Core 0 now clears the temperature ring directly (it owns it).
 
 // ============================================================================
 // DATA STRUCTURES
@@ -1780,22 +1765,13 @@ typedef enum {
 
 // Sensor data (shared between cores)
 typedef struct {
-  float rms_x;           // estimated RMS velocity X [mm/s] = vel_peak_x / √2
-  float rms_y;           // estimated RMS velocity Y [mm/s] = vel_peak_y / √2
-  float rms_z;           // estimated RMS velocity Z [mm/s] = vel_peak_z / √2
-  float rms_overall;     // max(rms_x, rms_y, rms_z) -- ใช้สำหรับ threshold / state machine
+  // [Phase2] rms_x/y/z, rms_overall, vel_peak_x/y/z and vel_peak_overall REMOVED.
+  // They were the legacy VRMS-register metric. Vibration now comes exclusively
+  // from FIFO RAW -> DSP (velocity_rms_* via g_velCarrier).
 
-  // --- True Peak Velocity (raw/100, ก่อน ÷√2) [v15.0] ---
-  float vel_peak_x;      // [mm/s] peak velocity X จาก register โดยตรง (0x3A / 100)
-  float vel_peak_y;      // [mm/s] peak velocity Y (0x3B / 100)
-  float vel_peak_z;      // [mm/s] peak velocity Z (0x3C / 100)
-  float vel_peak_overall;// max(vel_peak_x, y, z) -- ใช้ drive g_velPeakHold
-
-  // --- Peak Velocity, register 0x3A-0x3C (signed, DESIGN-0004) ---
-  // ไม่ใช่ vel_peak_x/y/z ด้านบน (field นั้นเปลี่ยนไปเก็บ VRMS ตั้งแต่มีการ repoint register)
-  float peak_velocity_x; // [mm/s] signed, reg 0x3A / 100, datasheet §6.4.6
-  float peak_velocity_y; // [mm/s] signed, reg 0x3B / 100
-  float peak_velocity_z; // [mm/s] signed, reg 0x3C / 100
+  // [Phase2] peak_velocity_x/y/z REMOVED. Their only publisher was /sensor,
+  // dropped in Phase 1, leaving them write-only. The Modbus read of registers
+  // 0x3A-0x3C that produced them is removed with them.
 
   // --- Sensor-computed features [v15.0/15.1] ---
   // คำนวณภายใน chip จาก 16KHz FIFO ถูกต้องกว่าคำนวณบน ESP32
@@ -1833,98 +1809,17 @@ typedef struct {
   // buildMotorStateEvidence()'s MOTOR_SRC_CURRENT branch.
   EvidenceAvailability current_availability;
 
-  // --- [v16.3y] Diagnostic fields for VRMS glitch forensics (steps 1-3) ---
-  int16_t  raw_x;         // ค่าดิบ register VRMS X ก่อนแปลง (getResponseBuffer) — 0 = sensor คืน 0
-  int16_t  raw_y;         // ค่าดิบ register VRMS Y
-  int16_t  raw_z;         // ค่าดิบ register VRMS Z
+  // [Phase2] raw_x/y/z REMOVED from this struct. The raw VRMS registers are
+  // still read in taskModbusRead() as LOCALS and consumed there by the
+  // all-zero / Vx / Vy / Vz stuck detection and sensor auto-restart -- they
+  // never leave that task and are never used as a vibration measurement.
   uint16_t read_time_ms;  // เวลาที่ใช้ทำ Modbus transaction ทั้งชุด (ms)
   uint16_t poll_interval_ms; // ระยะห่างจริงระหว่าง poll รอบนี้กับรอบก่อน (ms, nominal 250)
   uint8_t  retry_count;   // จำนวน sub-read ที่ fail ในรอบนี้ (0 = ผ่านหมด)
   bool     crc_ok;        // true = ทุก read ผ่าน CRC (มาถึง de-glitch = true เสมอ)
 
-#ifdef VERIFY_TEST
-  uint32_t poll_seq;      // [VERIFY_TEST] producer-assigned poll sequence identity
-                          // (Checkpoint 1: field only -- no assignment/read/publish yet)
-#endif
 } VibrationData_t;
 
-#ifdef VERIFY_TEST
-// [VERIFY_TEST] Minimum causal-proof diagnostic record (Checkpoint 1: storage only,
-// no capture logic). Fields cover producer sequence identity + the deglitch decision
-// inputs/outputs needed to correlate a poll against MQTT -> Node-RED -> InfluxDB.
-typedef struct {
-  uint32_t poll_seq;        // producer sequence identity
-  float    rawRmsOverall;   // raw RMS before deglitch
-  float    rawRmsZ;         // raw Z-axis RMS before deglitch
-  float    freq_z;
-  float    lastGoodRmsPre;  // s_lastGoodRms before this decision
-  float    lastGoodRmsPost; // s_lastGoodRms after this decision
-  float    outRms;          // rms_overall after deglitch decision
-  bool     isDropGlitch;
-  uint8_t  glitchHoldPre;   // s_glitchHold before this decision
-  uint8_t  branch;          // which deglitch branch was taken
-  uint8_t  motorState;      // MotorRunState_t at time of decision
-} PollDiagRecord_t;
-
-// [VERIFY_TEST] Checkpoint 5D: compile-time proof of the 32-byte size assumption
-// used for frozen-snapshot memory sizing (Checkpoint 5C Step 2/5).
-static_assert(sizeof(PollDiagRecord_t) == 32, "PollDiagRecord_t size drift");
-
-// [VERIFY_TEST] Single 64-record ring buffer -- unused at Checkpoint 1.
-static PollDiagRecord_t g_diagBuf[64];
-static uint32_t         g_diagHead  = 0;  // next write index
-static uint32_t         g_diagCount = 0;  // number of valid records (0..64)
-
-// [VERIFY_TEST] Checkpoint 3: explicit branch codes for PollDiagRecord_t.branch.
-// Assigned directly inside the existing taskStateMachine() deglitch branches --
-// never re-derives the production gating condition (motor_state/baseline/hold).
-enum : uint8_t {
-  DIAG_BRANCH_NONE = 0,
-  DIAG_BRANCH_NORMAL_ACCEPT,
-  DIAG_BRANCH_DROP_SUPPRESS,
-  DIAG_BRANCH_SPIKE_SUPPRESS,
-  DIAG_BRANCH_DROP_PASS_AFTER_HOLD,
-  DIAG_BRANCH_SPIKE_PASS_AFTER_HOLD,
-  DIAG_BRANCH_NOT_APPLICABLE_NOT_RUNNING,
-  DIAG_BRANCH_NOT_APPLICABLE_NO_BASELINE,
-};
-
-// [VERIFY_TEST] Checkpoint 3: minimum FSM for post-trigger freeze capture.
-enum : uint8_t { DIAG_FSM_ARMED = 0, DIAG_FSM_CAPTURING_POST, DIAG_FSM_FROZEN };
-static uint8_t g_diagFsmState  = DIAG_FSM_ARMED;
-static uint8_t g_diagPostCount = 0;  // valid post-trigger samples captured so far (0..10)
-
-// [VERIFY_TEST] Checkpoint 5A: immutable trigger identity. Written exactly once,
-// only at the ARMED -> CAPTURING_POST transition (taskStateMachine()); never
-// reset, never written again for the lifetime of this boot.
-static uint32_t g_diagTriggerPollSeq = 0;
-
-// [VERIFY_TEST] Checkpoint 5D: immutable frozen-capture snapshot, handed off
-// exactly once from taskStateMachine() (Core 0) to taskAnalytics() (Core 1)
-// through queueDiagSnapshot. records[] is stored in chronological order;
-// chronological_index is intentionally NOT stored (implicit array position);
-// is_trigger is intentionally NOT stored (future consumer derives it only
-// from records[i].poll_seq == trigger_poll_seq).
-typedef struct {
-  uint8_t          fsm_state;                  // g_diagFsmState at freeze (== DIAG_FSM_FROZEN)
-  uint8_t          count;                       // g_diagCount at freeze (0..64)
-  uint8_t          head;                        // g_diagHead at freeze
-  uint32_t         trigger_poll_seq;             // == g_diagTriggerPollSeq
-  PollDiagRecord_t records[64];                  // chronological order
-  uint8_t          physical_buffer_index[64];    // original g_diagBuf index per record
-} PollDiagSnapshot_t;
-
-// [VERIFY_TEST] Checkpoint 5D: one-shot handoff state -- minimum states needed
-// to distinguish queue-unavailable / not-yet-attempted / success / failure.
-// Written only by taskStateMachine(); no consumer reads it yet (Checkpoint 5E).
-enum : uint8_t {
-  DIAG_HANDOFF_NOT_ATTEMPTED = 0,
-  DIAG_HANDOFF_QUEUE_UNAVAILABLE,
-  DIAG_HANDOFF_SENT,
-  DIAG_HANDOFF_SEND_FAILED,
-};
-static uint8_t g_diagHandoffState = DIAG_HANDOFF_NOT_ATTEMPTED;
-#endif
 
 // System state (shared between cores)
 typedef struct {
@@ -2204,9 +2099,6 @@ QueueHandle_t queueFifoTrigger = NULL;  // [Broker, Commit 1] FIFO trigger inten
 // [ARCH-INVARIANT] The Trigger Broker's single admission point. Every
 // producer sends here; taskModbusRead()'s drain block is the only reader.
 // See docs/FIFO_TRIGGER_BROKER_INVARIANTS.md.
-#ifdef VERIFY_TEST
-QueueHandle_t queueDiagSnapshot = NULL;  // [VERIFY_TEST] Checkpoint 5D: one-shot frozen diagnostic snapshot (State -> Analytics)
-#endif
 
 // Mutex Handles
 SemaphoreHandle_t mutexVibData    = NULL;
@@ -2237,7 +2129,6 @@ SemaphoreHandle_t mutexI2C        = NULL;
   } \
 } while(0)
 SemaphoreHandle_t mutexModem      = NULL;  // Mutex for modem access
-SemaphoreHandle_t mutexAggBufs    = NULL;  // Phase 2: protects g_buf1s/10s/60s (taskAnalytics ? taskNetwork)
 SemaphoreHandle_t mutexFaultLatch = NULL;  // v3 hardened: guards g_fl + g_flCount + the "fault_latch" NVS namespace
 SemaphoreHandle_t mutexTelemBuf   = NULL;  // guards g_telemBuf + g_telemBuf* counters
 // [Phase 3B] guards g_accelSnap (Core 0 writes / Core 1 reads) -- see AccelSnapshot_t
@@ -2354,14 +2245,8 @@ static volatile uint32_t g_flCount = 0u;
 typedef struct {
   uint32_t buffered_ts;       // Unix epoch (seconds) when snapshot was captured
                               // (from rtc.now().unixtime(), or 0 if RTC unavailable)
-  float    rms_overall;       // mm/s — rms_overall
-  float    rms_x;             // mm/s
-  float    rms_y;
-  float    rms_z;
-  float    vel_peak_x;        // mm/s peak hold (per-axis)
-  float    vel_peak_y;
-  float    vel_peak_z;
-  float    vel_peak_overall;  // max(peak_x/y/z) — used as "peak" in /sensor
+  // [Phase2] rms_overall / rms_x/y/z / vel_peak_* REMOVED -- the replay payload
+  // no longer carries legacy VRMS/VPEAK (see the replay serializer).
   float    temperature;       // °C
   float    kurtosis_max;      // max kurtosis (bearing health)
   float    cf_max;            // crest factor max
@@ -2406,11 +2291,12 @@ typedef struct {
 } TelemetrySlot_t;
 
 // [M1B-6] Layout guard. The size is the COMPILER-REPORTED value, not an
-// assumed packing: 68 B legacy + 32 B additive (4 floats, 3 uint32, 1 uint16,
-// 2 uint8, padded to 4-byte alignment) = 100 B. If a future edit reorders or
-// adds a field, this fails the build instead of silently changing the RAM
-// footprint of the 120-slot buffer or the bytes memcpy'd on replay.
-#define TELEM_SLOT_EXPECTED_SIZE 100u
+// assumed packing. If a future edit reorders or adds a field, this fails the
+// build instead of silently changing the RAM footprint of the 120-slot buffer
+// or the bytes memcpy'd on replay.
+// [Phase2] 100 B -> 68 B: the eight legacy VRMS/VPEAK floats (rms_overall,
+// rms_x/y/z, vel_peak_x/y/z, vel_peak_overall) were removed from the slot.
+#define TELEM_SLOT_EXPECTED_SIZE 68u
 static_assert(sizeof(TelemetrySlot_t) == TELEM_SLOT_EXPECTED_SIZE,
               "TelemetrySlot_t size changed unexpectedly");
 
@@ -2433,7 +2319,6 @@ static MachineState_t g_flPrevState     = STATE_NORMAL;
 // Statistics (atomic operations, no mutex needed)
 static volatile uint32_t g_sensorReads = 0;
 static volatile uint32_t g_sensorErrors = 0;
-static volatile uint32_t g_deglitchCount = 0;  // [v16.3y] จำนวนครั้งที่ VRMS de-glitch ทำงาน (cumulative)
 static volatile uint32_t g_displayUpdates = 0;
 
 // v15.3: Reset reason (อ่านจาก hardware ตอน boot, persistent via NVS)
@@ -2454,7 +2339,6 @@ static volatile uint8_t  g_motorRunFaultLatchHoldoff = 0;
 // v15.0: เก็บ vel_peak_overall (true peak mm/s = raw/100) แทน rms_overall (ที่แปลงแล้ว)
 // Access pattern: เขียน Core 0 (250ms) / อ่าน+reset Core 1 (publish interval)
 // ใช้ mutex mutexVibData ป้องกัน read+reset จาก Core 1
-static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (reset ทุก publish)
 
 // ============================================================================
 // TREND BUFFER -- Phase 1: Raw Circular Buffer (Core 0 writes / Core 1 reads)
@@ -2474,19 +2358,6 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 //   g_trendBuf ???????? Core 0 (taskStateMachine) ????????
 //   ??????? Core 1 (taskAnalytics, publishTelemetry) ?????? snapshot ??? head+count
 //   ???????? -- float write ???? atomic ?? ESP32 (Xtensa LX7)
-// ============================================================================
-
-// --- Trend Buffer Configuration ---
-#define TREND_BUF_SIZE        240    // samples (60s @ 4Hz) -- Raw circular buffer
-#define TREND_WINDOW_SAMPLES  120    // samples ??????????? trend (30s window)
-#define TREND_MIN_SAMPLES      20    // ??????????????? 20 samples (5s) ?????????
-
-// Thresholds ?????? Trend Engine
-#define TREND_SLOPE_UP      0.002f   // mm/s per sample -> "UP"   (0.008 mm/s/s)
-#define TREND_SLOPE_DOWN   -0.002f   // mm/s per sample -> "DOWN"
-#define SPIKE_RMS_FACTOR    1.5f     // peak > WARNING_RMS x 1.5 -> ??? spike
-#define FREQ_DRIFT_THRESH   0.15f    // freq_ratio drift > 0.15x -> drift detected
-
 // --- Current Trend Buffer (CTR4A01, 500ms cadence) [v16.6a] ---
 #define CURRENT_BUF_SIZE           120     // samples (60s @ 2Hz)
 #define CURRENT_WINDOW_SAMPLES      60     // samples used for regression (30s window)
@@ -2500,7 +2371,6 @@ static volatile float g_velPeakHold = 0.0f;  // [mm/s] true peak velocity hold (
 // [v16.6j] CURRENT TELEMETRY FRESHNESS below) can share this single
 // definition instead of duplicating the "500ms x 10 = 5s" constant.
 constexpr uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10;
-#define TEMP_SLOPE_WARN     0.001f   //  degC per sample -> temp rising (0.004 degC/s)
 
 // [Commit 4A] EMA smoothing for the Current evidence path -- CTR4A01's raw
 // Modbus reading has zero existing filtering (single instantaneous sample
@@ -2513,97 +2383,25 @@ constexpr uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10
 // noise and inrush transients before the threshold comparison.
 #define CURRENT_EMA_ALPHA           0.25f
 
-// --- Trend Sample Struct (Layer 1) ---
-typedef struct {
-  float rms;          // rms_overall [mm/s]
-  float peak;         // velocity peak hold [mm/s]
-  float temp;         // temperature [ degC]
-  float freq_ratio_x; // freq_x / (rpm/60) -- harmonic order
-  float freq_ratio_y;
-  float freq_ratio_z;
-} TrendSample_t;
-
-// --- Trend Buffer Globals (Core 0 writes / Core 1 reads) ---
-static TrendSample_t     g_trendBuf[TREND_BUF_SIZE];
-static volatile uint16_t g_trendHead  = 0;
-static volatile uint16_t g_trendCount = 0;
-
-// --- Current Trend Buffer Globals (Core 0 writes / Core 1 reads) [v16.6a] ---
-// Same cross-core convention as g_trendBuf above: plain float array + volatile
-// head/count (atomic on Xtensa), no mutex -- single writer (taskStateMachine).
-static float              g_currentBuf[CURRENT_BUF_SIZE];
-static volatile uint16_t  g_currentHead  = 0;
-static volatile uint16_t  g_currentCount = 0;
-static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
-static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of last SUCCESSFUL CTR4A01 read (0=never); drives MotorStateEvidence.ageMs for MOTOR_SRC_CURRENT
-
-// [P4-02] Telemetry mirror of s_currentEvidenceValid (buildMotorStateEvidence(),
-// MOTOR_SRC_CURRENT case). NOT a second source of truth -- written only there,
-// read only by captureTelemetrySnapshot(). Plain bool, not volatile: producer
-// and consumer both run on Core 0 in taskStateMachine(), same cycle, sequential
-// -- no cross-core read of this variable exists (see P4_02_DESIGN_CONTRACT.md §5).
-static bool               g_currentEvidenceValid = false;
-// [v16.5i] Telemetry mirror of s_currentFiltered (buildMotorStateEvidence(),
-// MOTOR_SRC_CURRENT case) -- the held/EMA current magnitude paired with
-// g_currentEvidenceValid above. Written at the exact same two update sites,
-// in the same statement group, so the two mirrors can never describe
-// different cycles. Same no-mutex contract as g_currentEvidenceValid: Core 0,
-// same task, same cycle, sequential producer/consumer.
-static float              g_currentFilteredA     = 0.0f;
-
 // ============================================================================
-// MULTI-RESOLUTION AGGREGATION BUFFERS -- Phase 2
+// TEMPERATURE HISTORY RING  [Phase2]
 // ============================================================================
-//
-// taskAnalytics (Core 1) reads g_trendBuf every 1 s -> aggregates -> pushes to
-// 3 circular buffers:
-//
-//   g_buf1s [60]  -- 1 slot = 1 s   -> 60 s of 1-second averages
-//   g_buf10s[60]  -- 1 slot = 10 s  -> 10 min of 10-second averages
-//   g_buf60s[60]  -- 1 slot = 60 s  -> 60 min of 60-second averages
-//
-// RAM: sizeof(AggSample_t) x 60 x 3 ? 8.6 KB
-//
-// Thread safety:
-//   taskAnalytics WRITES g_buf* (Core 1)
-//   taskNetwork (calcTrend) READS g_buf* (Core 1)
-//   Both on same core -> FreeRTOS preemption CAN interleave struct writes
-//   -> protected by mutexAggBufs (lightweight, held <1 ms each direction)
+// Replaces g_trendBuf, which mixed four unrelated concerns in one struct
+// (legacy VRMS rms, legacy VPEAK peak, temperature, freq_ratio_x/y/z). The
+// first, second and fourth are gone; temperature is the only survivor and it
+// gets a plain float ring -- 240 samples @ 4 Hz = 60 s of history, 960 B
+// (against 5.7 KB for the struct it replaces).
+// Written by Core 0 (taskStateMachine), read by Core 1 (calcTemperatureTrend).
+// Plain float array + volatile head/count -- same cross-core convention as the
+// current ring below; float and uint16 reads are atomic on Xtensa.
 // ============================================================================
+#define TEMP_BUF_SIZE        240    // samples (60 s @ 4 Hz)
+#define TEMP_WINDOW_SAMPLES  120    // samples in the slope window (30 s)
+#define TEMP_MIN_SAMPLES      20    // minimum before a slope is reported (5 s)
 
-// --- Aggregated Sample Struct ---
-typedef struct {
-  float   mean_rms;     // ????????? rms_overall ?? slot [mm/s]
-  float   max_rms;      // ????????? rms_overall ?? slot
-  float   stddev_rms;   // standard deviation ??? rms (?????? volatility)
-  float   mean_temp;    // ????????? temperature [ degC]
-  float   max_temp;     // ????????? temperature
-  float   mean_peak;    // ????????? velocity peak hold
-  float   max_peak;     // ????????? peak
-  float   mean_frx;     // ????????? freq_ratio_x
-  float   mean_fry;
-  float   mean_frz;
-  uint8_t spike_count;  // peak > WARNING_RMS x SPIKE_RMS_FACTOR ????? slot
-  uint8_t n_samples;    // raw samples ?????? aggregate (?????? debug)
-  // pad to 4-byte aligned: 10xfloat(40) + 2xuint8(2) + 2 pad = 44 bytes
-} AggSample_t;
-
-// --- Buffer sizes ---
-#define AGG_BUF_1S_SIZE    60   // 60 slots x 1 s  =  60 s  history
-#define AGG_BUF_10S_SIZE   60   // 60 slots x 10 s = 600 s  history (10 min)
-#define AGG_BUF_60S_SIZE   60   // 60 slots x 60 s = 3600 s history (60 min)
-
-// --- Aggregated circular buffers (taskAnalytics writes / calcTrend reads, both Core 1) ---
-static AggSample_t       g_buf1s [AGG_BUF_1S_SIZE];
-static volatile uint16_t g_buf1sHead  = 0;
-static volatile uint16_t g_buf1sCount = 0;
-
-static AggSample_t       g_buf10s[AGG_BUF_10S_SIZE];
-static volatile uint16_t g_buf10sHead  = 0;
-static volatile uint16_t g_buf10sCount = 0;
-
-static AggSample_t       g_buf60s[AGG_BUF_60S_SIZE];
-static volatile uint16_t g_buf60sHead  = 0;
+static float             g_tempBuf[TEMP_BUF_SIZE];
+static volatile uint16_t g_tempHead  = 0;
+static volatile uint16_t g_tempCount = 0;
 
 // ── [v16.3v] NVS Provisioning (relocated after struct definitions) ──
 // ── [v16.3v] NVS Provisioning System ─────────────────────────────────────
@@ -2833,15 +2631,40 @@ static void runConfigMode() {
 }
 
 // ── END NVS Provisioning ───────────────────────────────────────────────────
-static volatile uint16_t g_buf60sCount = 0;
+
+// --- Current Trend Buffer Globals (Core 0 writes / Core 1 reads) [v16.6a] ---
+// Same cross-core convention as g_trendBuf above: plain float array + volatile
+// head/count (atomic on Xtensa), no mutex -- single writer (taskStateMachine).
+static float              g_currentBuf[CURRENT_BUF_SIZE];
+static volatile uint16_t  g_currentHead  = 0;
+static volatile uint16_t  g_currentCount = 0;
+static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
+static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of last SUCCESSFUL CTR4A01 read (0=never); drives MotorStateEvidence.ageMs for MOTOR_SRC_CURRENT
+
+// [P4-02] Telemetry mirror of s_currentEvidenceValid (buildMotorStateEvidence(),
+// MOTOR_SRC_CURRENT case). NOT a second source of truth -- written only there,
+// read only by captureTelemetrySnapshot(). Plain bool, not volatile: producer
+// and consumer both run on Core 0 in taskStateMachine(), same cycle, sequential
+// -- no cross-core read of this variable exists (see P4_02_DESIGN_CONTRACT.md §5).
+static bool               g_currentEvidenceValid = false;
+// [v16.5i] Telemetry mirror of s_currentFiltered (buildMotorStateEvidence(),
+// MOTOR_SRC_CURRENT case) -- the held/EMA current magnitude paired with
+// g_currentEvidenceValid above. Written at the exact same two update sites,
+// in the same statement group, so the two mirrors can never describe
+// different cycles. Same no-mutex contract as g_currentEvidenceValid: Core 0,
+// same task, same cycle, sequential producer/consumer.
+static float              g_currentFilteredA     = 0.0f;
+
+// ============================================================================
+// [Phase2] REMOVED: AggSample_t and the g_buf1s / g_buf10s / g_buf60s cascade
+// ============================================================================
+// 3 x 60 slots x 44 B ~ 7.9 KB of RAM whose only purpose was to feed the legacy
+// VRMS trend keys (slope_1s/10s/60s, max_rms_10min/60min, stddev_1min,
+// slope_var_*, spike_count). Multi-resolution trend now comes from VibWindow_ /
+// VibSlope_ over the M1B-1 velocity history ring.
+
 
 // --- EMA state (taskAnalytics writes, Core 1 only -- no cross-core issue) ---
-#define EMA_ALPHA          0.20f   // ? = 0.20 -> ? ? 4 samples (4s @ 1Hz)
-#define EMA_DIR_THRESHOLD  0.003f  // |delta| > 3 ?m/s per 1s update -> direction
-static float   g_emaRms     = 0.0f;  // EMA ??? rms_overall [mm/s]
-static float   g_emaPrevRms = 0.0f;  // EMA ??????? (???????? direction)
-static float   g_emaDelta   = 0.0f;  // g_emaRms ? g_emaPrevRms [mm/s per 1s]
-static int8_t  g_emaDir     = 0;     // +1=UP  0=STABLE  -1=DOWN
 
 // --- Analytics MQTT topic (built at setup) ---
 static char g_mqttAnalyticsTopic[128];
@@ -2940,88 +2763,32 @@ static void mqttCommandCallback(String &topic, String &payload) {
 
 // -- TrendResult_t -- complete output struct -------------------------------
 typedef struct {
-  // -- Phase 1 fields (30s single-resolution) ------------------------------
-  float    rms_slope;       // mm/s per sample (+= rising, -= falling)
-  float    temp_slope;      //  degC per sample
-  float    current_slope;   // [v16.6a] A per second (CTR4A01, 500ms samples, no thresholds)
-  int8_t   trend_dir;       // +1=UP  0=STABLE  -1=DOWN  (from linreg slope)
-  uint16_t spike_count;     // peak > WARNINGx1.5 ?? 30s window
-  float    freq_drift_x;    // harmonic drift X
-  float    freq_drift_y;
-  float    freq_drift_z;
-  bool     freq_alert;      // drift > FREQ_DRIFT_THRESH >=1 axis
-  float    ttw_hours;       // Phase1 TTW from raw slope [h]
-  uint16_t window_samples;  // ????? samples ?????????? (debug)
-
-  // -- Phase 2 fields (multi-resolution) -----------------------------------
-  float  slope_1s;          // linreg ?? g_buf1s 30 slots  [mm/s per 1s slot]
-  float  slope_10s;         // linreg ?? g_buf10s 30 slots [mm/s per 10s slot]
-  float  slope_60s;         // linreg ?? g_buf60s 30 slots [mm/s per 60s slot]
-  bool   slope_ready_1s;    // true = buf1s >= SLOPE_1S_MIN_SLOTS
-  bool   slope_ready_10s;   // true = buf10s >= SLOPE_10S_MIN_SLOTS
-  bool   slope_ready_60s;   // true = buf60s >= SLOPE_60S_MIN_SLOTS
-  int8_t ema_dir;           // snapshot g_emaDir  (+1/0/-1)
-  float  ema_rms;           // snapshot g_emaRms  [mm/s]
-  float  ema_delta;         // snapshot g_emaDelta [mm/s per 1s]
-  float  stddev_1min;       // mean stddev_rms ??? g_buf1s 60 slots
-  float  max_rms_10min;     // peak max_rms ??? g_buf10s 60 slots
-
+  // [Phase2] Only the two slopes that still have a live source and a live
+  // consumer survive. Removed: rms_slope, trend_dir, spike_count, ttw_hours
+  // (legacy VRMS/VPEAK), freq_drift_x/y/z + freq_alert (freq_ratio pipeline),
+  // slope_1s/10s/60s + slope_ready_* + stddev_1min + max_rms_10min (slot
+  // cascade) and ema_dir/ema_rms/ema_delta (legacy EMA).
+  float    temp_slope;      // degC per sample -- TEMPERATURE register 0x40
+  float    current_slope;   // [v16.6a] A per second (CTR4A01, 500ms samples)
+  uint16_t window_samples;  // samples in the temperature window (debug)
 } TrendResult_t;
 
 static TrendResult_t g_trendResult = { 0 };  // ?? trend ??????
 
 // ── Slope-readiness thresholds (minimum slots required before a tier's ────
 //    slope_*s value is considered trustworthy enough to publish) ──────────
-#define SLOPE_1S_MIN_SLOTS   10   // buf1s  >= 10 slots (~10 s minimum history)
-#define SLOPE_10S_MIN_SLOTS  10   // buf10s >= 10 slots (~100 s minimum history)
-#define SLOPE_60S_MIN_SLOTS  20   // buf60s >= 20 slots (~20 min minimum history)
 
 // ── Rolling variance of mean_rms per tier (OSG + FVRI inputs) ─────────────
 // Updated by computeRmsVariance() inside taskAnalytics, exposed on /trend.
-static float g_slopeVar_1s  = 1e-6f;
-static float g_slopeVar_10s = 1e-6f;
-static float g_slopeVar_60s = 1e-6f;
 
-// ============================================================================
-// PATENT CLAIM 2 -- RPM-Adaptive Slot Duration
-// ============================================================================
-// Instead of a fixed 1-second slot, buf1s slots are sized so each one covers
-// a roughly constant number of shaft revolutions (SLOT_REVS_TARGET),
-// regardless of motor speed. Clamped to [SLOT_DUR_MIN_MS, SLOT_DUR_MAX_MS]
-// so slot width stays sane at very low/high RPM. See computeSlotDurMs().
-#define SLOT_REVS_TARGET   20      // target shaft revolutions per buf1s slot
-#define SLOT_DUR_MIN_MS    200UL   // never go below this slot width (ms)
-#define SLOT_DUR_MAX_MS    5000UL  // never go above this slot width (ms)
+// [Phase2] REMOVED: PATENT CLAIM 2 -- RPM-adaptive slot duration.
+// SLOT_REVS_TARGET / SLOT_DUR_MIN_MS / SLOT_DUR_MAX_MS / computeSlotDurMs()
+// and the g_buf1s/10s/60s slot cascade they drove are all gone; they existed
+// only to produce the legacy VRMS trend outputs.
 
-// taskAnalytics millis-based slot accumulators -- promoted to globals so
-// taskButtonHandler can atomically reset them during a maintenance event
-// while taskAnalytics is suspended (see V14.4 maintenance reset block).
-static uint32_t g_accMs_1s  = 0;
-static uint32_t g_accMs_10s = 0;
-static uint32_t g_accMs_60s = 0;
-
-// Current RPM-adaptive duration (ms) of one buf1s slot; recomputed every
-// taskAnalytics tick from live RPM via computeSlotDurMs().
-static uint32_t g_slotDur1sMs = 1000UL;
-
-// Raw-trend-buffer bookkeeping (taskAnalytics)
-static uint16_t g_anaLastHead   = 0;
-static bool     g_anaFirstRun   = true;
 static uint8_t  g_anaPublishCnt = 0;
 
 // Per-slot running accumulators (build up the next AggSample_t for buf1s)
-static float    g_sl_sumRms   = 0.0f;
-static float    g_sl_sumSqRms = 0.0f;
-static float    g_sl_maxRms   = 0.0f;
-static float    g_sl_sumTemp  = 0.0f;
-static float    g_sl_maxTemp  = 0.0f;
-static float    g_sl_sumPeak  = 0.0f;
-static float    g_sl_maxPeak  = 0.0f;
-static float    g_sl_sumFrx   = 0.0f;
-static float    g_sl_sumFry   = 0.0f;
-static float    g_sl_sumFrz   = 0.0f;
-static uint8_t  g_sl_spikes   = 0;
-static uint8_t  g_sl_n        = 0;
 
 // millis() timestamp when the system last entered STATE_WARMUP (used for the
 // maintenance-reset MQTT audit event timestamp when RTC is not valid).
@@ -3071,12 +2838,8 @@ static MotorStateSource g_motorStateSource  = MOTOR_SRC_RPM;
 static uint32_t        g_runInBandSince      = 0;   // [v16.3z] millis() ที่ rpm เริ่ม in-band ต่อเนื่อง (0=ยังไม่เข้า)
 static uint32_t        g_absentSince         = 0;   // [Commit 3A] millis() when signalPresent first became continuously false (0=currently present)
 static uint32_t        g_motorStoppedSince   = 0;   // [v16.3aa] millis() ที่เข้า STOPPED (0=ไม่ได้หยุด) — วัดระยะเวลาหยุด
-static volatile AnalyticsCommand_t g_analyticsCmd = ANALYTICS_NONE; // [v16.3ac] Core0 → Core1 command (แทน boolean flag)
 static float           g_tempAtStop          = 0.0f; // [v16.3ad] อุณหภูมิตอนเข้า STOPPED — ใช้ตรวจ cold start ตอน resume
-static volatile float  g_lastRmsOverall      = 0.0f; // [v16.3ab] rms ล่าสุด (หลัง de-glitch) ให้ isAnalysisReady() อ่าน (atomic 4-byte)
 static volatile uint32_t g_lastResumeGapS    = 0;    // [v16.3ab] ระยะเวลา gap ครั้งล่าสุด (วินาที) — ส่งขึ้น telemetry
-static volatile bool   g_resumeReinit        = false; // [v16.3ab] Core0 ขอให้ Core1 reinit time-dependent stats หลัง resume
-static uint8_t         g_slopeSuppress       = 0;    // [v16.3ab] suppress slope N calcTrend cycles หลัง resume (time discontinuity)
 
 // ============================================================================
 // [v16.5.3-rpmdiag1] DIAGNOSTIC-ONLY mirrors -- NEVER read by any control-flow
@@ -3096,7 +2859,6 @@ static bool     g_diagSignalPresentInit = false;  // suppress the very first (bo
 //   (current/temp/power) = เพิ่ม predicate 1 ตัว + 1 บรรทัดใน analysisReason() ไม่ต้องแก้ที่อื่น
 static inline bool anaSensorHealthy() { return !g_sensorOffline && (g_sensorWarmupReads == 0); }
 static inline bool anaMotorRunning()  { return g_motorRunState == MOTOR_RUNNING; }  // warmup baked-in (v16.3z)
-static inline bool anaVrmsHealthy()   { return g_lastRmsOverall <= SANITY_RMS_MAX; }
 // future: static inline bool anaCurrentHealthy() {...}  anaTempHealthy() {...}
 
 static AnalysisReason_t analysisReason() {
@@ -3108,7 +2870,6 @@ static AnalysisReason_t analysisReason() {
     case MOTOR_STOPPING: return ANA_FRZ_STOPPING;
     default: break;  // RUNNING
   }
-  if (!anaVrmsHealthy())          return ANA_FRZ_VRMS_INVALID;
   // future: if (!anaCurrentHealthy()) return ANA_FRZ_CURRENT; ...
   return ANA_READY;
 }
@@ -3121,14 +2882,12 @@ static const char* analysisReasonStr(AnalysisReason_t r) {
     case ANA_FRZ_STOPPED:        return "STOPPED";
     case ANA_FRZ_STARTING:       return "STARTING";
     case ANA_FRZ_STOPPING:       return "STOPPING";
-    case ANA_FRZ_VRMS_INVALID:   return "VRMS_INVALID";
   }
   return "?";
 }
 static MotorRunState_t g_prevMotorRunState  = MOTOR_STOPPED;  // v15.2: track transition
 static volatile uint8_t g_bearingStableCnt  = 0;              // v16.0: cycles since RUNNING stable; volatile: written by Core1 (publishTelemetry/taskButtonHandler), read by Core0 (processRPM/taskStateMachine) [fault_latch v3 mandatory fix]
 static bool            g_trendFreqFlushed   = false;          // v16.0: freq_ratio flushed on RUNNING entry
-static uint8_t         g_freqDriftSuppress  = 0;              // v16.0: suppress drift for N calcTrend cycles after flush
 
 // Runtime hour accumulation (NVS persistent)
 static Preferences g_motorPrefs;
@@ -3359,14 +3118,7 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
   // noise-floor/garbage ที่ยังไม่ได้ deglitch -> เก็บ 0 กัน replay ส่ง garbage ออก MQTT ทีหลัง
   bool isRunningBuf   = (data->motor_state == 2);
-  s->rms_overall       = isRunningBuf ? data->rms_overall : 0.0f;
-  s->rms_x             = isRunningBuf ? data->rms_x       : 0.0f;
-  s->rms_y             = isRunningBuf ? data->rms_y       : 0.0f;
-  s->rms_z             = isRunningBuf ? data->rms_z       : 0.0f;
-  s->vel_peak_x        = data->vel_peak_x;
-  s->vel_peak_y        = data->vel_peak_y;
-  s->vel_peak_z        = data->vel_peak_z;
-  s->vel_peak_overall  = max(data->vel_peak_x, max(data->vel_peak_y, data->vel_peak_z));
+  // [Phase2] legacy VRMS/VPEAK capture removed from the telemetry-buffer slot.
   s->temperature       = data->temperature;
   s->kurtosis_max      = data->kurtosis_max;
   // [v16.5] gate เหมือน rms_overall/x/y/z ด้านบน -- ป้องกัน CF garbage
@@ -3658,14 +3410,11 @@ static bool replayTelemBuf() {
   }
 
   // Sensor payload (mirror ของ publishTelemetry /sensor fields)
-  r["rms"]  = round(snap.rms_overall * 100) / 100.0f;
-  r["vx"]   = round(snap.rms_x       * 100) / 100.0f;
-  r["vy"]   = round(snap.rms_y       * 100) / 100.0f;
-  r["vz"]   = round(snap.rms_z       * 100) / 100.0f;
-
-  r["peak"] = round(snap.vel_peak_overall * 100) / 100.0f;
-  // [v16.3r] vpk (vel_peak_overall) ลบออกแล้ว — ซ้ำซ้อนกับ rms
-  // [v16.3i] vel_peak_x/y/z removed
+  // [Phase1] LEGACY VRMS/VPEAK REMOVED from the replay serializer:
+  //   rms, vx, vy, vz  (snap.rms_overall / rms_x / rms_y / rms_z)
+  //   peak             (snap.vel_peak_overall)
+  // Kept in lock-step with live /sensor, which no longer carries them either.
+  // The FIFO-DSP velocity block further down is the replayed vibration source.
 
   r["temp"]         = round(snap.temperature * 10)  /  10.0f;
   r["rpm"]          = snap.rpm;
@@ -3683,11 +3432,12 @@ static bool replayTelemBuf() {
                          (snap.kurtosis_axis == 1) ? "Y" : "Z";
   r["kurtosis_axis"] = kaxisStr;
 
-  // ── [M1B-6] FIFO-DSP velocity, additive ───────────────────────────────
-  // Legacy rms/vx/vy/vz/peak/crest_factor/kurtosis/freq/rpm/temp above are
-  // untouched and still VRMS-derived; this tag makes that explicit in-band,
-  // matching what live /sensor already publishes.
-  r["vibration_source_legacy"] = "vrms_register";
+  // ── [M1B-6] FIFO-DSP velocity ─────────────────────────────────────────
+  // [Phase1] vibration_source_legacy REMOVED -- rms/vx/vy/vz/peak are gone
+  // from this payload, so there is no longer a legacy vibration source to
+  // declare provenance for. crest_factor / kurtosis / freq / rpm / temp above
+  // come from their own sensor registers (0x47.., 0x44.., 0x40), not from
+  // VRMS, and are untouched.
   r["schema_version"]          = snap.schema_version;
   r["velocity_data_valid"]     = snap.velocity_data_valid;
   if (snap.velocity_data_valid) {
@@ -3890,10 +3640,12 @@ static void checkAndLatchFault(const VibrationData_t* data,
 
   g_fl.pending = true;  // set ก่อน release mutex
 
-  Serial.printf("[LATCH] LATCHED ev=%u(%s) sev=%u ts=%lu rms=%.2f kurt=%.3f n=%lu\n",
+  // [Phase2] prints snapRms (== g_fl.rms, the FIFO/DSP velocity recorded above)
+  // instead of the removed legacy data->rms_overall.
+  Serial.printf("[LATCH] LATCHED ev=%u(%s) sev=%u ts=%lu vel=%.2f kurt=%.3f n=%lu\n",
                 evCode, faultEventStr(evCode), faultSeverity(evCode),
                 (unsigned long)epochNow,
-                data->rms_overall, data->kurtosis_max,
+                snapRms, data->kurtosis_max,
                 (unsigned long)g_flCount);
 
   xSemaphoreGive(mutexFaultLatch);  // ← release mutex ก่อน NVS write
@@ -4443,11 +4195,9 @@ static void processRPM(VibrationData_t* data) {
       g_prevMotorRunState != MOTOR_STOPPED) {
     g_bearingStableCnt   = 0;
     g_trendFreqFlushed   = false;  // ต้องตัดสินใจ resume/clear อีกครั้งเมื่อ start ใหม่
-    g_freqDriftSuppress  = 0;
-    g_velPeakHold        = 0.0f;
     g_motorStoppedSince  = millis();  // [v16.3aa] เริ่มจับเวลาหยุด เพื่อตัดสิน resume vs clear
     g_tempAtStop         = data->temperature;  // [v16.3ad] จำ temp ตอนหยุด (ตรวจ cold start ตอน resume)
-    Serial.println("[MOTOR] STOPPED transition -- peak hold reset, freeze analytics");
+    Serial.println("[MOTOR] STOPPED transition -- freeze analytics");
   }
   g_prevMotorRunState = g_motorRunState;
 
@@ -4455,35 +4205,33 @@ static void processRPM(VibrationData_t* data) {
   //   - หยุดนาน 40 นาที แต่ bearing ยังร้อน → trend ยังต่อได้ (RESUME)
   //   - เย็นลงจริง (cold start) → CLEAR แม้เวลาหยุดสั้น
   //   policy เวลา (configurable) ยังใช้เป็น fallback ร่วมกับ thermal
+  // [Phase2] On entry to RUNNING, decide once whether the previous run history
+  // may be resumed or must be discarded. The freq_ratio flush,
+  // g_freqDriftSuppress, the legacy-EMA reseed (g_resumeReinit) and the
+  // ANALYTICS_CLEAR command all went away with the pipelines they served;
+  // g_lastResumeGapS survives because /trend still publishes trend_gap_s.
   if (g_motorRunState == MOTOR_RUNNING && !g_trendFreqFlushed) {
     uint32_t stoppedMs = (g_motorStoppedSince == 0) ? 0 : (millis() - g_motorStoppedSince);
     float    tempDrop  = (g_tempAtStop > 0.0f) ? (g_tempAtStop - data->temperature) : 0.0f;
-    bool     coldStart = (tempDrop >= COLD_START_TEMP_DROP_C);   // bearing เย็นลง = คนละ session
+    bool     coldStart = (tempDrop >= COLD_START_TEMP_DROP_C);
 
     bool clearTrend;
     if (g_trendPersistence == TP_ALWAYS_RESUME)      clearTrend = false;
     else if (g_trendPersistence == TP_ALWAYS_CLEAR)  clearTrend = true;
-    else clearTrend = (stoppedMs > trendClearThresholdMs()) && coldStart; // เกินเวลา "และ" เย็นลงจริง
+    else clearTrend = (stoppedMs > trendClearThresholdMs()) && coldStart;
 
     if (clearTrend) {
-      for (uint16_t i = 0; i < TREND_BUF_SIZE; i++) {
-        g_trendBuf[i].freq_ratio_x = 0.0f;
-        g_trendBuf[i].freq_ratio_y = 0.0f;
-        g_trendBuf[i].freq_ratio_z = 0.0f;
-      }
-      g_freqDriftSuppress = 3;
-      g_analyticsCmd      = ANALYTICS_CLEAR;   // [v16.3ac] command แทน boolean — Core1 เคลียร์ g_buf*
-      Serial.printf("[MOTOR] RUNNING -- CLEAR trend (stop=%lus, tempDrop=%.1f°C cold=%d, policy=%s)\n",
+      memset(g_tempBuf, 0, sizeof(g_tempBuf));
+      g_tempHead  = 0;
+      g_tempCount = 0;
+      Serial.printf("[MOTOR] RUNNING -- CLEAR trend (stop=%lus, tempDrop=%.1fC cold=%d, policy=%s)\n",
                     (unsigned long)(stoppedMs/1000), tempDrop, (int)coldStart, trendPersistenceStr());
     } else {
-      g_freqDriftSuppress = 3;
-      g_lastResumeGapS    = stoppedMs / 1000;
-      g_resumeReinit      = true;   // reseed EMA + suppress slope (time discontinuity, Point 4 เดิม)
-      Serial.printf("[MOTOR] RUNNING -- RESUME, trend preserved (stop=%lus, tempDrop=%.1f°C, bearing warm)\n",
+      g_lastResumeGapS = stoppedMs / 1000;
+      Serial.printf("[MOTOR] RUNNING -- RESUME, trend preserved (stop=%lus, tempDrop=%.1fC, bearing warm)\n",
                     (unsigned long)(stoppedMs/1000), tempDrop);
     }
-    g_trendFreqFlushed  = true;
-    g_motorStoppedSince = 0;
+    g_trendFreqFlushed = true;
   }
 
   // ---------- Prox Signal Quality ----------
@@ -6063,7 +5811,6 @@ void taskModbusRead(void* parameter) {
   uint16_t raw_cfx = 0, raw_kx = 0;  // v15.0: CFX (0x47), KX (0x48) -- unsigned per datasheet §6.4.14
   uint16_t raw_cfy = 0, raw_ky = 0;  // v15.1: CFY (0x53), KY (0x54) -- unsigned per datasheet §6.4.15
   uint16_t raw_cfz = 0, raw_kz = 0;  // v15.1: CFZ (0x5F), KZ (0x60) -- unsigned per datasheet §6.4.16
-  int16_t  raw_peak_x = 0, raw_peak_y = 0, raw_peak_z = 0;  // [DESIGN-0004] VX/VY/VZ (0x3A-0x3C) -- signed per datasheet §6.4.6
 
   Serial.println("[CORE 0] Modbus task started");
 
@@ -6318,11 +6065,6 @@ void taskModbusRead(void* parameter) {
     // neither had a legitimate production caller. FAULT_LATCH,
     // OPERATOR_BUTTON, and REMOTE_ON_DEMAND remain the active producers.
 
-#ifdef VERIFY_TEST
-    // [VERIFY_TEST] Producer-side snapshot: one currentPollSeq per acquisition attempt.
-    // Block-scoped (fresh each loop iteration) -- never reused across iterations.
-    const uint32_t currentPollSeq = g_sensorReads;
-#endif
 
     // [v16.3y] diagnostic timing
     uint32_t t_pollNow      = millis();
@@ -6424,14 +6166,12 @@ void taskModbusRead(void* parameter) {
       }
       vTaskDelay(pdMS_TO_TICKS(5));
 
-      // Transaction 6: Peak Velocity X,Y,Z (3 consecutive registers 0x3A~0x3C) [DESIGN-0004]
-      // Datasheet §6.4.6 worked example: 50 03 00 3A 00 03 -- single 3-register block read
-      if (modbus.readHoldingRegisters(REG_PEAK_X, 3) == modbus.ku8MBSuccess) {
-        raw_peak_x = (int16_t)modbus.getResponseBuffer(0);
-        raw_peak_y = (int16_t)modbus.getResponseBuffer(1);
-        raw_peak_z = (int16_t)modbus.getResponseBuffer(2);
-      }
-      // ทั้ง T3/T4/T5/T6 เป็น optional -- ไม่ set success = false ถ้า fail
+      // [Phase2] Transaction 6 (Peak Velocity 0x3A~0x3C) REMOVED. Its only
+      // consumer was peak_velocity_x/y/z on /sensor, dropped in Phase 1, so the
+      // read had become pure bus traffic. This is the ONLY Modbus register read
+      // removed by Phase 2: VRMS 0x50/0x5C/0x68 stay (stuck detection) and FREQ
+      // 0x44-0x46 stay (raw Hz still shown on the OLED and /sensor).
+      // ทั้ง T3/T4/T5 เป็น optional -- ไม่ set success = false ถ้า fail
 
       // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
       // Cadence gating + result storage only -- readCTR4A01Current() owns the
@@ -6683,23 +6423,12 @@ void taskModbusRead(void* parameter) {
       // DATA PROCESSING [v15.0]
       // ============================================================
 
-      // Step 1: True Peak Velocity (raw/100) -- ค่าดิบจาก register ก่อนแปลง
-      // VRMS (0x50/0x5C/0x68) ส่งค่า True RMS velocity [mm/s] (§6.4.14-16)
-      // Scaling: raw / 1000.0f → mm/s (ไม่ต้อง × 0.7071 เพราะเป็น True RMS แล้ว)
-      localData.vel_peak_x       = abs(raw_x) / 1000.0f;  // [mm/s] VRMS X
-      localData.vel_peak_y       = abs(raw_y) / 1000.0f;  // [mm/s] VRMS Y
-      localData.vel_peak_z       = abs(raw_z) / 1000.0f;  // [mm/s] VRMS Z
-      localData.vel_peak_overall = max(localData.vel_peak_x,
-                                       max(localData.vel_peak_y, localData.vel_peak_z));
-
-      // Step 2: Estimated RMS (Peak / √2) -- ใช้สำหรับ threshold / state machine
-      // สมมติ sinusoidal vibration (standard approximation, rotating machinery)
-      // VRMS = True RMS แล้ว -- ใช้ค่าตรงโดยไม่ต้องแปลง
-      localData.rms_x       = localData.vel_peak_x;
-      localData.rms_y       = localData.vel_peak_y;
-      localData.rms_z       = localData.vel_peak_z;
-      localData.rms_overall = max(localData.rms_x,
-                                  max(localData.rms_y, localData.rms_z));
+      // [Phase2] Step 1/2 REMOVED. raw_x/y/z (VRMS registers 0x50/0x5C/0x68) are
+      // NO LONGER converted into a vibration measurement. They survive solely as
+      // the input to the all-zero / Vx / Vy / Vz stuck detection and the sensor
+      // auto-restart above -- a hardware watchdog, not a metric. The single
+      // authoritative vibration measurement is FIFO RAW -> DSP velocity
+      // (VibVelocity_ComputeRms -> g_velCarrier -> velocity_rms_*).
 
       // Step 3: Sensor-computed CF & Kurtosis -- ครบ 3 แกน [v15.1]
       // คำนวณจาก 16KHz raw FIFO ภายใน chip
@@ -6739,9 +6468,6 @@ void taskModbusRead(void* parameter) {
       // Step 4c: Peak Velocity X/Y/Z (signed, raw/100) [DESIGN-0004]
       // เก็บค่า signed ตรงจาก register -- ไม่ทำ abs() (Decision 4, ยืนยันจาก datasheet §6.4.6)
       // raw = 0 ถ้า T6 fail (optional transaction, ไม่กระทบ success หลัก) -> ค่าเป็น 0.0f เอง
-      localData.peak_velocity_x = raw_peak_x / 100.0f;
-      localData.peak_velocity_y = raw_peak_y / 100.0f;
-      localData.peak_velocity_z = raw_peak_z / 100.0f;
 
       // [v16.3u] Step 4b: NaN / Inf guard — Defensive float check
       // ป้องกัน PANIC จาก Modbus corrupt value ที่ผ่าน sanity check แต่ทำให้ float exception
@@ -6753,19 +6479,16 @@ void taskModbusRead(void* parameter) {
       };
 
       // ถ้าค่าใดค่าหนึ่งเป็น NaN/Inf → skip cycle นี้ทั้งหมด (ไม่เข้า State Machine)
-      if (!isFloatSafe(localData.rms_overall)   ||
-          !isFloatSafe(localData.vel_peak_x)    ||
-          !isFloatSafe(localData.vel_peak_y)    ||
-          !isFloatSafe(localData.vel_peak_z)    ||
-          !isFloatSafe(localData.temperature)   ||
+      // [Phase2] legacy rms_overall / vel_peak_* dropped from this guard along
+      // with the fields themselves; temperature / CF / kurtosis still checked.
+      if (!isFloatSafe(localData.temperature)   ||
           !isFloatSafe(localData.cf_max)        ||
           !isFloatSafe(localData.kurtosis_max)) {
         Serial.printf("[SENSOR] ! NaN/Inf detected in derived values -- skipping cycle "
-                      "(rms=%.2f vx=%.2f vy=%.2f vz=%.2f) [v16.3u]\n",
-                      localData.rms_overall,
-                      localData.vel_peak_x,
-                      localData.vel_peak_y,
-                      localData.vel_peak_z);
+                      "(temp=%.2f cf=%.2f kurt=%.2f) [v16.3u]\n",
+                      localData.temperature,
+                      localData.cf_max,
+                      localData.kurtosis_max);
         // ไม่ set localData.valid = true → State Machine ไม่รับค่านี้
         rs485Disable("NAN-GUARD");
         xLastWakeTime = xTaskGetTickCount();
@@ -6773,39 +6496,20 @@ void taskModbusRead(void* parameter) {
         continue;
       }
 
-      // Step 5: Velocity Peak Hold -- v16.0: gate ด้วย MOTOR_RUNNING
-      // STARTING/STOPPING: transient spike ไม่มีความหมาย mechanical → ไม่ update hold
-      // RUNNING เท่านั้น: สะสมค่าสูงสุดตลอด publish interval
-      // Core 0 เขียน / Core 1 อ่าน+reset -- atomic float write (ESP32 4-byte aligned)
-      // [v16.3m] เพิ่ม 2 guards:
-      //   1. g_sensorWarmupReads > 0 → suppress หลัง reconfig fail
-      //   2. rms > SANITY_RMS_MAX → garbage value จาก sensor ไม่ update peak
-      if (g_motorRunState == MOTOR_RUNNING &&
-          g_sensorWarmupReads == 0 &&
-          localData.vel_peak_overall <= SANITY_RMS_MAX &&
-          localData.vel_peak_overall > g_velPeakHold) {
-        g_velPeakHold = localData.vel_peak_overall;  // [mm/s] true peak hold
-      }
-      // [v16.3m] ถ้า rms garbage → ใช้ peak hold เดิม ไม่ให้ค่าผิดโผล่ใน payload
-      localData.peak = (localData.vel_peak_overall <= SANITY_RMS_MAX)
-                       ? g_velPeakHold : g_velPeakHold;
+      // [Phase2] Step 5 Velocity Peak Hold REMOVED together with g_velPeakHold.
+      // It was a max-hold over the legacy VRMS registers that bypassed the
+      // de-glitch entirely. FIFO/DSP exposes no peak metric and none is invented
+      // here -- a consumer that wanted "peak" now gets nothing, not a fake value.
       // ---------------------------------------------------------------
 
       localData.timestamp = millis();
       localData.valid = true;
 
-      // [v16.3y] diagnostic fields for glitch forensics
-      localData.raw_x            = raw_x;
-      localData.raw_y            = raw_y;
-      localData.raw_z            = raw_z;
       localData.read_time_ms     = (uint16_t)(millis() - t_readStart);
       localData.poll_interval_ms = pollIntervalMs;
       localData.retry_count      = retryCount;
       localData.crc_ok           = success;   // มาถึงจุดนี้ = ทุก read ผ่าน CRC
 
-#ifdef VERIFY_TEST
-      localData.poll_seq = currentPollSeq;  // [VERIFY_TEST] producer sequence identity
-#endif
 
       // Send to queue (non-blocking)
       if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
@@ -6830,9 +6534,6 @@ void taskModbusRead(void* parameter) {
         memset(&localData, 0, sizeof(VibrationData_t));
         localData.valid     = false;
         localData.timestamp = millis();
-#ifdef VERIFY_TEST
-        localData.poll_seq = currentPollSeq;  // [VERIFY_TEST] producer sequence identity (offline placeholder)
-#endif
         if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
           // queue ???? -- ??? critical, ??????????
         }
@@ -6875,10 +6576,6 @@ void taskStateMachine(void* parameter) {
         // zeroed/invalid offline view is now built directly into the
         // snapshot capture below instead of a separate g_vibData write.
 
-        // Reset peak hold เมื่อ sensor offline
-        // ป้องกัน peak ค้างข้ามช่วง offline -> online [v15.0: hold = true peak]
-        g_velPeakHold = 0.0f;
-
         // ?????? state ???? NORMAL -- ???? trigger alarm ??? sensor ???????
         // [v16.5.4] offlineState captured in this SAME critical section
         // (rather than a second mutexSystemState take below) -- one lock
@@ -6914,203 +6611,26 @@ void taskStateMachine(void* parameter) {
       // -- + ?????????????: ???????????? --
       processRPM(&sensorData);
 
-      // [v16.3x/v16.4] Single-sample VRMS de-glitch — DROP and SPIKE
-      // DROP (v16.3x, unchanged): sensor ส่ง rms ต่ำผิดปกติ (~0.1) มา 1 sample ขณะ motor RUNNING (rpm~1500)
-      // โดย Modbus transaction สำเร็จ (ไม่นับ error) และ stuck detector ไม่จับ (ไม่ใช่ 0 ซ้ำ)
-      // → ถ้า rms ร่วง < 20% ของ sample ดีก่อนหน้าขณะ RUNNING = glitch, hold ค่าดีเดิม 1 sample
-      //   ถ้า sample ถัดไปยังต่ำอีก = ของจริง (เครื่องเบาลง/หยุดจริง) → ปล่อยผ่าน (hold สูงสุด 1 ครั้ง)
-      //
-      // SPIKE (v16.4, NEW): ยืนยันจาก field test log (WTVB02_VelocityComparison.ino, 2026-07-03) —
-      // พบ 2 เหตุการณ์ที่ VRMS พุ่งผิดปกติ (RMS_RAW=65535 และ RMS/Peak ratio=170x) ทั้งคู่เกิดพร้อมกับ
-      // freq_x=freq_y=freq_z=0.0 Hz เสมอ แล้วกลับสู่ baseline ปกติใน sample ถัดไปทันที (transient เดียว)
-      // สาเหตุ: WTVB05 คำนวณ VRMS จาก broadband spectral energy (independent pipeline จาก dominant-
-      // frequency detection) ดังนั้นเมื่อ FFT หา dominant frequency ไม่ได้ (freq=0) แต่มี impulsive/
-      // broadband noise เข้ามา VRMS อาจพุ่งขึ้นได้โดยไม่มี Peak amplitude รองรับ (ดู PIX/VRMS ratio ผิดปกติ)
-      // Invariant ทางฟิสิกส์: การสั่นสะเทือนจริงขณะ motor RUNNING ต้องมี dominant frequency != 0 เสมอ
-      // → ถ้า freq ทั้ง 3 แกน = 0 พร้อมกับ rms เบี่ยงเบนจาก baseline (ไม่ว่าขึ้นหรือลง) = glitch แน่นอน
-      // ก่อนหน้านี้ค่า spike ทะลุผ่าน deglitch เดิมตรงไปเทียบ WARNING_RMS/CRITICAL_RMS ทันที (บรรทัดถัดไป)
-      // ทำให้เกิด STATE_WARNING/CRITICAL ปลอม + buzzer ทำงานโดยไม่มี fault จริง — นี่คือ Priority 1 root cause
-      {
-        static float   s_lastGoodRms = 0.0f;
-        static float   s_lastGoodX   = 0.0f, s_lastGoodY = 0.0f, s_lastGoodZ = 0.0f;
-        static uint8_t s_glitchHold  = 0;
-        const  float   DEGLITCH_RATIO      = 0.20f;  // rms < 20% ของค่าดีก่อนหน้า = น่าสงสัย (DROP)
-        const  float   SPIKE_DEGLITCH_MULT = 2.5f;   // rms > 2.5x ของค่าดีก่อนหน้า = น่าสงสัย (SPIKE)
-
-        const bool zeroFreqAllAxes = (sensorData.freq_x == 0.0f &&
-                                       sensorData.freq_y == 0.0f &&
-                                       sensorData.freq_z == 0.0f);
-        const bool isDropGlitch = (sensorData.rms_overall < s_lastGoodRms * DEGLITCH_RATIO);
-        const bool isSpikeGlitch = zeroFreqAllAxes &&
-                                    (sensorData.rms_overall > s_lastGoodRms * SPIKE_DEGLITCH_MULT ||
-                                     sensorData.rms_overall > SANITY_RMS_MAX);
-
-#ifdef VERIFY_TEST
-        // [VERIFY_TEST] Checkpoint 3: pre-decision snapshot -- taken before the
-        // production if/else below can overwrite rms_overall or mutate
-        // s_lastGoodRms / s_glitchHold.
-        const float   diagRawRmsOverall  = sensorData.rms_overall;
-        const float   diagRawRmsZ        = sensorData.rms_z;
-        const float   diagLastGoodRmsPre = s_lastGoodRms;
-        const uint8_t diagGlitchHoldPre  = s_glitchHold;
-        uint8_t       diagBranch         = DIAG_BRANCH_NORMAL_ACCEPT;
-#endif
-
-        if (sensorData.motor_state == 2 &&                       // เฉพาะตอน RUNNING
-            s_lastGoodRms > 0.5f &&                              // มี baseline ที่เชื่อถือได้
-            (isDropGlitch || isSpikeGlitch) &&
-            s_glitchHold == 0) {                                 // hold ได้ครั้งเดียวติดกัน
-          g_deglitchCount++;
-          // [v16.3y] rich forensic log: แยกได้ว่า "sensor คืน 0 ทุกแกน" vs "overall เพี้ยนแต่แกนปกติ"
-          Serial.printf("[DEGLITCH] #%lu %s RMS=%.2f VX=%.2f VY=%.2f VZ=%.2f freq=(%.1f,%.1f,%.1f) | "
-                        "raw=(%d,%d,%d) CRC=%s poll=%ums read=%ums retry=%u rpm=%.0f -> hold %.2f\n",
-                        (unsigned long)g_deglitchCount,
-                        isSpikeGlitch ? "SPIKE" : "DROP",
-                        sensorData.rms_overall, sensorData.rms_x, sensorData.rms_y, sensorData.rms_z,
-                        sensorData.freq_x, sensorData.freq_y, sensorData.freq_z,
-                        sensorData.raw_x, sensorData.raw_y, sensorData.raw_z,
-                        sensorData.crc_ok ? "OK" : "ERR",
-                        sensorData.poll_interval_ms, sensorData.read_time_ms,
-                        sensorData.retry_count, sensorData.rpm, s_lastGoodRms);
-          sensorData.rms_overall = s_lastGoodRms;
-          sensorData.rms_x = s_lastGoodX;
-          sensorData.rms_y = s_lastGoodY;
-          sensorData.rms_z = s_lastGoodZ;
-          s_glitchHold = 1;
-#ifdef VERIFY_TEST
-          diagBranch = isSpikeGlitch ? DIAG_BRANCH_SPIKE_SUPPRESS : DIAG_BRANCH_DROP_SUPPRESS;
-#endif
-        } else {
-          // ค่าปกติ หรือ low/high ต่อเนื่อง (ของจริง) → อัปเดต baseline และ reset hold
-          s_lastGoodRms = sensorData.rms_overall;
-          s_lastGoodX   = sensorData.rms_x;
-          s_lastGoodY   = sensorData.rms_y;
-          s_lastGoodZ   = sensorData.rms_z;
-          s_glitchHold  = 0;
-#ifdef VERIFY_TEST
-          // [VERIFY_TEST] Checkpoint 3A: classify why the else-branch was reached.
-          // Checks the same 4 gates the if-condition above tested, using the
-          // pre-decision snapshot -- does not re-derive or duplicate the decision
-          // itself (that decision already happened: this branch is only reached
-          // when the if-condition was false).
-          if (!(isDropGlitch || isSpikeGlitch)) {
-            diagBranch = DIAG_BRANCH_NORMAL_ACCEPT;
-          } else if (sensorData.motor_state != 2) {
-            diagBranch = DIAG_BRANCH_NOT_APPLICABLE_NOT_RUNNING;
-          } else if (diagLastGoodRmsPre <= 0.5f) {
-            diagBranch = DIAG_BRANCH_NOT_APPLICABLE_NO_BASELINE;
-          } else if (diagGlitchHoldPre != 0) {
-            diagBranch = isSpikeGlitch ? DIAG_BRANCH_SPIKE_PASS_AFTER_HOLD : DIAG_BRANCH_DROP_PASS_AFTER_HOLD;
-          } else {
-            // Unreachable if production logic is unchanged: all 4 if-condition
-            // gates would be true here, contradicting entry into this else-branch.
-            diagBranch = DIAG_BRANCH_NONE;
-          }
-#endif
-        }
-
-#ifdef VERIFY_TEST
-        // [VERIFY_TEST] Checkpoint 3B/3C: construct and store exactly one diagnostic
-        // record for this valid consumed sample, unless the FSM is already FROZEN
-        // (once FROZEN, g_diagHead/g_diagCount/g_diagBuf must not change). PRE-decision
-        // fields come from the Checkpoint 3A snapshot; POST-decision fields are read
-        // only now, after the production if/else above has completed.
-        if (g_diagFsmState != DIAG_FSM_FROZEN) {
-          PollDiagRecord_t rec;
-          rec.poll_seq        = sensorData.poll_seq;
-          rec.rawRmsOverall   = diagRawRmsOverall;
-          rec.rawRmsZ         = diagRawRmsZ;
-          rec.freq_z          = sensorData.freq_z;
-          rec.lastGoodRmsPre  = diagLastGoodRmsPre;
-          rec.lastGoodRmsPost = s_lastGoodRms;
-          rec.outRms          = sensorData.rms_overall;
-          rec.isDropGlitch    = isDropGlitch;
-          rec.glitchHoldPre   = diagGlitchHoldPre;
-          rec.branch          = diagBranch;
-          rec.motorState      = sensorData.motor_state;
-
-          g_diagBuf[g_diagHead] = rec;
-          g_diagHead = (g_diagHead + 1) % 64;
-          if (g_diagCount < 64) g_diagCount++;
-
-          // [VERIFY_TEST] Checkpoint 3C: minimum trigger / post-trigger freeze FSM.
-          // Trigger fires only on the already-approved DIAG_BRANCH_DROP_SUPPRESS
-          // classification -- no re-derivation of the production deglitch condition.
-          if (g_diagFsmState == DIAG_FSM_ARMED) {
-            if (diagBranch == DIAG_BRANCH_DROP_SUPPRESS) {
-              // Poll N (this record, already written above) is the trigger --
-              // it does not count as post-trigger sample #1.
-              g_diagTriggerPollSeq = sensorData.poll_seq;  // [VERIFY_TEST] Checkpoint 5A: immutable trigger identity
-              g_diagFsmState  = DIAG_FSM_CAPTURING_POST;
-              g_diagPostCount = 0;
-            }
-          } else if (g_diagFsmState == DIAG_FSM_CAPTURING_POST) {
-            g_diagPostCount++;
-            if (g_diagPostCount >= 10) {
-              g_diagFsmState = DIAG_FSM_FROZEN;
-
-              // [VERIFY_TEST] Checkpoint 5D: construct the immutable snapshot
-              // exactly once, at this CAPTURING_POST -> FROZEN transition, from
-              // the now-frozen g_diagBuf/g_diagCount/g_diagHead/g_diagTriggerPollSeq.
-              // Chronological traversal uses only the approved ring-buffer formula;
-              // the trigger condition is not re-derived (g_diagTriggerPollSeq was
-              // already set, once, at the ARMED -> CAPTURING_POST transition above).
-              // Static storage duration (.bss, not the call stack) per Checkpoint
-              // 5D Step 4 -- never a large automatic/local variable.
-              static PollDiagSnapshot_t s_diagSnapshotStaging;
-              s_diagSnapshotStaging.fsm_state        = g_diagFsmState;
-              s_diagSnapshotStaging.count            = (uint8_t)g_diagCount;
-              s_diagSnapshotStaging.head             = (uint8_t)g_diagHead;
-              s_diagSnapshotStaging.trigger_poll_seq = g_diagTriggerPollSeq;
-
-              const uint32_t oldestIndex = (g_diagHead + 64 - g_diagCount) % 64;
-              for (uint32_t i = 0; i < g_diagCount; i++) {
-                const uint32_t physicalIndex = (oldestIndex + i) % 64;
-                s_diagSnapshotStaging.records[i]               = g_diagBuf[physicalIndex];
-                s_diagSnapshotStaging.physical_buffer_index[i] = (uint8_t)physicalIndex;
-              }
-
-              if (queueDiagSnapshot == NULL) {
-                g_diagHandoffState = DIAG_HANDOFF_QUEUE_UNAVAILABLE;
-              } else if (xQueueSend(queueDiagSnapshot, &s_diagSnapshotStaging, 0) == pdTRUE) {
-                g_diagHandoffState = DIAG_HANDOFF_SENT;
-              } else {
-                g_diagHandoffState = DIAG_HANDOFF_SEND_FAILED;
-              }
-            }
-          }
-        }
-#endif
-      }
-
-      // [v16.3ab] เผยแพร่ rms (หลัง de-glitch) ให้ isAnalysisReady() อ่าน — atomic float, ไม่ต้อง mutex
-      g_lastRmsOverall = sensorData.rms_overall;
+      // [Phase2] LEGACY VRMS DE-GLITCH REMOVED IN FULL.
+      // Deleted: s_lastGoodRms / s_lastGoodX/Y/Z / s_glitchHold, isDropGlitch,
+      // isSpikeGlitch, the [DEGLITCH] forensic log, g_deglitchCount and the
+      // VERIFY_TEST PollDiagRecord instrumentation built around them.
+      // It existed only to patch a defect of the VRMS register, which no longer
+      // feeds any measurement. g_lastRmsOverall (and with it anaVrmsHealthy() /
+      // ANA_FRZ_VRMS_INVALID) is removed for the same reason.
 
       // [v16.5.4] g_vibData removed (see declaration comment) -- sensorData
       // reaches consumers via captureTelemetrySnapshot() at the end of this
       // block instead of a separate g_vibData memcpy here.
 
-      // -- Push sample ???? Trend Buffer (Core 0 only, no mutex needed) --
-      // ????? freq_ratio ? ???????????????? drift detection
-      {
-        // v16.0: gate freq_ratio ด้วย MOTOR_RUNNING
-        // STARTING/STOPPING: ratio ไม่ stable → เขียน 0 ลง trendBuf
-        float ratX = 0.0f, ratY = 0.0f, ratZ = 0.0f;
-        if (g_motorRunState == MOTOR_RUNNING && sensorData.rpm >= 100.0f) {
-          float rf = sensorData.rpm / 60.0f;
-          ratX = sensorData.freq_x / rf;
-          ratY = sensorData.freq_y / rf;
-          ratZ = sensorData.freq_z / rf;
-        }
-        g_trendBuf[g_trendHead] = {
-          sensorData.rms_overall,
-          g_velPeakHold,           // snapshot peak ? ??????? push
-          sensorData.temperature,
-          ratX, ratY, ratZ
-        };
-        g_trendHead  = (g_trendHead + 1) % TREND_BUF_SIZE;
-        if (g_trendCount < TREND_BUF_SIZE) g_trendCount++;
-      }
+      // [Phase2] Temperature history ring (Core 0 only, no mutex needed).
+      // Replaces the former g_trendBuf, which mixed four unrelated concerns
+      // (legacy VRMS rms, legacy VPEAK peak, temperature, freq_ratio) in one
+      // struct. rms/peak/freq_ratio are gone; temperature is the only survivor
+      // and it gets a plain float ring of its own.
+      g_tempBuf[g_tempHead] = sensorData.temperature;
+      g_tempHead  = (g_tempHead + 1) % TEMP_BUF_SIZE;
+      if (g_tempCount < TEMP_BUF_SIZE) g_tempCount++;
 
       // -- Push current sample into circular buffer (Core 0 only, no mutex) [v16.6a] --
       // sensorData.current_valid is only true on cycles where taskModbusRead actually
@@ -7126,11 +6646,6 @@ void taskStateMachine(void* parameter) {
       // v16.0: gate ด้วย MOTOR_RUNNING -- STARTING/STOPPING มี transient RMS สูง
       // ไม่ควร trigger STATE_WARNING/CRITICAL ขณะ ramp-up/down
       MachineState_t newState;
-      // [M1A] Legacy VRMS value retained ONLY for the existing debug print and
-      // the un-migrated trend path. It is NO LONGER read by any alarm branch
-      // below -- the vibration alarm source is now the velocity carrier.
-      float rms = sensorData.rms_overall;  // [M1A DEPRECATED as alarm input]
-
       // [M1A] The Product Phase-1 vibration alarm source.
       float    vibMmS  = 0.0f;
       uint32_t vibAge  = 0;
@@ -7282,11 +6797,11 @@ void taskStateMachine(void* parameter) {
               g_systemState.buzzerActive = false;
             }
 
-            // [M1A] Report the value that actually drove the decision
-            // (velocity), plus the legacy VRMS figure for comparison during
-            // the deprecation window. Transition-only -- not per-tick.
-            Serial.printf("[CORE 0] State: %d -> %d (vel: %.3f mm/s, legacyRMS: %.2f)\n",
-                          oldState, newState, vibMmS, rms);
+            // [M1A] Report the value that actually drove the decision.
+            // [Phase2] the legacy VRMS comparison figure is gone with the metric.
+            // Transition-only -- not per-tick.
+            Serial.printf("[CORE 0] State: %d -> %d (vel: %.3f mm/s)\n",
+                          oldState, newState, vibMmS);
           }
         }
 
@@ -8201,81 +7716,17 @@ void taskButtonHandler(void* parameter) {
 
             // --- Reset Evidence ---
 
-            // --- Reset Trend Buffers ---
-            memset(g_trendBuf, 0, sizeof(g_trendBuf));
-            g_trendHead  = 0;
-            g_trendCount = 0;
-
-            memset(g_buf1s,  0, sizeof(g_buf1s));
-            g_buf1sHead  = 0; g_buf1sCount  = 0;
-
-            memset(g_buf10s, 0, sizeof(g_buf10s));
-            g_buf10sHead = 0; g_buf10sCount = 0;
-
-            memset(g_buf60s, 0, sizeof(g_buf60s));
-            g_buf60sHead = 0; g_buf60sCount = 0;
-
-            // --- Reset Variance (must NOT be zero) ---
-            g_slopeVar_1s  = 1e-6f;
-            g_slopeVar_10s = 1e-6f;
-            g_slopeVar_60s = 1e-6f;
-
-            // --- Reset Peak Hold (V14.8) ---
-            // g_velPeakHold persists across the reset without this line: the
-            // first post-maintenance /vibration publish (taskNetwork PUB-1)
-            // snapshots g_velPeakHold before overwriting it, so the broker
-            // receives the pre-maintenance peak (e.g. 3.2 mm/s from a fault
-            // run) as the peak of the very first post-reset cycle — corrupt data.
-            // Setting to 0 here mirrors the sensor-offline branch (line ~2547)
-            // and the normal per-publish reset in taskNetwork (line ~4185).
-            g_velPeakHold = 0.0f;
-
-            // --- Reset EMA ---
-            g_emaRms     = 0.0f;
-            g_emaPrevRms = 0.0f;
-            g_emaDelta   = 0.0f;
-            g_emaDir     = 0;
+            // --- Reset Trend Buffers [Phase2] ---
+            // g_trendBuf / g_buf1s / g_buf10s / g_buf60s / g_slopeVar_* /
+            // g_velPeakHold / legacy EMA / slot accumulators are all gone; the
+            // temperature ring is the only raw trend storage left here.
+            memset(g_tempBuf, 0, sizeof(g_tempBuf));
+            g_tempHead  = 0;
+            g_tempCount = 0;
 
             memset(&g_trendResult, 0, sizeof(g_trendResult));
 
-            // stale fault/score (e.g. RESONANCE sc=1.00) to remain published
-            // until runDecisionEngine() accumulates enough new data.
-
-            // OSG suppression; without reset they carry stale TTW weights into
-            // the first post-warmup decision cycle.
-
-            //   stateChanged=true → g_stateChangeCyc=3 → publish drops to 5s
-            //   for 3 unnecessary cycles post-warmup.
-            //   on first cycle, skewing adaptive publish interval.
-            //   zeroed so ttwRoC is suppressed (condition: prevTtwRoC>0)
-            //   on the first post-warmup call.
-            //   not from before the maintenance event (harmless when
-            //   evidence[]=0 but avoids a spuriously large dt on first update).
-
-            // --- Reset Analytics Task Internal State (V14.4) ---
-            // millis accumulators: reset so flush cadence restarts from zero,
-            // preventing the immediate re-flush storm after maintenance reset.
-            g_accMs_1s  = 0;
-            g_accMs_10s = 0;
-            g_accMs_60s = 0;
-            // g_slotDur1sMs: reset to default 1000ms (V14.8).
-            // taskAnalytics recomputes this from live RPM on its very first
-            // tick after resume (line ~4499). Without this reset, if the pre-
-            // maintenance RPM produced a wide slot (e.g. slow-spin = 2800ms),
-            // the first flush threshold after reset is 2800ms instead of the
-            // expected 1000ms — analytics appears "stuck" for up to 2.8s.
-            g_slotDur1sMs = 1000UL;
-            // Raw-buffer bookkeeping: force firstRun so lastHead re-syncs
-            g_anaLastHead   = 0;
-            g_anaFirstRun   = true;
             g_anaPublishCnt = 0;
-            // Per-slot running accumulators
-            g_sl_sumRms   = 0.0f;  g_sl_sumSqRms = 0.0f;  g_sl_maxRms  = 0.0f;
-            g_sl_sumTemp  = 0.0f;  g_sl_maxTemp  = 0.0f;
-            g_sl_sumPeak  = 0.0f;  g_sl_maxPeak  = 0.0f;
-            g_sl_sumFrx   = 0.0f;  g_sl_sumFry   = 0.0f;  g_sl_sumFrz  = 0.0f;
-            g_sl_spikes   = 0;
-            g_sl_n        = 0;
 
             // Resume processing
             if (taskHandleAnalytics != NULL) {
@@ -8287,7 +7738,6 @@ void taskButtonHandler(void* parameter) {
             g_warmupStartTs    = millis();
             g_bearingStableCnt = 0;
             g_trendFreqFlushed  = false;
-            g_freqDriftSuppress = 0;
 
             // ── Queue maintenance event for Network task to publish (MQTT audit) ──
             // All JSON/MQTT work is done in taskNetwork to keep Button stack lean.
@@ -8524,11 +7974,15 @@ void drawMachineScreen(VibrationData_t* data) {
   u8g2.setFont(u8g2_font_ncenB08_tr);
   u8g2.drawStr(15, 24, "STATUS: NORMAL");
 
-  // Line 3: RMS value (y=38) - LARGE
-  // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
-  // noise-floor/garbage (de-glitch filter v16.3x ทำงานเฉพาะตอน RUNNING) -> แสดง 0
+  // Line 3: velocity RMS (y=38) - LARGE
+  // [Phase2] FIFO/DSP velocity_rms_overall. "--" when no valid, fresh capture --
+  // never a zero standing in for an unavailable measurement.
   u8g2.setFont(u8g2_font_ncenB10_tr);
-  snprintf(buf, sizeof(buf), "%.2f", (data->motor_state == 2) ? data->rms_overall : 0.0f);
+  {
+    float vAll = 0.0f;
+    if (displayVelocity(&vAll, NULL, NULL, NULL)) snprintf(buf, sizeof(buf), "%.2f", vAll);
+    else                                          snprintf(buf, sizeof(buf), "--");
+  }
   uint8_t w = u8g2.getStrWidth(buf);
   u8g2.drawStr((128 - w) / 2, 40, buf);
 
@@ -8538,10 +7992,12 @@ void drawMachineScreen(VibrationData_t* data) {
 
   // Line 4-5: Thresholds (y=50)
   u8g2.setFont(u8g2_font_6x10_tr);
-  snprintf(buf, sizeof(buf), "WARN %.1f", WARNING_RMS);
+  // [Phase2] show the thresholds the alarm actually uses (FIFO/DSP velocity),
+  // not the retired legacy VRMS numbers.
+  snprintf(buf, sizeof(buf), "WARN %.1f", VIB_WARNING_MMS);
   u8g2.drawStr(0, 52, buf);
 
-  snprintf(buf, sizeof(buf), "CRIT %.1f", CRITICAL_RMS);
+  snprintf(buf, sizeof(buf), "CRIT %.1f", VIB_CRITICAL_MMS);
   u8g2.drawStr(80, 52, buf);
 
   // Line 6: Footer (y=64)
@@ -8558,6 +8014,25 @@ void drawMachineScreen(VibrationData_t* data) {
   u8g2.drawStr(80, 64, buf);
 }
 
+// [Phase2] The one display-side read of the FIFO/DSP velocity carrier.
+// Returns false when no valid, fresh capture exists -- callers then print "--"
+// rather than a zero that would read as a real measurement of no vibration.
+// Same carrier, same mutex, same freshness deadline as readVelocityForAlarm().
+static bool displayVelocity(float* outOverall, float* outX, float* outY, float* outZ) {
+  if (mutexVelCarrier == NULL) return false;
+  VelocityCarrier_t vc;
+  if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) != pdTRUE) return false;
+  vc = g_velCarrier;                    // whole-struct copy: no torn read
+  xSemaphoreGive(mutexVelCarrier);
+  if (!vc.valid || vc.timestampMs == 0u ||
+      (uint32_t)(millis() - vc.timestampMs) > VIB_VELOCITY_MAX_AGE_MS_TBD) return false;
+  if (outOverall) *outOverall = vc.overall;
+  if (outX) *outX = vc.x;
+  if (outY) *outY = vc.y;
+  if (outZ) *outZ = vc.z;
+  return true;
+}
+
 void drawWarningScreen(VibrationData_t* data, bool blink) {
   char buf[32];
 
@@ -8570,19 +8045,23 @@ void drawWarningScreen(VibrationData_t* data, bool blink) {
     u8g2.drawStr(30, 26, "! WARNING !");
   }
 
+  float wAll = 0.0f, wX = 0.0f, wY = 0.0f, wZ = 0.0f;
+  const bool wOk = displayVelocity(&wAll, &wX, &wY, &wZ);
+
   u8g2.setFont(u8g2_font_ncenB10_tr);
-  snprintf(buf, sizeof(buf), "%.2f", data->rms_overall);
+  if (wOk) snprintf(buf, sizeof(buf), "%.2f", wAll);
+  else     snprintf(buf, sizeof(buf), "--");
   u8g2.drawStr(40, 40, buf);
   u8g2.setFont(u8g2_font_5x7_tr);
   u8g2.drawStr(90, 40, "mm/s");
 
   u8g2.setFont(u8g2_font_6x10_tr);
-  snprintf(buf, sizeof(buf), "CRIT: %.1f", CRITICAL_RMS);
+  snprintf(buf, sizeof(buf), "CRIT: %.1f", VIB_CRITICAL_MMS);
   u8g2.drawStr(20, 54, buf);
 
   u8g2.setFont(u8g2_font_5x7_tr);
-  snprintf(buf, sizeof(buf), "X:%.1f Y:%.1f Z:%.1f",
-           data->rms_x, data->rms_y, data->rms_z);
+  if (wOk) snprintf(buf, sizeof(buf), "X:%.1f Y:%.1f Z:%.1f", wX, wY, wZ);
+  else     snprintf(buf, sizeof(buf), "X:-- Y:-- Z:--");
   u8g2.drawStr(0, 64, buf);
 }
 
@@ -8595,11 +8074,15 @@ void drawCriticalScreen(VibrationData_t* data, bool blink) {
   }
 
   u8g2.setFont(u8g2_font_ncenB10_tr);
-  snprintf(buf, sizeof(buf), "%.2f", data->rms_overall);
+  {
+    float cAll = 0.0f;
+    if (displayVelocity(&cAll, NULL, NULL, NULL)) snprintf(buf, sizeof(buf), "%.2f", cAll);
+    else                                          snprintf(buf, sizeof(buf), "--");
+  }
   u8g2.drawStr(40, 30, buf);
 
   u8g2.setFont(u8g2_font_5x7_tr);
-  snprintf(buf, sizeof(buf), "LIMIT: %.1f mm/s", CRITICAL_RMS);
+  snprintf(buf, sizeof(buf), "LIMIT: %.1f mm/s", VIB_CRITICAL_MMS);
   u8g2.drawStr(20, 40, buf);
 
   u8g2.setFont(u8g2_font_ncenB08_tr);
@@ -8634,25 +8117,32 @@ void drawAxisScreen(VibrationData_t* data) {
   bool isRunningDisp = (data->motor_state == 2);
 
   // Row 1: VX / FX   (y=26)
-  snprintf(buf, sizeof(buf), "VX = %03.2f", isRunningDisp ? data->rms_x : 0.0f);
+  float dAll = 0.0f, dX = 0.0f, dY = 0.0f, dZ = 0.0f;
+  const bool dOk = isRunningDisp && displayVelocity(&dAll, &dX, &dY, &dZ);
+
+  if (dOk) snprintf(buf, sizeof(buf), "VX = %03.2f", dX);
+  else     snprintf(buf, sizeof(buf), "VX = --");
   u8g2.drawStr(5, 26, buf);
   snprintf(buf, sizeof(buf), "FX = %02.0f", data->freq_x);
   u8g2.drawStr(70, 26, buf);
 
   // Row 2: VY / FY   (y=37)
-  snprintf(buf, sizeof(buf), "VY = %03.2f", isRunningDisp ? data->rms_y : 0.0f);
+  if (dOk) snprintf(buf, sizeof(buf), "VY = %03.2f", dY);
+  else     snprintf(buf, sizeof(buf), "VY = --");
   u8g2.drawStr(5, 37, buf);
   snprintf(buf, sizeof(buf), "FY = %02.0f", data->freq_y);
   u8g2.drawStr(70, 37, buf);
 
   // Row 3: VZ / FZ   (y=48)
-  snprintf(buf, sizeof(buf), "VZ = %03.2f", isRunningDisp ? data->rms_z : 0.0f);
+  if (dOk) snprintf(buf, sizeof(buf), "VZ = %03.2f", dZ);
+  else     snprintf(buf, sizeof(buf), "VZ = --");
   u8g2.drawStr(5, 48, buf);
   snprintf(buf, sizeof(buf), "FZ = %02.0f", data->freq_z);
   u8g2.drawStr(70, 48, buf);
 
   // Row 4: MAX / [2/3]  (y=60)
-  snprintf(buf, sizeof(buf), "MAX= %03.2f", isRunningDisp ? data->rms_overall : 0.0f);
+  if (dOk) snprintf(buf, sizeof(buf), "MAX= %03.2f", dAll);
+  else     snprintf(buf, sizeof(buf), "MAX= --");
   u8g2.drawStr(5, 60, buf);
   u8g2.drawStr(98, 60, "[2/3]");
 }
@@ -8705,60 +8195,13 @@ void drawNetworkScreen() {
   u8g2.drawStr(5, 62, buf);
 }
 
-static float aggLinRegSlope(const AggSample_t* buf, uint16_t bufHead,
-                             uint16_t bufCount, uint16_t bufSize,
-                             uint16_t windowSlots) {
-  uint16_t n = (bufCount < windowSlots) ? bufCount : windowSlots;
-  if (n < 4) return 0.0f;
-  uint16_t startIdx = (bufHead + bufSize - n) % bufSize;
-  double sumX=0.0, sumX2=0.0, sumY=0.0, sumXY=0.0;
-  for (uint16_t i = 0; i < n; i++) {
-    uint16_t idx = (startIdx + i) % bufSize;
-    double x = (double)i;
-    double y = (double)buf[idx].mean_rms;
-    sumX  += x;
-    sumX2 += x * x;
-    sumY  += y;
-    sumXY += x * y;
-  }
-  double denom = (double)n * sumX2 - sumX * sumX;
-  if (denom == 0.0) return 0.0f;
-  return (float)(((double)n * sumXY - sumX * sumY) / denom);
-}
-
-// Push one aggregated sample into a circular buffer of AggSample_t.
-// Advances *head and grows *count up to bufSize (caller must hold
-// mutexAggBufs before calling -- this function does no locking itself).
-static void pushAggBuf(AggSample_t* buf, volatile uint16_t* head,
-                        volatile uint16_t* count, uint16_t bufSize,
-                        const AggSample_t* sample) {
-  buf[*head] = *sample;
-  *head = (uint16_t)((*head + 1) % bufSize);
-  if (*count < bufSize) (*count)++;
-}
-
-// Population variance of mean_rms over the most recent `windowSlots` entries
-// of a circular AggSample_t buffer (or bufCount entries if fewer are
-// available). Used as an OSG/FVRI confidence input alongside the linreg
-// slope -- low variance = stable trend, high variance = noisy/unstable.
-static float computeRmsVariance(const AggSample_t* buf, uint16_t bufHead,
-                                 uint16_t bufCount, uint16_t bufSize,
-                                 uint16_t windowSlots) {
-  uint16_t n = (bufCount < windowSlots) ? bufCount : windowSlots;
-  if (n < 2) return 1e-6f;
-  uint16_t startIdx = (bufHead + bufSize - n) % bufSize;
-  double sum = 0.0, sumSq = 0.0;
-  for (uint16_t i = 0; i < n; i++) {
-    uint16_t idx = (startIdx + i) % bufSize;
-    double v = (double)buf[idx].mean_rms;
-    sum   += v;
-    sumSq += v * v;
-  }
-  double mean = sum / n;
-  double var  = (sumSq / n) - (mean * mean);
-  if (var < 1e-6) var = 1e-6;  // never zero -- avoids div/0 in downstream consumers
-  return (float)var;
-}
+// ============================================================================
+// [Phase2] REMOVED: aggLinRegSlope(), pushAggBuf(), computeRmsVariance()
+// ============================================================================
+// These three helpers served only the g_buf1s/g_buf10s/g_buf60s cascade and the
+// RPM-adaptive slot machinery, all of which fed legacy VRMS trend outputs
+// (slope_1s/10s/60s, max_rms_10min/60min, stddev_1min, slope_var_*). The trend
+// pipeline is now VibHistory -> VibEma / VibWindow / VibSlope / VibTtw.
 
 // ============================================================================
 // GENERIC LINEAR REGRESSION -- linRegSlope()  [v16.6a]
@@ -8801,150 +8244,44 @@ static float linRegSlope(uint16_t bufHead, uint16_t bufCount, uint16_t bufSize,
 
 // Accessors for linRegSlope() -- trivial index->value lookups into the two
 // buffers it's used against. [v16.6a]
-static float trendBufTempAccessor(uint16_t idx) { return g_trendBuf[idx].temp; }
+static float tempBufAccessor(uint16_t idx)      { return g_tempBuf[idx]; }
 static float currentBufAccessor(uint16_t idx)   { return g_currentBuf[idx]; }
 
 // ============================================================================
-// TREND ENGINE -- calcTrend()
+// TEMPERATURE TREND -- calcTemperatureTrend()   [Phase2]
 // ============================================================================
-// ???????? publishTelemetry() (Core 1) ???? build JSON
-// ???? snapshot ??? g_trendBuf ? ???????????? -- thread-safe ???????????
-// ????? float write ?? ESP32 (Xtensa LX7) ???? atomic 4-byte aligned
-//
-// ????? Phase 1:
-//   1. rms_slope    -- Linear Regression (Least Squares) ??? rms ?? 30s window
-//   2. temp_slope   -- Linear Regression ??? temperature
-//   3. trend_dir    -- +1/0/-1 ??? rms_slope vs threshold
-//   4. spike_count  -- ??? peak > WARNING_RMS x SPIKE_RMS_FACTOR ?? window
-//   5. freq_drift   -- ???????????? freq_ratio ??????????????? window
-//   6. ttw_hours    -- Time-to-Warning estimate ??? rms_slope + gap
-//
-// ????? Phase 2 (new):
-//   7. slope_1s/10s/60s -- linreg ?? g_buf* multi-resolution
-//   8. ema_dir/rms/delta -- snapshot ??? g_ema*
-//   9. stddev_1min / max_rms_10min -- volatility indicators
+// Least-squares slope of the temperature history ring. Split out of the former
+// monolithic calcTrend(), which also produced the legacy VRMS rms_slope /
+// trend_dir / spike_count / ttw_hours and the freq_ratio drift/alert -- all
+// removed. What is left has one input (TEMPERATURE register 0x40) and one
+// consumer (/device-health temp_slope), so it gets its own function.
+// Reads g_tempBuf, written by Core 0; float reads are atomic on Xtensa.
 // ============================================================================
-static void calcTrend() {
-  // -- Snapshot head + count ???????? --
-  uint16_t snapHead  = g_trendHead;
-  uint16_t snapCount = g_trendCount;
+static void calcTemperatureTrend() {
+  const uint16_t snapHead  = g_tempHead;
+  const uint16_t snapCount = g_tempCount;
 
-  // -- Phase 1: Single-resolution (30s window) -----------------------------
-  if (snapCount >= TREND_MIN_SAMPLES) {
-    uint16_t n = (snapCount < TREND_WINDOW_SAMPLES) ? snapCount : TREND_WINDOW_SAMPLES;
-    uint16_t startIdx = (snapHead + TREND_BUF_SIZE - n) % TREND_BUF_SIZE;
-
-    double sumX=0, sumX2=0;
-    double sumRms=0, sumXRms=0;
-    double sumFrX=0, sumFrY=0, sumFrZ=0;
-    uint16_t spike_count = 0;
-
-    for (uint16_t i = 0; i < n; i++) {
-      uint16_t idx = (startIdx + i) % TREND_BUF_SIZE;
-      TrendSample_t* s = &g_trendBuf[idx];
-      sumX     += i;
-      sumX2    += (double)i * i;
-      sumRms   += s->rms;
-      sumXRms  += (double)i * s->rms;
-      sumFrX   += s->freq_ratio_x;
-      sumFrY   += s->freq_ratio_y;
-      sumFrZ   += s->freq_ratio_z;
-      if (s->peak > WARNING_RMS * SPIKE_RMS_FACTOR) spike_count++;
-    }
-
-    double denom = (double)n * sumX2 - sumX * sumX;
-    float rmsSlope  = (denom != 0.0) ? (float)((n * sumXRms  - sumX * sumRms)  / denom) : 0.0f;
-    // [v16.6a] temp_slope goes through the generic linRegSlope() utility, reading
-    // g_trendBuf directly via trendBufTempAccessor() -- no scratch array/copy.
-    // Called with the SAME snapHead/snapCount/TREND_BUF_SIZE/TREND_WINDOW_SAMPLES
-    // that produced startIdx/n above, so it recomputes the identical n and the
-    // identical idx=(startIdx+i)%TREND_BUF_SIZE sequence -- same values, same
-    // order, same formula as the inline computation it replaces -- output unchanged.
-    float tempSlope = linRegSlope(snapHead, snapCount, TREND_BUF_SIZE,
-                                   TREND_WINDOW_SAMPLES, 1.0f, trendBufTempAccessor);
-
-    float driftX = 0.0f, driftY = 0.0f, driftZ = 0.0f;
-    if (n >= 20) {
-      uint16_t half = n / 2;
-      double s1X=0, s1Y=0, s1Z=0, s2X=0, s2Y=0, s2Z=0;
-      for (uint16_t i = 0; i < half; i++) {
-        uint16_t idx = (startIdx + i) % TREND_BUF_SIZE;
-        s1X += g_trendBuf[idx].freq_ratio_x;
-        s1Y += g_trendBuf[idx].freq_ratio_y;
-        s1Z += g_trendBuf[idx].freq_ratio_z;
-      }
-      for (uint16_t i = half; i < n; i++) {
-        uint16_t idx = (startIdx + i) % TREND_BUF_SIZE;
-        s2X += g_trendBuf[idx].freq_ratio_x;
-        s2Y += g_trendBuf[idx].freq_ratio_y;
-        s2Z += g_trendBuf[idx].freq_ratio_z;
-      }
-      driftX = (float)((s2X - s1X) / half);
-      driftY = (float)((s2Y - s1Y) / half);
-      driftZ = (float)((s2Z - s1Z) / half);
-    }
-    // v16.0: suppress drift ใน N cycles แรกหลัง freq_ratio flush
-    // ป้องกัน race condition ระหว่าง Core 0 flush กับ Core 1 calcTrend
-    if (g_freqDriftSuppress > 0) {
-      driftX = 0.0f;
-      driftY = 0.0f;
-      driftZ = 0.0f;
-      g_freqDriftSuppress--;
-    }
-    bool freqAlert = (fabsf(driftX) > FREQ_DRIFT_THRESH ||
-                      fabsf(driftY) > FREQ_DRIFT_THRESH ||
-                      fabsf(driftZ) > FREQ_DRIFT_THRESH);
-
-    int8_t trendDir = (rmsSlope >  TREND_SLOPE_UP)  ?  1 :
-                      (rmsSlope <  TREND_SLOPE_DOWN) ? -1 : 0;
-
-    float ttwHours  = 0.0f;
-    float currentRms = g_trendBuf[(snapHead + TREND_BUF_SIZE - 1) % TREND_BUF_SIZE].rms;
-    if (trendDir == 1 && currentRms < WARNING_RMS) {
-      float ratePerHour = rmsSlope * 4.0f * 3600.0f;
-      float gap = WARNING_RMS - currentRms;
-      if (ratePerHour > 0.001f) {
-        ttwHours = gap / ratePerHour;
-        if (ttwHours > 9999.0f) ttwHours = 9999.0f;
-      }
-    }
-
-    g_trendResult.rms_slope      = roundf(rmsSlope  * 100000.0f) / 100000.0f;
+  if (snapCount >= TEMP_MIN_SAMPLES) {
+    const uint16_t n = (snapCount < TEMP_WINDOW_SAMPLES) ? snapCount : TEMP_WINDOW_SAMPLES;
+    const float tempSlope = linRegSlope(snapHead, snapCount, TEMP_BUF_SIZE,
+                                        TEMP_WINDOW_SAMPLES, 1.0f, tempBufAccessor);
     g_trendResult.temp_slope     = roundf(tempSlope * 100000.0f) / 100000.0f;
-    g_trendResult.trend_dir      = trendDir;
-    g_trendResult.spike_count    = spike_count;
-    g_trendResult.freq_drift_x   = roundf(driftX * 1000.0f) / 1000.0f;
-    g_trendResult.freq_drift_y   = roundf(driftY * 1000.0f) / 1000.0f;
-    g_trendResult.freq_drift_z   = roundf(driftZ * 1000.0f) / 1000.0f;
-    g_trendResult.freq_alert     = freqAlert;
-    g_trendResult.ttw_hours      = roundf(ttwHours * 10.0f) / 10.0f;
     g_trendResult.window_samples = n;
-
-    Serial.printf("[TREND] n=%u slope=%.5f dir=%+d spikes=%u | "
-                  "driftX=%.3f driftY=%.3f driftZ=%.3f alert=%d | "
-                  "ttw=%.1fh tempSlope=%.5f\n",
-                  n, rmsSlope, trendDir, spike_count,
-                  driftX, driftY, driftZ, (int)freqAlert,
-                  ttwHours, tempSlope);
   } else {
-    // ????????????? -- zero Phase 1 fields ??????????? Phase 2 ???
-    g_trendResult.rms_slope      = 0.0f;
     g_trendResult.temp_slope     = 0.0f;
-    g_trendResult.trend_dir      = 0;
-    g_trendResult.spike_count    = 0;
-    g_trendResult.freq_drift_x   = 0.0f;
-    g_trendResult.freq_drift_y   = 0.0f;
-    g_trendResult.freq_drift_z   = 0.0f;
-    g_trendResult.freq_alert     = false;
-    g_trendResult.ttw_hours      = 0.0f;
     g_trendResult.window_samples = snapCount;
   }
+}
 
-  // -- Current Trend (CTR4A01, 500ms cadence) [v16.6a] ---------------------
-  // Independent buffer/readiness from the vibration trend buffer above
-  // (different source, different sample rate) -- reuses the same
-  // linRegSlope() utility. No thresholds/direction classification (Phase 1
-  // scope is the trend engine only -- Motor State logic is untouched).
+// ============================================================================
+// CURRENT TREND -- calcCurrentTrend()   [Phase2, was inline in calcTrend()]
+// ============================================================================
+// CTR4A01 current slope, 500 ms cadence. Independent buffer and readiness from
+// the temperature ring above (different source, different sample rate); shares
+// only the generic linRegSlope() utility. No thresholds, no direction
+// classification -- Motor State logic is untouched.
+// ============================================================================
+static void calcCurrentTrend() {
   if (g_currentCount >= CURRENT_MIN_SAMPLES) {
     g_trendResult.current_slope = linRegSlope(g_currentHead, g_currentCount, CURRENT_BUF_SIZE,
                                                CURRENT_WINDOW_SAMPLES, CURRENT_SAMPLE_INTERVAL_S,
@@ -8952,82 +8289,6 @@ static void calcTrend() {
   } else {
     g_trendResult.current_slope = 0.0f;
   }
-
-  // -- Phase 2: Multi-Resolution Slopes ------------------------------------
-  // hold mutexAggBufs ??????? g_buf* ???????????? taskAnalytics ?????????????
-  if (xSemaphoreTake(mutexAggBufs, pdMS_TO_TICKS(5)) == pdTRUE) {
-
-    // slope ready flags -- consumer knows when data is trustworthy
-    g_trendResult.slope_ready_1s  = (g_buf1sCount  >= SLOPE_1S_MIN_SLOTS);
-    g_trendResult.slope_ready_10s = (g_buf10sCount >= SLOPE_10S_MIN_SLOTS);
-    g_trendResult.slope_ready_60s = (g_buf60sCount >= SLOPE_60S_MIN_SLOTS);
-
-    // [v16.3ab] Point 4: หลัง resume (time discontinuity) suppress slope จน window มี contiguous data
-    // ไม่ลบ raw buffer — แค่ไม่รายงาน slope ที่คร่อม gap (mark not-ready + slope=0) N cycles
-    if (g_slopeSuppress > 0) {
-      g_slopeSuppress--;
-      g_trendResult.slope_ready_1s  = false;
-      g_trendResult.slope_ready_10s = false;
-      g_trendResult.slope_ready_60s = false;
-      g_trendResult.slope_1s = 0.0f;
-      g_trendResult.slope_10s = 0.0f;
-      g_trendResult.slope_60s = 0.0f;
-    } else {
-
-    // slope_1s: 30s window -- compute once buf1s >= 10 slots
-    g_trendResult.slope_1s  = g_trendResult.slope_ready_1s
-        ? aggLinRegSlope(g_buf1s,  g_buf1sHead,  g_buf1sCount, AGG_BUF_1S_SIZE,  30)
-        : 0.0f;
-
-    // slope_10s: 5-min window -- compute once buf10s >= 10 slots (~100 s)
-    g_trendResult.slope_10s = g_trendResult.slope_ready_10s
-        ? aggLinRegSlope(g_buf10s, g_buf10sHead, g_buf10sCount, AGG_BUF_10S_SIZE, 30)
-        : 0.0f;
-
-    // slope_60s: 30-min window -- compute once buf60s >= 20 slots (~20 min)
-    g_trendResult.slope_60s = g_trendResult.slope_ready_60s
-        ? aggLinRegSlope(g_buf60s, g_buf60sHead, g_buf60sCount, AGG_BUF_60S_SIZE, 30)
-        : 0.0f;
-    }  // [v16.3ab] end slope-suppress guard
-
-    // stddev_1min and max_rms_10min
-    {
-      uint16_t n60 = (g_buf1sCount < AGG_BUF_1S_SIZE) ? g_buf1sCount : AGG_BUF_1S_SIZE;
-      float sumSd = 0.0f;
-      for (uint16_t i = 0; i < n60; i++) {
-        sumSd += g_buf1s[(g_buf1sHead + AGG_BUF_1S_SIZE - n60 + i) % AGG_BUF_1S_SIZE].stddev_rms;
-      }
-      g_trendResult.stddev_1min = (n60 > 0) ? (sumSd / n60) : 0.0f;
-
-      float maxRms10m = 0.0f;
-      uint16_t n10m = (g_buf10sCount < AGG_BUF_10S_SIZE) ? g_buf10sCount : AGG_BUF_10S_SIZE;
-      for (uint16_t i = 0; i < n10m; i++) {
-        float mr = g_buf10s[(g_buf10sHead + AGG_BUF_10S_SIZE - n10m + i) % AGG_BUF_10S_SIZE].max_rms;
-        if (mr > maxRms10m) maxRms10m = mr;
-      }
-      g_trendResult.max_rms_10min = maxRms10m;
-    }
-
-    xSemaphoreGive(mutexAggBufs);
-  }
-
-  // -- EMA snapshot ------------------------------------------------------
-  g_trendResult.ema_dir   = g_emaDir;
-  g_trendResult.ema_rms   = roundf(g_emaRms   * 1000.0f) / 1000.0f;
-  g_trendResult.ema_delta = roundf(g_emaDelta * 100000.0f) / 100000.0f;
-
-  Serial.printf("[TREND-P2] slope_1s=%s%.5f slope_10s=%s%.5f slope_60s=%s%.5f | "
-                "ema=%.3f dir=%+d | stddev1m=%.3f maxRms10m=%.2f\n",
-                g_trendResult.slope_ready_1s  ? "" : "~",  g_trendResult.slope_1s,
-                g_trendResult.slope_ready_10s ? "" : "~",  g_trendResult.slope_10s,
-                g_trendResult.slope_ready_60s ? "" : "~",  g_trendResult.slope_60s,
-                g_trendResult.ema_rms, g_trendResult.ema_dir,
-                g_trendResult.stddev_1min, g_trendResult.max_rms_10min);
-
-  // -- EMA snapshot --
-  g_trendResult.ema_dir   = g_emaDir;
-  g_trendResult.ema_rms   = roundf(g_emaRms   * 1000.0f)  / 1000.0f;
-  g_trendResult.ema_delta = roundf(g_emaDelta * 100000.0f) / 100000.0f;
 }
 
 // ============================================================================
@@ -9087,35 +8348,9 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     alarmLevel  = "NORMAL";
   }
 
-  // v16.0: Peak gated by MOTOR_RUNNING
-  // ถ้าไม่ใช่ RUNNING → peak = 0 (transient ไม่นับ)
-  // reset hold เฉพาะตอน RUNNING เพื่อไม่ให้ค่าค้างข้าม state
-  float currentPeak;
-  if (data->motor_state == 2) {         // MOTOR_RUNNING
-    currentPeak   = g_velPeakHold;
-    g_velPeakHold = 0.0f;               // reset สำหรับ window ถัดไป
-  } else {
-    currentPeak   = 0.0f;               // STOPPED/STARTING/STOPPING → ไม่รายงาน peak
-    g_velPeakHold = 0.0f;               // reset ทิ้งเพื่อไม่ค้างเข้า RUNNING ถัดไป
-  }
-
-  // [v16.3ae] RMS garbage gate for non-RUNNING states
-  // อาการ: sensor VRMS register ส่ง noise-floor / glitch ค่าสูงผิดปกติขณะ STOPPED
-  // เพราะ de-glitch filter (v16.3x, taskStateMachine) ทำงานเฉพาะ motor_state==2 (RUNNING)
-  // เท่านั้น → ค่า garbage วิ่งตรงเข้า MQTT rms/vx/vy/vz โดยไม่มีการกรอง
-  // Fix: gate เหมือน peak/kurtosis/freq_ratio ด้านบน — ไม่ใช่ RUNNING → รายงาน 0
-  float reportedRms, reportedVx, reportedVy, reportedVz;
-  if (data->motor_state == 2) {         // MOTOR_RUNNING
-    reportedRms = data->rms_overall;
-    reportedVx  = data->rms_x;
-    reportedVy  = data->rms_y;
-    reportedVz  = data->rms_z;
-  } else {
-    reportedRms = 0.0f;                 // STOPPED/STARTING/STOPPING → ไม่รายงาน rms
-    reportedVx  = 0.0f;
-    reportedVy  = 0.0f;
-    reportedVz  = 0.0f;
-  }
+  // [Phase2] currentPeak / reportedRms / reportedVx / reportedVy / reportedVz
+  // REMOVED together with g_velPeakHold and VibrationData_t.rms_* -- there is
+  // no legacy vibration number left to gate or report.
 
   // v15.1: ใช้ cf_max (max ของทั้ง 3 แกน) แทน cf_x เพียงแกนเดียว
   // sensor คำนวณจาก raw 16KHz FIFO ภายใน chip:  CF = Peak_acc / RMS_acc
@@ -9161,35 +8396,41 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
   float kmax = kurtosisValid ? round(data->kurtosis_max * 1000) / 1000.0f : 0.0f;
   const char* kaxis = kurtosisValid ? dominantAxis : "-";
 
-  // dominant_vibration_axis: แกนที่มี velocity RMS สูงสุด (ไม่เกี่ยวกับ kurtosis)
-  // ใช้ rms_x/y/z (True RMS velocity จาก VRMS register)
-  const char* domVibAxis;
-  if (data->rms_x >= data->rms_y && data->rms_x >= data->rms_z) {
-    domVibAxis = "X";
-  } else if (data->rms_y >= data->rms_z) {
-    domVibAxis = "Y";
-  } else {
-    domVibAxis = "Z";
+  // dominant_vibration_axis: axis carrying the highest velocity RMS.
+  // [Phase2] Re-sourced from the FIFO/DSP velocity carrier -- it previously read
+  // the legacy VRMS per-axis rms_x/y/z, which no longer exist. When the carrier
+  // holds no valid capture the axis is reported as "-" (unknown); no axis is
+  // guessed and no zero is passed off as a measurement.
+  const char* domVibAxis = "-";
+  {
+    VelocityCarrier_t vcAxis;
+    bool vcAxisOk = false;
+    if (mutexVelCarrier != NULL &&
+        xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) == pdTRUE) {
+      vcAxis   = g_velCarrier;      // whole-struct copy: no torn read
+      vcAxisOk = true;
+      xSemaphoreGive(mutexVelCarrier);
+    }
+    if (vcAxisOk && vcAxis.valid && vcAxis.timestampMs != 0u &&
+        (uint32_t)(millis() - vcAxis.timestampMs) <= VIB_VELOCITY_MAX_AGE_MS_TBD) {
+      domVibAxis = (vcAxis.x >= vcAxis.y && vcAxis.x >= vcAxis.z) ? "X"
+                 : (vcAxis.y >= vcAxis.z)                         ? "Y"
+                                                                  : "Z";
+    }
   }
 
-  // v16.0: Gate freq_ratio/freq_alert ด้วย MOTOR_RUNNING + RPM_FREQ_GATE
-  // STARTING/STOPPING: RPM ไม่ stable → ratio ไม่มีความหมาย → suppressed
+  // Raw dominant frequency per axis (registers 0x44-0x46). [Phase2] The
+  // freq_ratio_x/y/z derivation and its RPM_FREQ_GATE were removed with the
+  // frequency-ratio pipeline; the raw Hz values themselves are kept -- they have
+  // consumers outside that pipeline (the OLED detail screen and /sensor).
   float freqX = roundf(data->freq_x * 10.0f) / 10.0f;
   float freqY = roundf(data->freq_y * 10.0f) / 10.0f;
   float freqZ = roundf(data->freq_z * 10.0f) / 10.0f;
-  float freqRatioX = 0.0f, freqRatioY = 0.0f, freqRatioZ = 0.0f;
-  bool  freqGateOpen = (data->motor_state == 2 &&
-                        data->rpm >= (float)RPM_FREQ_GATE);
-  if (freqGateOpen) {
-    float rotFreq  = data->rpm / 60.0f;
-    freqRatioX = roundf((freqX / rotFreq) * 100.0f) / 100.0f;
-    freqRatioY = roundf((freqY / rotFreq) * 100.0f) / 100.0f;
-    freqRatioZ = roundf((freqZ / rotFreq) * 100.0f) / 100.0f;
-  }
 
-  calcTrend();   // same call as original
-  const char* trendDirStr = (g_trendResult.trend_dir ==  1) ? "UP"   :
-                            (g_trendResult.trend_dir == -1) ? "DOWN" : "STABLE";
+  // [Phase2] calcTrend() split into two dedicated functions; trendDirStr removed
+  // with the legacy trend_dir it formatted.
+  calcTemperatureTrend();
+  calcCurrentTrend();
 
   // Shared timestamp (built once, used in all three payloads)
   char tsBuf[26] = "not_available";
@@ -9218,31 +8459,20 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     s["stage"]               = "sensor";
     s["execution_location"]  = "edge";
     s["sensor_status"]       = "ONLINE";
-    s["deglitch_count"]      = g_deglitchCount;  // [v16.3y] อัตรา VRMS glitch สะสม
-
-    // [M1A DEPRECATED] rms / vx / vy / vz / peak / peak_velocity_* below are
-    // the legacy VRMS-register metric. They are NO LONGER the alarm source --
-    // see vibration_source on /decision and the accel_rms event. Retained
-    // unchanged for backward compatibility only; removal no earlier than
-    // Phase 5. New consumers must use velocity_rms_* from the accel_rms event.
-    // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
-    s["rms"]   = round(reportedRms * 100) / 100.0f;
-    s["vx"]    = round(reportedVx  * 100) / 100.0f;
-    s["vy"]    = round(reportedVy  * 100) / 100.0f;
-    s["vz"]    = round(reportedVz  * 100) / 100.0f;
-    // [M1A] Marks the above four as legacy-sourced, in-band, so a consumer
-    // does not have to infer it from documentation.
-    s["vibration_source_legacy"] = "vrms_register";
-
-    // True peak velocity hold [mm/s] -- v15.0
-    s["peak"]       = round(currentPeak            * 100) / 100.0f;
-    // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
-
-    // [DESIGN-0004] Peak Velocity X/Y/Z -- signed (no abs(), Decision 4), gated by
-    // MOTOR_RUNNING at publish time only (Decision 5, mirrors cf_x/y/z pattern below)
-    s["peak_velocity_x"] = (data->motor_state == 2) ? round(data->peak_velocity_x * 100) / 100.0f : 0.0f;
-    s["peak_velocity_y"] = (data->motor_state == 2) ? round(data->peak_velocity_y * 100) / 100.0f : 0.0f;
-    s["peak_velocity_z"] = (data->motor_state == 2) ? round(data->peak_velocity_z * 100) / 100.0f : 0.0f;
+    // [Phase1] LEGACY VRMS/VPEAK REMOVED from /sensor. The following fields
+    // no longer exist on this topic:
+    //   rms, vx, vy, vz            -- legacy VRMS-register metric
+    //   peak                       -- legacy VPEAK max-hold (g_velPeakHold)
+    //   peak_velocity_x/y/z        -- reg 0x3A-0x3C peak velocity
+    //   vibration_source_legacy    -- provenance tag for the above
+    //   deglitch_count             -- VRMS de-glitch counter (still printed
+    //                                 in the serial status report; the field
+    //                                 dies with the de-glitch itself)
+    // The FIFO-DSP velocity figures (velocity_rms_* on the accel_rms event
+    // and on /vibration) are now the only vibration source a consumer sees.
+    // Verified before removal: nothing on the VPS subscribes to /sensor --
+    // Node-RED subscribes only to /vibration, /trend and /device-health, and
+    // the API reads InfluxDB, never MQTT.
 
     s["temp"]  = round(data->temperature *  10) /  10.0f;
     s["rpm"]   = data->rpm;
@@ -9266,9 +8496,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     s["freq_x"]       = freqX;
     s["freq_y"]       = freqY;
     s["freq_z"]       = freqZ;
-    s["freq_ratio_x"] = freqRatioX;
-    s["freq_ratio_y"] = freqRatioY;
-    s["freq_ratio_z"] = freqRatioZ;
+    // [Phase2] freq_ratio_x/y/z REMOVED with the frequency-ratio pipeline.
 
     // v15.1: CF ครบ 3 แกน + max
     s["crest_factor"]   = crestFactor;                           // = cf_max
@@ -9431,16 +8659,10 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     d["kurtosis_valid"]             = kurtosisValid;
     d["dominant_vibration_axis"]    = domVibAxis;
 
-    d["freq_alert"]          = freqGateOpen && g_trendResult.freq_alert;
-    d["freq_drift_x"]        = freqGateOpen ? g_trendResult.freq_drift_x : 0.0f;
-    d["freq_drift_y"]        = freqGateOpen ? g_trendResult.freq_drift_y : 0.0f;
-    d["freq_drift_z"]        = freqGateOpen ? g_trendResult.freq_drift_z : 0.0f;
-
-    d["trend_dir"]           = trendDirStr;
-    d["rms_slope"]           = g_trendResult.rms_slope;
-    d["spike_count"]         = g_trendResult.spike_count;
-    if (g_trendResult.ttw_hours > 0.0f)
-      d["ttw_estimate_h"]    = g_trendResult.ttw_hours;
+    // [Phase2] REMOVED from /decision: freq_alert, freq_drift_x/y/z (freq_ratio
+    // pipeline), rms_slope + trend_dir (legacy VRMS slope), spike_count (legacy
+    // VPEAK) and ttw_estimate_h (legacy-RMS TTW). Current equivalents already on
+    // this topic: velocity_ema_*, velocity_ttw_status / velocity_ttw_hours.
 
     d["timestamp"]           = tsBuf;
 
@@ -9508,9 +8730,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     doc["vibration_status"]        = g_vibUnavailable          ? "UNAVAILABLE"
                                    : !vibThresholdsConfigured() ? "THRESHOLDS_UNSET"
                                    : "OK";
-    // [M1B-7 E3] rms/vx/vy/vz/peak ด้านล่างเป็น legacy VRMS register ทั้งหมด
-    // ยัง DEPRECATED (M1A) ไม่ใช่ alarm source -- ลบไม่ก่อน Phase 5
-    doc["vibration_source_legacy"] = "vrms_register";
+    // [Phase2] vibration_source_legacy REMOVED -- rms/vx/vy/vz/peak are gone from
+    // this topic, so there is no legacy source left to declare provenance for.
 
     // ── [P1-S1] PRODUCT-1 SOURCE OF RECORD: FIFO-DSP velocity, ADDITIVE ─────
     // The canonical vibration metric finally lands on the canonical customer
@@ -9531,11 +8752,14 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // authority. The four floats are published ONLY when it is true --
     // omitted entirely otherwise, matching the replay serializer at
     // .ino:3594-3607. No zero, no null, no NaN is ever fabricated: a consumer
-    // cannot mistake "not measured" for "measured zero". Legacy rms/vx/vy/vz
-    // below are untouched and remain vrms_register-sourced.
+    // cannot mistake "not measured" for "measured zero".
+    // [Phase2] velOk / vOverall are hoisted out of this block so the debug line
+    // at the end of the /vibration publish can report the same velocity figure
+    // that was published, instead of the legacy rms/peak it used to print.
+    bool  velOk = false;
+    float vOverall = 0.0f;
     {
-      bool  velOk = false;
-      float vOverall = 0.0f, vX = 0.0f, vY = 0.0f, vZ = 0.0f;
+      float vX = 0.0f, vY = 0.0f, vZ = 0.0f;
       if (mutexVelCarrier != NULL) {
         VelocityCarrier_t vc;
         bool got = false;
@@ -9559,13 +8783,11 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       }
     }
 
-    // [v16.3ae] gated by motor_state -- see reportedRms/Vx/Vy/Vz above
-    doc["rms"]   = round(reportedRms * 100) / 100.0f;
-    doc["vx"]    = round(reportedVx  * 100) / 100.0f;
-    doc["vy"]    = round(reportedVy  * 100) / 100.0f;
-    doc["vz"]    = round(reportedVz  * 100) / 100.0f;
-    doc["peak"]  = round(currentPeak        * 100) / 100.0f;
-    // [v16.3i] vel_peak_x/y/z removed -- ซ้ำซ้อนกับ vx/vy/vz (VRMS per-axis)
+    // [Phase2] LEGACY VRMS/VPEAK REMOVED from /vibration: rms, vx, vy, vz, peak.
+    // velocity_rms_overall / _x / _y / _z + velocity_data_valid above are the
+    // only vibration numbers on this topic now. Node-RED was migrated off the
+    // legacy names in Phase 0 (Health Logic, Maintenance Analytics v2, Prepare
+    // InfluxDB) and the API contract already banned them.
     doc["temp"]  = round(data->temperature *  10) /  10.0f;
     doc["rpm"]   = data->rpm;
 
@@ -9664,13 +8886,15 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     } else if (success) {
       // [v16.5] ใช้ reportedRms (ค่าที่ gate แล้ว) แทน data->rms_overall (raw)
       // เพื่อให้ debug log ตรงกับค่าที่ publish จริงใน doc["rms"]
-      Serial.printf("[MQTT] /vibration %d B | %s rms=%.2f peak=%.2f rpm=%.1f "
-                    "state=%d | health=%d%% | frx=%.2f fry=%.2f frz=%.2f | "
+      // [Phase2] rms/peak and frx/fry/frz (freq_ratio) dropped from this line --
+      // the values no longer exist. Velocity is reported by velOk/vOverall.
+      Serial.printf("[MQTT] /vibration %d B | %s vel=%s mm/s rpm=%.1f "
+                    "state=%d | health=%d%% | fx=%.1f fy=%.1f fz=%.1f | "
                     "cf=%.2f kurt_max=%.3f(%s) bear=%s\n",
                     jsonSize, alarmLevel,
-                    reportedRms, currentPeak, data->rpm,
+                    velOk ? String(vOverall, 2).c_str() : "--", data->rpm,
                     data->motor_state,
-                    healthScore, freqRatioX, freqRatioY, freqRatioZ,
+                    healthScore, freqX, freqY, freqZ,
                     crestFactor, kmax, kaxis, bearingAlert);
     } else if (!connBefore8) {
       Serial.printf("[MQTT] /vibration NOT_CONNECTED (skipped, no send attempt)\n");
@@ -9791,20 +9015,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 // Priority: 3 (??????? display -- ??? block network/modbus)
 // ============================================================================
 
-// ── Patent Claim 2 helper ────────────────────────────────────────────────────
-// Compute RPM-adaptive slot duration for buf1s.
-// Returns ms per slot clamped to [SLOT_DUR_MIN_MS, SLOT_DUR_MAX_MS].
-// When rpm < MIN_RPM_VALID (motor stopped/starting) returns fixed 1000ms
-// to avoid division near zero and spurious wide slots during transients.
-static uint32_t computeSlotDurMs(float rpm) {
-  if (rpm < (float)MIN_RPM_VALID) return 1000UL;  // motor not running -- keep default
-  // target: SLOT_REVS_TARGET full revolutions per slot
-  float ms = ((float)SLOT_REVS_TARGET * 60000.0f) / rpm;
-  uint32_t dur = (uint32_t)ms;
-  if (dur < SLOT_DUR_MIN_MS) dur = SLOT_DUR_MIN_MS;
-  if (dur > SLOT_DUR_MAX_MS) dur = SLOT_DUR_MAX_MS;
-  return dur;
-}
+// [Phase2] REMOVED: computeSlotDurMs() -- RPM-adaptive slot duration helper.
+
 
 // ----------------------------------------------------------------------------
 // [Phase 3B] Core 1 half of the waveform hand-off: consume one snapshot, run
@@ -10021,17 +9233,6 @@ void taskAnalytics(void* parameter) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xPeriod = pdMS_TO_TICKS(1000);  // 1 Hz — unchanged
 
-  // ── Patent Claim 2: millis-based accumulators replace fixed counters ─────
-  // acc*Ms and lastHead/firstRun are now globals (g_accMs_*, g_anaLastHead,
-  // g_anaFirstRun) so taskButtonHandler can atomically reset them during
-  // maintenance while taskAnalytics is suspended. Local aliases for readability.
-  uint32_t& acc1sMs  = (uint32_t&)g_accMs_1s;
-  uint32_t& acc10sMs = (uint32_t&)g_accMs_10s;
-  uint32_t& acc60sMs = (uint32_t&)g_accMs_60s;
-
-  // lastHead: ?? head ?????????????? -> ?? samples ???????????????? aggregate
-  uint16_t& lastHead = (uint16_t&)g_anaLastHead;
-  bool&     firstRun = (bool&)g_anaFirstRun;
 
   // Publish /analytics counter
   uint8_t&  analyticsPublishCnt = (uint8_t&)g_anaPublishCnt;
@@ -10058,66 +9259,8 @@ void taskAnalytics(void* parameter) {
     // this tick rather than waiting a second.
     vibEmaTick();
 
-#ifdef VERIFY_TEST
-    // [VERIFY_TEST] Checkpoint 5E: one-shot, non-blocking consumption of the
-    // Checkpoint 5D frozen diagnostic snapshot. Queue capacity is 1 and
-    // taskStateMachine() sends exactly once per boot (at the CAPTURING_POST
-    // -> FROZEN transition), so this receive drains it exactly once -- no
-    // retry/poll loop, no second one-shot flag needed.
-    if (queueDiagSnapshot != NULL) {
-      static PollDiagSnapshot_t s_diagSnapshotRx;
-      if (xQueueReceive(queueDiagSnapshot, &s_diagSnapshotRx, 0) == pdTRUE) {
-        // Defensive cap only -- BEGIN/END still print the actual received
-        // count; count is never rewritten.
-        const uint8_t safeCount = (s_diagSnapshotRx.count <= 64) ? s_diagSnapshotRx.count : 64;
 
-        Serial.printf("[DIAG_SNAPSHOT_BEGIN] fsm_state=%u count=%u head=%u trigger_poll_seq=%lu\n",
-                      s_diagSnapshotRx.fsm_state, s_diagSnapshotRx.count, s_diagSnapshotRx.head,
-                      (unsigned long)s_diagSnapshotRx.trigger_poll_seq);
 
-        for (uint8_t i = 0; i < safeCount; i++) {
-          const PollDiagRecord_t& rec = s_diagSnapshotRx.records[i];
-          // Trigger identity derived only this way -- never re-derived from RMS/frequency.
-          const bool isTrigger = (rec.poll_seq == s_diagSnapshotRx.trigger_poll_seq);
-          Serial.printf("[DIAG_RECORD] chronological_index=%u physical_buffer_index=%u poll_seq=%lu "
-                        "is_trigger=%u rawRmsOverall=%.3f rawRmsZ=%.3f freq_z=%.3f "
-                        "lastGoodRmsPre=%.3f lastGoodRmsPost=%.3f outRms=%.3f "
-                        "isDropGlitch=%u glitchHoldPre=%u branch=%u motorState=%u\n",
-                        (unsigned)i, s_diagSnapshotRx.physical_buffer_index[i], (unsigned long)rec.poll_seq,
-                        (unsigned)isTrigger, rec.rawRmsOverall, rec.rawRmsZ, rec.freq_z,
-                        rec.lastGoodRmsPre, rec.lastGoodRmsPost, rec.outRms,
-                        (unsigned)rec.isDropGlitch, (unsigned)rec.glitchHoldPre,
-                        (unsigned)rec.branch, (unsigned)rec.motorState);
-        }
-
-        Serial.printf("[DIAG_SNAPSHOT_END] count=%u trigger_poll_seq=%lu\n",
-                      s_diagSnapshotRx.count, (unsigned long)s_diagSnapshotRx.trigger_poll_seq);
-      }
-    }
-#endif
-
-    // ── Patent Claim 2: update slot duration from current RPM ────────────
-    // Read RPM (written atomically by Core 0 processRPM).
-    // Update g_slotDur1sMs every tick so slot width adapts to operating speed.
-    {
-      float latestRpm = 0.0f;
-      if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(3)) == pdTRUE) {
-        latestRpm = g_telemSnapshot.rpm;  // [v16.5.4] read the atomic snapshot
-        xSemaphoreGive(mutexVibData);
-      }
-      g_slotDur1sMs = computeSlotDurMs(latestRpm);
-    }
-
-    // [v16.3ac] อ่าน command จาก Core0 (แทน boolean) — ขยายได้ (EXPORT/REBUILD ในอนาคต)
-    if (g_analyticsCmd == ANALYTICS_CLEAR) {
-      g_analyticsCmd = ANALYTICS_NONE;
-      memset(g_buf1s,  0, sizeof(g_buf1s));  g_buf1sHead  = 0; g_buf1sCount  = 0;
-      memset(g_buf10s, 0, sizeof(g_buf10s)); g_buf10sHead = 0; g_buf10sCount = 0;
-      memset(g_buf60s, 0, sizeof(g_buf60s)); g_buf60sHead = 0; g_buf60sCount = 0;
-      g_emaRms = 0.0f; g_emaPrevRms = 0.0f; g_emaDelta = 0.0f; g_emaDir = 0;
-      acc1sMs = 0; acc10sMs = 0; acc60sMs = 0;
-      Serial.println("[ANALYTICS] CMD CLEAR -- buffers + EMA reset");
-    }
 
     // [v16.3ab] FREEZE gate — derived state (คำนวณสด), พร้อมเหตุผล (Point 1+2)
     AnalysisReason_t anaReason = analysisReason();
@@ -10131,275 +9274,12 @@ void taskAnalytics(void* parameter) {
       s_lastAnaReason = anaReason;
     }
 
-    // [v16.3ab] Point 4: resume หลัง gap — preserve raw data แต่ reinit time-dependent stats
-    // reseed EMA baseline (กัน delta กระโดดข้าม gap) + suppress slope จน window มีข้อมูล contiguous
-    if (g_resumeReinit && anaReady) {
-      g_resumeReinit  = false;
-      g_emaPrevRms    = g_emaRms;   // baseline = ค่าปัจจุบัน → delta แรกหลัง resume ≈ 0
-      g_emaDelta      = 0.0f;
-      g_slopeSuppress = 2;          // suppress slope 2 calcTrend cycles (time discontinuity)
-      Serial.printf("[ANALYTICS] Resume reinit -- gap=%lus, EMA reseed, slope suppress=%u (raw data preserved)\n",
-                    (unsigned long)g_lastResumeGapS, (unsigned)g_slopeSuppress);
-    }
 
-    // Accumulate elapsed ms this tick (task period = 1000ms fixed)
-    // freeze: ไม่ขยับเวลา slot ระหว่างที่ยังไม่พร้อม (กัน slot สั้นผิดตอน resume)
-    const uint32_t tickMs = 1000UL;
-    if (anaReady) {
-      acc1sMs  += tickMs;
-      acc10sMs += tickMs;
-      acc60sMs += tickMs;
-    }
-
-    // -- Snapshot raw buffer state (Core 0 writes, float-atomic) --
-    uint16_t snapHead  = g_trendHead;   // volatile read (atomic on Xtensa)
-    uint16_t snapCount = g_trendCount;
-
-    if (snapCount == 0) continue;
-
-    // [v16.3aa] FREEZE: ไม่ aggregate stopped/starting samples เข้า trend (กัน pollution)
-    // คง g_buf* เดิมไว้ (ไม่ลบ) — resume จาก head ปัจจุบันเมื่อ analysisReady กลับมา
-    if (!anaReady) {
-      lastHead = snapHead;   // ทิ้ง samples ช่วง freeze, resume ต่อจากจุดนี้
-      firstRun = false;
-      goto analytics_publish;
-    }
-
-    // -- ?????????? new samples ??????? last read --
-    // newSamples = ????? samples ??? Core 0 push ?????? 1 ?????? (??????? 4 +/-1)
-    uint16_t newSamples;
-    if (firstRun) {
-      // ??????: ??? min(snapCount, 4) -- ???????????? 1 ??????
-      newSamples = (snapCount < 4) ? snapCount : 4;
-      lastHead   = (snapHead + TREND_BUF_SIZE - newSamples) % TREND_BUF_SIZE;
-      firstRun   = false;
-    } else {
-      // ????: head ??????????? step ??? lastHead
-      newSamples = (snapHead - lastHead + TREND_BUF_SIZE) % TREND_BUF_SIZE;
-      if (newSamples == 0) {
-        // Core 0 ?????? push ????? 1 ?????? (sensor offline?) -- ????
-        analyticsPublishCnt++;
-        goto analytics_publish;
-      }
-      // ???????????? 4 (buffer ??? overrun ??? wakeup ???)
-      if (newSamples > 8) newSamples = 8;
-    }
-
-    // ── Patent Claim 2: rolling accumulator for variable-width slot ──────
-    // Instead of building one a1s per tick and flushing immediately,
-    // we accumulate raw samples into a_slot across multiple ticks.
-    // When acc1sMs >= g_slotDur1sMs (the RPM-derived threshold), we
-    // finalise and push the accumulated slot, then reset for the next one.
-    // This ensures each buf1s slot always covers SLOT_REVS_TARGET revolutions
-    // regardless of how many ticks fit within that time window.
-    {
-      // Per-slot running accumulators (persist across ticks between flushes)
-      // V14.4: promoted to globals (g_sl_*) for maintenance reset support.
-      float&   sl_sumRms   = (float&)g_sl_sumRms;
-      float&   sl_sumSqRms = (float&)g_sl_sumSqRms;
-      float&   sl_maxRms   = (float&)g_sl_maxRms;
-      float&   sl_sumTemp  = (float&)g_sl_sumTemp;
-      float&   sl_maxTemp  = (float&)g_sl_maxTemp;
-      float&   sl_sumPeak  = (float&)g_sl_sumPeak;
-      float&   sl_maxPeak  = (float&)g_sl_maxPeak;
-      float&   sl_sumFrx   = (float&)g_sl_sumFrx;
-      float&   sl_sumFry   = (float&)g_sl_sumFry;
-      float&   sl_sumFrz   = (float&)g_sl_sumFrz;
-      uint8_t& sl_spikes   = (uint8_t&)g_sl_spikes;
-      uint8_t& sl_n        = (uint8_t&)g_sl_n;
-
-      // snapshot motor_state ก่อน loop — ป้องกัน race condition
-      uint8_t snapMotorStateAnalytics = 0;
-      if (xSemaphoreTake(mutexVibData, pdMS_TO_TICKS(2)) == pdTRUE) {
-          snapMotorStateAnalytics = g_telemSnapshot.motor_state;  // [v16.5.4] read the atomic snapshot
-          xSemaphoreGive(mutexVibData);
-      }
-
-      for (uint16_t i = 0; i < newSamples; i++) {
-        uint16_t idx = (lastHead + i) % TREND_BUF_SIZE;
-        const TrendSample_t* s = &g_trendBuf[idx];
-
-        float rms  = s->rms;
-        float peak = s->peak;
-        float temp = s->temp;
-
-        sl_sumRms   += rms;
-        sl_sumSqRms += rms * rms;
-        // v16.1: gate maxRms ด้วย MOTOR_RUNNING เท่านั้น
-        // STARTING/STOPPING มี transient spike สูงที่ไม่มีความหมาย mechanical
-        if (rms > sl_maxRms && snapMotorStateAnalytics == (uint8_t)MOTOR_RUNNING)
-            sl_maxRms = rms;
-        sl_sumTemp  += temp;
-        if (temp > sl_maxTemp) sl_maxTemp = temp;
-        sl_sumPeak  += peak;
-        if (peak > sl_maxPeak) sl_maxPeak = peak;
-        sl_sumFrx   += s->freq_ratio_x;
-        sl_sumFry   += s->freq_ratio_y;
-        sl_sumFrz   += s->freq_ratio_z;
-        if (peak > WARNING_RMS * SPIKE_RMS_FACTOR) sl_spikes++;
-        if (sl_n < 255) sl_n++;  // guard uint8_t overflow (max 255 raw samples/slot)
-      }
-
-      // Advance lastHead — consumed up to snapHead
-      lastHead = snapHead;
-
-      if (sl_n == 0) goto analytics_ema;
-
-      // ── Flush when slot duration threshold reached ──────────────────────
-      if (acc1sMs >= g_slotDur1sMs) {
-        acc1sMs = 0;
-
-        float inv      = 1.0f / sl_n;
-        float meanRms  = sl_sumRms * inv;
-        float variance = (sl_sumSqRms * inv) - (meanRms * meanRms);
-        float stddev   = (variance > 0.0f) ? sqrtf(variance) : 0.0f;
-
-        AggSample_t a1s = {
-          .mean_rms    = meanRms,
-          .max_rms     = sl_maxRms,
-          .stddev_rms  = stddev,
-          .mean_temp   = sl_sumTemp * inv,
-          .max_temp    = sl_maxTemp,
-          .mean_peak   = sl_sumPeak * inv,
-          .max_peak    = sl_maxPeak,
-          .mean_frx    = sl_sumFrx * inv,
-          .mean_fry    = sl_sumFry * inv,
-          .mean_frz    = sl_sumFrz * inv,
-          .spike_count = sl_spikes,
-          .n_samples   = sl_n
-        };
-
-        // Reset slot accumulators for the next slot
-        sl_sumRms = sl_sumSqRms = sl_maxRms  = 0.0f;
-        sl_sumTemp = sl_maxTemp = 0.0f;
-        sl_sumPeak = sl_maxPeak = 0.0f;
-        sl_sumFrx  = sl_sumFry  = sl_sumFrz  = 0.0f;
-        sl_spikes  = 0;
-        sl_n       = 0;
-
-        // -- Push 1s aggregate (hold mutex) --
-        if (xSemaphoreTake(mutexAggBufs, pdMS_TO_TICKS(5)) == pdTRUE) {
-          pushAggBuf(g_buf1s, &g_buf1sHead, &g_buf1sCount, AGG_BUF_1S_SIZE, &a1s);
-          xSemaphoreGive(mutexAggBufs);
-        }
-
-        // -- Cascade -> 10s (target: 10 × slotDur1s real ms) ─────────────
-        // acc10sMs threshold = 10 × g_slotDur1sMs, so the 10s slot always
-        // covers exactly 10 × SLOT_REVS_TARGET revolutions regardless of RPM.
-        if (acc10sMs >= 10UL * g_slotDur1sMs) {
-          acc10sMs = 0;
-
-          // Average ??? g_buf1s 10 slots ??????
-          if (xSemaphoreTake(mutexAggBufs, pdMS_TO_TICKS(5)) == pdTRUE) {
-            uint16_t take = (g_buf1sCount < 10) ? g_buf1sCount : 10;
-
-            if (take > 0) {
-              AggSample_t a10s = { 0 };
-              for (uint16_t i = 0; i < take; i++) {
-                uint16_t idx = (g_buf1sHead + AGG_BUF_1S_SIZE - take + i) % AGG_BUF_1S_SIZE;
-                const AggSample_t* q = &g_buf1s[idx];
-                a10s.mean_rms    += q->mean_rms;
-                if (q->max_rms  > a10s.max_rms)  a10s.max_rms  = q->max_rms;
-                a10s.stddev_rms  += q->stddev_rms;
-                a10s.mean_temp   += q->mean_temp;
-                if (q->max_temp > a10s.max_temp) a10s.max_temp = q->max_temp;
-                a10s.mean_peak   += q->mean_peak;
-                if (q->max_peak > a10s.max_peak) a10s.max_peak = q->max_peak;
-                a10s.mean_frx    += q->mean_frx;
-                a10s.mean_fry    += q->mean_fry;
-                a10s.mean_frz    += q->mean_frz;
-                a10s.spike_count += q->spike_count;
-                a10s.n_samples   += q->n_samples;
-              }
-              float inv10 = 1.0f / take;
-              a10s.mean_rms   *= inv10;
-              a10s.stddev_rms *= inv10;
-              a10s.mean_temp  *= inv10;
-              a10s.mean_peak  *= inv10;
-              a10s.mean_frx   *= inv10;
-              a10s.mean_fry   *= inv10;
-              a10s.mean_frz   *= inv10;
-              pushAggBuf(g_buf10s, &g_buf10sHead, &g_buf10sCount, AGG_BUF_10S_SIZE, &a10s);
-            }
-            xSemaphoreGive(mutexAggBufs);
-          }
-
-          // -- Cascade -> 60s (target: 60 × slotDur1s real ms) ─────────
-          // acc60sMs threshold = 60 × g_slotDur1sMs ≈ 60 s wall-clock
-          // (adapts proportionally: same harmonic coverage at every speed)
-          if (acc60sMs >= 60UL * g_slotDur1sMs) {
-            acc60sMs = 0;
-
-            if (xSemaphoreTake(mutexAggBufs, pdMS_TO_TICKS(5)) == pdTRUE) {
-              uint16_t take6 = (g_buf10sCount < 6) ? g_buf10sCount : 6;
-
-              if (take6 > 0) {
-                AggSample_t a60s = { 0 };
-                for (uint16_t i = 0; i < take6; i++) {
-                  uint16_t idx = (g_buf10sHead + AGG_BUF_10S_SIZE - take6 + i) % AGG_BUF_10S_SIZE;
-                  const AggSample_t* q = &g_buf10s[idx];
-                  a60s.mean_rms    += q->mean_rms;
-                  if (q->max_rms  > a60s.max_rms)  a60s.max_rms  = q->max_rms;
-                  a60s.stddev_rms  += q->stddev_rms;
-                  a60s.mean_temp   += q->mean_temp;
-                  if (q->max_temp > a60s.max_temp) a60s.max_temp = q->max_temp;
-                  a60s.mean_peak   += q->mean_peak;
-                  if (q->max_peak > a60s.max_peak) a60s.max_peak = q->max_peak;
-                  a60s.mean_frx    += q->mean_frx;
-                  a60s.mean_fry    += q->mean_fry;
-                  a60s.mean_frz    += q->mean_frz;
-                  a60s.spike_count += q->spike_count;
-                  a60s.n_samples   += q->n_samples;
-                }
-                float inv6 = 1.0f / take6;
-                a60s.mean_rms   *= inv6;
-                a60s.stddev_rms *= inv6;
-                a60s.mean_temp  *= inv6;
-                a60s.mean_peak  *= inv6;
-                a60s.mean_frx   *= inv6;
-                a60s.mean_fry   *= inv6;
-                a60s.mean_frz   *= inv6;
-                pushAggBuf(g_buf60s, &g_buf60sHead, &g_buf60sCount, AGG_BUF_60S_SIZE, &a60s);
-
-                Serial.printf("[ANALYTICS] 60s flush -> buf1s=%u buf10s=%u buf60s=%u slot_ms=%lu\n",
-                              g_buf1sCount, g_buf10sCount, g_buf60sCount, g_slotDur1sMs);
-              }
-
-              // -- Phase 5: Update slope variance trackers (OSG + FVRI inputs) --
-              // Compute rolling variance of mean_rms for each buffer tier.
-              // Called inside mutexAggBufs critical section -- safe to access buffers.
-              // Use last 20 slots (coverage: 20×slotDur1s, 200×slotDur1s, 1200×slotDur1s).
-              if (g_buf1sCount  >= 4)
-                g_slopeVar_1s  = computeRmsVariance(g_buf1s,  g_buf1sHead,  g_buf1sCount,  AGG_BUF_1S_SIZE,  20);
-              if (g_buf10sCount >= 4)
-                g_slopeVar_10s = computeRmsVariance(g_buf10s, g_buf10sHead, g_buf10sCount, AGG_BUF_10S_SIZE, 20);
-              if (g_buf60sCount >= 4)
-                g_slopeVar_60s = computeRmsVariance(g_buf60s, g_buf60sHead, g_buf60sCount, AGG_BUF_60S_SIZE, 20);
-
-              xSemaphoreGive(mutexAggBufs);
-            }
-          }
-        }
-      }
-      // If acc1sMs < g_slotDur1sMs: samples already appended to sl_* accumulators above;
-      // nothing else to do this tick — wait for the slot threshold to be reached.
-    }
-
-analytics_ema:
-    // -- EMA update (??? 1 ??????) ------------------------------------------
-    // ?????? rms ????????? g_trendBuf (1 sample ??????????? EMA ???????)
-    {
-      uint16_t lastIdx = (snapHead + TREND_BUF_SIZE - 1) % TREND_BUF_SIZE;
-      float latestRms  = g_trendBuf[lastIdx].rms;
-
-      float prevEma = g_emaRms;
-      g_emaRms      = EMA_ALPHA * latestRms + (1.0f - EMA_ALPHA) * prevEma;
-      g_emaDelta    = g_emaRms - g_emaPrevRms;
-      g_emaPrevRms  = g_emaRms;
-
-      g_emaDir = (g_emaDelta >  EMA_DIR_THRESHOLD) ?  1 :
-                 (g_emaDelta < -EMA_DIR_THRESHOLD) ? -1 : 0;
-    }
+    // [Phase2] REMOVED: the RPM-adaptive slot accumulators, the
+    // g_buf1s/10s/60s cascade and the legacy VRMS EMA that lived here.
+    // Trend is now produced entirely by the FIFO/DSP modules invoked above
+    // (vibHistoryIngest -> VibEma_Update), and published from VibWindow_/
+    // VibSlope_/VibTtw_ in the /trend block below.
 
 analytics_publish:
     analyticsPublishCnt++;
@@ -10409,7 +9289,10 @@ analytics_publish:
     // [v16.5] Section 7 Item 6 (design v16.5 §3.3, §4.2) — read via cache
     // instead of touching mqttClient directly; Analytics is not the owner task.
     if (!getMqttConnectedCached()) continue;
-    if (g_buf1sCount < 4)        continue;
+    // [Phase2] the g_buf1sCount >= 4 readiness gate went away with the slot
+    // cascade. The FIFO/DSP window/slope/EMA blocks below each carry their own
+    // validity flag (velocity_status_*, velocity_slope_valid, ema.valid), so an
+    // early /trend publish reports "not ready" rather than being suppressed.
 
     // Shared timestamp for this publish round (all 7 topics use same value)
     char tsA[26] = "not_available";
@@ -10458,56 +9341,13 @@ analytics_publish:
       t["stage"]               = "trend";
       t["execution_location"]  = "edge";
 
-      t["buf_1s"]    = g_buf1sCount;
-      t["buf_10s"]   = g_buf10sCount;
-      t["buf_60s"]   = g_buf60sCount;
-      t["ready_1s"]  = g_trendResult.slope_ready_1s;
-      t["ready_10s"] = g_trendResult.slope_ready_10s;
-      t["ready_60s"] = g_trendResult.slope_ready_60s;
-
-      if (xSemaphoreTake(mutexAggBufs, pdMS_TO_TICKS(5)) == pdTRUE) {
-        if (g_trendResult.slope_ready_1s)
-          t["slope_1s"]  = roundf(aggLinRegSlope(g_buf1s,  g_buf1sHead,  g_buf1sCount,
-                                                 AGG_BUF_1S_SIZE,  30) * 100000.0f) / 100000.0f;
-        if (g_trendResult.slope_ready_10s)
-          t["slope_10s"] = roundf(aggLinRegSlope(g_buf10s, g_buf10sHead, g_buf10sCount,
-                                                 AGG_BUF_10S_SIZE, 30) * 100000.0f) / 100000.0f;
-        if (g_trendResult.slope_ready_60s)
-          t["slope_60s"] = roundf(aggLinRegSlope(g_buf60s, g_buf60sHead, g_buf60sCount,
-                                                 AGG_BUF_60S_SIZE, 30) * 100000.0f) / 100000.0f;
-
-        float maxRms10m = 0.0f;
-        uint16_t n10m = (g_buf10sCount < AGG_BUF_10S_SIZE) ? g_buf10sCount : AGG_BUF_10S_SIZE;
-        for (uint16_t i = 0; i < n10m; i++)
-          maxRms10m = max(maxRms10m,
-            g_buf10s[(g_buf10sHead + AGG_BUF_10S_SIZE - n10m + i) % AGG_BUF_10S_SIZE].max_rms);
-        t["max_rms_10min"] = roundf(maxRms10m * 100.0f) / 100.0f;
-
-        float maxRms60m = 0.0f;
-        uint16_t n60m = (g_buf60sCount < AGG_BUF_60S_SIZE) ? g_buf60sCount : AGG_BUF_60S_SIZE;
-        for (uint16_t i = 0; i < n60m; i++)
-          maxRms60m = max(maxRms60m,
-            g_buf60s[(g_buf60sHead + AGG_BUF_60S_SIZE - n60m + i) % AGG_BUF_60S_SIZE].max_rms);
-        if (n60m > 0) t["max_rms_60min"] = roundf(maxRms60m * 100.0f) / 100.0f;
-
-        float sumSd = 0.0f;
-        uint16_t n60s = (g_buf1sCount < AGG_BUF_1S_SIZE) ? g_buf1sCount : AGG_BUF_1S_SIZE;
-        for (uint16_t i = 0; i < n60s; i++)
-          sumSd += g_buf1s[(g_buf1sHead + AGG_BUF_1S_SIZE - n60s + i) % AGG_BUF_1S_SIZE].stddev_rms;
-        t["stddev_1min"] = (n60s > 0) ? roundf((sumSd / n60s) * 1000.0f) / 1000.0f : 0.0f;
-
-        // OSG + FVRI inputs — patent-relevant
-        t["slope_var_1s"]  = (float)g_slopeVar_1s;
-        t["slope_var_10s"] = (float)g_slopeVar_10s;
-        t["slope_var_60s"] = (float)g_slopeVar_60s;
-
-        xSemaphoreGive(mutexAggBufs);
-      }
-
-      t["ema_rms"]   = roundf(g_emaRms   * 1000.0f)  / 1000.0f;
-      t["ema_dir"]   = g_emaDir;
-      t["ema_delta"] = roundf(g_emaDelta * 100000.0f) / 100000.0f;
-      t["spike_count"]  = g_trendResult.spike_count;
+      // [Phase2] LEGACY TREND KEYS REMOVED (no consumer, no alias):
+      //   buf_1s/10s/60s, ready_1s/10s/60s, slope_1s/10s/60s,
+      //   max_rms_10min, max_rms_60min, stddev_1min,
+      //   slope_var_1s/10s/60s, ema_rms, ema_dir, ema_delta, spike_count
+      // Replaced by the FIFO/DSP block further down: velocity_slope_mms_per_s,
+      // velocity_stddev_60s/300s_mms, velocity_max_60s/300s_mms,
+      // velocity_samples_*, velocity_status_*, history_*.
 
       // [M1B-2 / part B] Low-rate history-ring observability.
       //
@@ -10637,18 +9477,10 @@ analytics_publish:
           snapRpm        = g_telemSnapshot.rpm;          // motor_state + rpm now from the same cycle
           xSemaphoreGive(mutexVibData);
       }
-      // v16.0: suppress freq fields เมื่อ motor ไม่ใช่ RUNNING หรือ RPM < gate
-      {
-        bool trendFreqGate = (snapMotorState == (uint8_t)MOTOR_RUNNING &&
-                              snapRpm >= (float)RPM_FREQ_GATE);
-        t["freq_alert"]   = trendFreqGate && g_trendResult.freq_alert;
-        t["freq_drift_x"] = trendFreqGate ? g_trendResult.freq_drift_x : 0.0f;
-        t["freq_drift_y"] = trendFreqGate ? g_trendResult.freq_drift_y : 0.0f;
-        t["freq_drift_z"] = trendFreqGate ? g_trendResult.freq_drift_z : 0.0f;
-      }
-      // Patent Claim 2: expose adaptive slot duration for external verification
-      t["slot_dur_ms"]       = (uint32_t)g_slotDur1sMs;
-      t["slot_revs_target"]  = SLOT_REVS_TARGET;
+      // [Phase2] freq_alert / freq_drift_x/y/z REMOVED with the freq_ratio
+      // pipeline. slot_dur_ms / slot_revs_target REMOVED with the RPM-adaptive
+      // slot machinery. The raw dominant frequencies (registers 0x44-0x46) are
+      // unaffected and still published on /sensor as freq_x/y/z.
       t["timestamp"] = tsA;
  
       // buf[1024] >> StaticJsonDocument<640>  (v14.3: was buf[700])
@@ -11154,7 +9986,6 @@ void setup() {
   mutexSystemState = xSemaphoreCreateMutex();
   mutexI2C        = xSemaphoreCreateMutex();
   mutexModem      = xSemaphoreCreateMutex();
-  mutexAggBufs    = xSemaphoreCreateMutex();  // Phase 2: guard g_buf1s/10s/60s
   mutexFaultLatch = xSemaphoreCreateMutex();  // v3 hardened: guard g_fl/g_flCount + fault_latch NVS namespace
   mutexTelemBuf   = xSemaphoreCreateMutex();  // guards telemetry ring buffer
   mutexAccelSnap  = xSemaphoreCreateMutex();  // [Phase 3B] guards g_accelSnap
@@ -11163,7 +9994,7 @@ void setup() {
   VibEma_Init();                              // [M1B-2] timestamp-aware EMA over that ring
 
   if (mutexVibData == NULL || mutexSystemState == NULL ||
-      mutexI2C == NULL || mutexModem == NULL || mutexAggBufs == NULL ||
+      mutexI2C == NULL || mutexModem == NULL ||
       mutexFaultLatch == NULL) {
     Serial.println("[FATAL] Failed to create mutexes!");
     while (1) delay(1000);
@@ -11203,16 +10034,6 @@ void setup() {
     Serial.println("[Init] MQTT outbound queue created (dormant)");
   }
 
-#ifdef VERIFY_TEST
-  // [VERIFY_TEST] Checkpoint 5D: one-shot diagnostic snapshot queue. Creation
-  // failure must not restart the DUT or alter production behavior -- recorded
-  // in g_diagHandoffState only; taskStateMachine() null-checks the handle
-  // before its one-shot send attempt.
-  queueDiagSnapshot = xQueueCreate(QUEUE_SIZE_DIAG_SNAPSHOT, sizeof(PollDiagSnapshot_t));
-  if (queueDiagSnapshot == NULL) {
-    g_diagHandoffState = DIAG_HANDOFF_QUEUE_UNAVAILABLE;
-  }
-#endif
 
   delay(2000);
 
@@ -11338,11 +10159,6 @@ void setup() {
                  (unsigned)VIB_ALARM_PERSIST_CAPTURES);
   Serial.printf ("  Source         : FIFO-DSP velocity_rms_overall\n\n");
 
-  Serial.println("Legacy VRMS-register constants (NOT alarm thresholds):");
-  Serial.printf ("  [LEGACY/VRMS ONLY] Baseline: %.1f mm/s\n", BASELINE_RMS);
-  Serial.printf ("  [LEGACY/VRMS ONLY] Warning:  %.1f mm/s\n", WARNING_RMS);
-  Serial.printf ("  [LEGACY/VRMS ONLY] Critical: %.1f mm/s\n\n", CRITICAL_RMS);
-
   Serial.println("Adaptive Sending:");
   Serial.println("  NORMAL:   30 seconds");
   Serial.println("  WARNING:  10 seconds");
@@ -11350,10 +10166,9 @@ void setup() {
 
   Serial.println("Phase 2 Analytics:");
   Serial.println("  taskAnalytics: Core 1, 1 Hz, Priority 3");
-  Serial.println("  Buffers: g_buf1s[60]=60s  g_buf10s[60]=10min  g_buf60s[60]=60min");
-  Serial.printf("  RAM overhead: ~%d bytes  (~%.1f KB)\n",
-                (int)(sizeof(g_buf1s) + sizeof(g_buf10s) + sizeof(g_buf60s)),
-                (sizeof(g_buf1s) + sizeof(g_buf10s) + sizeof(g_buf60s)) / 1024.0f);
+  Serial.println("  Trend source : VibHistory ring -> VibEma / VibWindow / VibSlope / VibTtw");
+  Serial.printf("  Temp history : %d bytes (%u samples)\n",
+                (int)sizeof(g_tempBuf), (unsigned)TEMP_BUF_SIZE);
   Serial.printf("  Analytics topic: %s\n\n", g_mqttAnalyticsTopic);
 
 
@@ -11438,7 +10253,13 @@ void loop() {
     else if (localState == STATE_MAINTENANCE) stateStr = "MAINTENANCE";
     Serial.printf("| State:   %-45s |\n", stateStr);
 
-    Serial.printf("| RMS:     %-42.2f mm/s |\n", localVib.rms_overall);
+    {
+      float sAll = 0.0f;
+      if (displayVelocity(&sAll, NULL, NULL, NULL))
+        Serial.printf("| Velocity:%-42.2f mm/s |\n", sAll);
+      else
+        Serial.printf("| Velocity:%-42s      |\n", "-- (unavailable)");
+    }
     Serial.printf("| Temp:    %-43.1f  degC |\n", localVib.temperature);
 
     Serial.println("+========================================================+");
@@ -11454,9 +10275,6 @@ void loop() {
     Serial.println("+========================================================+");
     Serial.printf("| Sensor Reads:    %8lu (Errors: %8lu)       |\n",
                   g_sensorReads, g_sensorErrors);
-    Serial.printf("| VRMS Deglitch:   %8lu  (%.1f%% of reads)          |\n",
-                  (unsigned long)g_deglitchCount,
-                  g_sensorReads ? (100.0f * g_deglitchCount / g_sensorReads) : 0.0f);
     Serial.printf("| Display Updates: %8lu                          |\n",
                   g_displayUpdates);
     Serial.printf("| MQTT Publishes:  %8u (Failures: %8u)     |\n",
@@ -11533,11 +10351,15 @@ void loop() {
     Serial.printf("  Button:      %u\n", uxTaskGetStackHighWaterMark(taskHandleButton));
     Serial.printf("  Buzzer:      %u\n\n", uxTaskGetStackHighWaterMark(taskHandleBuzzer));
 
-    // Phase 2: Analytics buffer fill status
-    Serial.printf("Analytics Buffer Fill: buf1s=%u/60  buf10s=%u/60  buf60s=%u/60\n",
-                  g_buf1sCount, g_buf10sCount, g_buf60sCount);
-    Serial.printf("EMA: rms=%.3f delta=%.5f dir=%+d\n",
-                  g_emaRms, g_emaDelta, (int)g_emaDir);
+    // [Phase2] FIFO/DSP trend status (was: legacy slot buffers + legacy EMA)
+    {
+      const VibEmaState emaSnap = VibEma_Get(millis(), VIB_VELOCITY_MAX_AGE_MS_TBD);
+      Serial.printf("Trend history: %u samples  |  temp ring: %u/%u\n",
+                    (unsigned)VibHistory_Count(),
+                    (unsigned)g_tempCount, (unsigned)TEMP_BUF_SIZE);
+      if (emaSnap.valid) Serial.printf("Velocity EMA: %.3f mm/s\n", emaSnap.ema_mms);
+      else               Serial.printf("Velocity EMA: -- (unavailable)\n");
+    }
 
     // Telemetry ring buffer stats
     Serial.println("+========================================================+");
