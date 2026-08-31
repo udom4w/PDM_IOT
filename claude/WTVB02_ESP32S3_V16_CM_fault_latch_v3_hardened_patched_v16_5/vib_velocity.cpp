@@ -127,11 +127,76 @@ double VelocityPowerAtBin(uint16_t k, double dF, double denom) {
   return ms_a / (omega * omega);
 }
 
+// ---- [Phase 3E] band-integrated amplitude at one harmonic ------------------
+// Locates the bin nearest fTargetHz and sums ms_v over { k-1, k, k+1 }, then
+// converts the mean-square velocity to an RMS amplitude in mm/s. Like
+// VelocityPowerAtBin it only READS s_re/s_im -- it performs no transform and
+// mutates no module state, so it cannot perturb a result computed before it.
+//
+// Every index the band touches is bounds-checked BEFORE any read, against the
+// same two limits the RMS loop obeys:
+//   k-1 >= VIB_VEL_HP_BIN   the whole band must sit above the high-pass floor;
+//                           a band straddling it would sum bins the floor
+//                           exists to discard.
+//   k+1 <  NHALF            the whole band must stay strictly below Nyquist.
+//                           NHALF itself is excluded because it is the only
+//                           interior-doubling exception, and mixing a
+//                           non-doubled bin into a doubled sum would compare
+//                           two different normalizations.
+// Failing either bound returns false and writes nothing -- the caller reports
+// the harmonic as not observable rather than reporting a distorted number.
+bool HarmonicBandAmplitude(double fTargetHz, double dF, double denom,
+                           float* outMms) {
+  if (outMms == NULL) {
+    return false;
+  }
+  if (!isfinite(fTargetHz) || fTargetHz <= 0.0 || !isfinite(dF) || dF <= 0.0) {
+    return false;
+  }
+
+  const double kReal = fTargetHz / dF;
+  if (!isfinite(kReal) || kReal < 0.0 || kReal > (double)NHALF) {
+    return false;   // reject before the cast, never after
+  }
+  const long kRound = lround(kReal);
+  if (kRound < 0 || kRound > (long)NHALF) {
+    return false;
+  }
+  const uint16_t k = (uint16_t)kRound;
+
+  if (k < (uint16_t)(VIB_VEL_HP_BIN + 1u)) {
+    return false;   // k-1 would fall on or below the high-pass floor
+  }
+  if ((uint16_t)(k + 1u) >= NHALF) {
+    return false;   // k+1 would reach Nyquist
+  }
+
+  double p = 0.0;
+  for (uint16_t kk = (uint16_t)(k - 1u); kk <= (uint16_t)(k + 1u); kk++) {
+    p += VelocityPowerAtBin(kk, dF, denom);
+  }
+  if (!isfinite(p) || p <= 0.0) {
+    return false;
+  }
+
+  const double a = sqrt(p) * VIB_VEL_MS_TO_MMS;   // m/s -> mm/s, step 9's factor
+  if (!isfinite(a)) {
+    return false;
+  }
+  *outMms = (float)a;
+  return true;
+}
+
 // ---- One axis: DC-removed acceleration -> velocity RMS (m/s) ----------------
 // [Phase 3D] outDomHz / outDomValid are OUTPUT-ONLY additions. Everything that
 // produces the return value is byte-for-byte the Phase 3C code.
+// [Phase 3E] f1Hz is an input; outAmp1Mms/outAmp1Valid/outAmp2Mms/outAmp2Valid
+// are OUTPUT-ONLY additions. The Phase 3C statements are still untouched.
 double AxisVelocityRms(const int16_t* s, uint32_t srHz,
-                       float* outDomHz, bool* outDomValid) {
+                       float* outDomHz, bool* outDomValid,
+                       double f1Hz,
+                       float* outAmp1Mms, bool* outAmp1Valid,
+                       float* outAmp2Mms, bool* outAmp2Valid) {
   const double toMs2 = VIB_ACCEL_G_MS2 / VIB_ACCEL_LSB_PER_G;
 
   // Step 1 -- identical conversion and mean removal to Phase 3B. Same
@@ -229,6 +294,34 @@ double AxisVelocityRms(const int16_t* s, uint32_t srHz,
     }
   }
 
+  // ==========================================================================
+  // [Phase 3E] THIRD READ -- 1x / 2x band-integrated amplitude.
+  // ==========================================================================
+  // Reads the SAME s_re/s_im that both passes above read, through the same
+  // VelocityPowerAtBin expression. msvSum is final and the dominant-frequency
+  // outputs are already written, so nothing below can alter either. At most
+  // six bins are touched per axis, against the 505 the RMS loop already swept.
+  if (outAmp1Mms != NULL)   { *outAmp1Mms = 0.0f; }
+  if (outAmp1Valid != NULL) { *outAmp1Valid = false; }
+  if (outAmp2Mms != NULL)   { *outAmp2Mms = 0.0f; }
+  if (outAmp2Valid != NULL) { *outAmp2Valid = false; }
+
+  if (isfinite(f1Hz) && f1Hz > 0.0) {
+    float a1 = 0.0f;
+    if (HarmonicBandAmplitude(f1Hz, dF, denom, &a1)) {
+      if (outAmp1Mms != NULL)   { *outAmp1Mms = a1; }
+      if (outAmp1Valid != NULL) { *outAmp1Valid = true; }
+    }
+    // 2x is evaluated independently: its band can be observable while 1x's is
+    // not (2*f1 clears the high-pass floor at half the speed 1x needs), so one
+    // must never gate the other.
+    float a2 = 0.0f;
+    if (HarmonicBandAmplitude(2.0 * f1Hz, dF, denom, &a2)) {
+      if (outAmp2Mms != NULL)   { *outAmp2Mms = a2; }
+      if (outAmp2Valid != NULL) { *outAmp2Valid = true; }
+    }
+  }
+
   return sqrt(msvSum);                                    // step 9 (m/s)
 }
 
@@ -239,6 +332,7 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
                             const int16_t*  z,
                             uint16_t        sampleCount,
                             uint32_t        srHz,
+                            float           rpmAtCapture,
                             VibVelocityRms* out) {
   if (out == NULL) {
     return false;
@@ -255,6 +349,18 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
   out->dominant_frequency_x_valid = false;
   out->dominant_frequency_y_valid = false;
   out->dominant_frequency_z_valid = false;
+  out->velocity_1x_x_mm_s = 0.0f;
+  out->velocity_1x_y_mm_s = 0.0f;
+  out->velocity_1x_z_mm_s = 0.0f;
+  out->velocity_1x_x_valid = false;
+  out->velocity_1x_y_valid = false;
+  out->velocity_1x_z_valid = false;
+  out->velocity_2x_x_mm_s = 0.0f;
+  out->velocity_2x_y_mm_s = 0.0f;
+  out->velocity_2x_z_mm_s = 0.0f;
+  out->velocity_2x_x_valid = false;
+  out->velocity_2x_y_valid = false;
+  out->velocity_2x_z_valid = false;
 
   if (x == NULL || y == NULL || z == NULL) {
     return false;
@@ -273,9 +379,22 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
   // computed by the same statements as before.
   float dfx = 0.0f, dfy = 0.0f, dfz = 0.0f;
   bool  dvx = false, dvy = false, dvz = false;
-  const double vx = AxisVelocityRms(x, srHz, &dfx, &dvx) * VIB_VEL_MS_TO_MMS;
-  const double vy = AxisVelocityRms(y, srHz, &dfy, &dvy) * VIB_VEL_MS_TO_MMS;
-  const double vz = AxisVelocityRms(z, srHz, &dfz, &dvz) * VIB_VEL_MS_TO_MMS;
+  // [Phase 3E] f1 from the capture's own RPM. A non-finite or non-positive
+  // rpmAtCapture yields f1 = 0.0, which every harmonic guard rejects, so the
+  // 1x/2x fields simply stay invalid and the RMS path is unaffected.
+  const double f1Hz = (isfinite(rpmAtCapture) && rpmAtCapture > 0.0f)
+                        ? ((double)rpmAtCapture / 60.0)
+                        : 0.0;
+  float a1x = 0.0f, a1y = 0.0f, a1z = 0.0f;
+  bool  q1x = false, q1y = false, q1z = false;
+  float a2x = 0.0f, a2y = 0.0f, a2z = 0.0f;
+  bool  q2x = false, q2y = false, q2z = false;
+  const double vx = AxisVelocityRms(x, srHz, &dfx, &dvx,
+                                    f1Hz, &a1x, &q1x, &a2x, &q2x) * VIB_VEL_MS_TO_MMS;
+  const double vy = AxisVelocityRms(y, srHz, &dfy, &dvy,
+                                    f1Hz, &a1y, &q1y, &a2y, &q2y) * VIB_VEL_MS_TO_MMS;
+  const double vz = AxisVelocityRms(z, srHz, &dfz, &dvz,
+                                    f1Hz, &a1z, &q1z, &a2z, &q2z) * VIB_VEL_MS_TO_MMS;
   const double vo = sqrt(vx * vx + vy * vy + vz * vz);
 
   if (!isfinite(vx) || !isfinite(vy) || !isfinite(vz) || !isfinite(vo)) {
@@ -297,5 +416,21 @@ bool VibVelocity_ComputeRms(const int16_t*  x,
   out->dominant_frequency_x_valid = dvx;
   out->dominant_frequency_y_valid = dvy;
   out->dominant_frequency_z_valid = dvz;
+
+  // [Phase 3E] Already in mm/s: HarmonicBandAmplitude applies step 9's factor
+  // itself, because these travel out through pointers rather than through the
+  // return value the caller scales.
+  out->velocity_1x_x_mm_s  = a1x;
+  out->velocity_1x_y_mm_s  = a1y;
+  out->velocity_1x_z_mm_s  = a1z;
+  out->velocity_1x_x_valid = q1x;
+  out->velocity_1x_y_valid = q1y;
+  out->velocity_1x_z_valid = q1z;
+  out->velocity_2x_x_mm_s  = a2x;
+  out->velocity_2x_y_mm_s  = a2y;
+  out->velocity_2x_z_mm_s  = a2z;
+  out->velocity_2x_x_valid = q2x;
+  out->velocity_2x_y_valid = q2y;
+  out->velocity_2x_z_valid = q2z;
   return true;
 }

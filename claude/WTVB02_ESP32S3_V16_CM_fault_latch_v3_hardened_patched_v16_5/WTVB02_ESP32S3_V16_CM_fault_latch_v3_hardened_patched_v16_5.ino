@@ -1988,6 +1988,13 @@ typedef struct {
   uint32_t captureId;
   uint16_t sampleCount;
   uint32_t srHz;
+  // [Phase 3E] RPM measured at the instant this waveform was captured, carried
+  // WITH the waveform for the same reason srHz is: the harmonic bands are
+  // defined by the shaft speed, and Core 1 analyses this buffer ~1-2 s after
+  // Core 0 filled it. Reading a live RPM at analysis time would pair a
+  // spectrum with a speed it was never measured at. 0.0f means "not known",
+  // which the DSP treats as "1x/2x not observable", never as "0 RPM".
+  float    rpmAtCapture;
 } AccelSnapshot_t;
 
 typedef struct {
@@ -5793,6 +5800,11 @@ static void handleFifoCaptureCompletion() {
       g_accelSnap.captureId   = result.captureId;
       g_accelSnap.sampleCount = result.sampleCount;
       g_accelSnap.srHz        = result.srHz;
+      // [Phase 3E] Same source, same struct, same instant as every field above
+      // -- result.rpmAtCapture is the value the FIFO driver latched when this
+      // capture was requested, and it is already published as `rpm` on the
+      // fifo_capture event, so the two can never describe different speeds.
+      g_accelSnap.rpmAtCapture = result.rpmAtCapture;
       xSemaphoreGive(mutexAccelSnap);
 
       // Non-blocking send on a depth-1 queue. A full queue means Core 1 has not
@@ -9109,6 +9121,7 @@ static void processPendingAccelSnapshot() {
   const uint32_t captureId   = g_accelWork.captureId;
   const uint16_t sampleCount = g_accelWork.sampleCount;
   const uint32_t srHz        = g_accelWork.srHz;   // per-capture provenance, never a literal
+  const float    rpmAtCap    = g_accelWork.rpmAtCapture;  // [Phase 3E] same provenance rule as srHz
 
   // Both computations run lock-free against Core 1's private copy.
   // [Phase 3B] acceleration -- arithmetic untouched by Phase 3C.
@@ -9118,7 +9131,7 @@ static void processPendingAccelSnapshot() {
   // [Phase 3C] velocity -- frequency-domain integration.
   VibVelocityRms vel;
   const bool vOk = VibVelocity_ComputeRms(g_accelWork.x, g_accelWork.y, g_accelWork.z,
-                                          sampleCount, srHz, &vel);
+                                          sampleCount, srHz, rpmAtCap, &vel);
 
   // `valid` is the sole authority -- a false here publishes zeros WITH the flag
   // clear, so a consumer that honors vibration_data_valid can never read a
@@ -9167,14 +9180,57 @@ static void processPendingAccelSnapshot() {
   if (velDataValid && vel.dominant_frequency_z_valid) {
     aDoc["dominant_frequency_z_hz"] = roundf(vel.dominant_frequency_z_hz * 1000.0f) / 1000.0f;
   }
+  // [Phase 3E] Band-integrated 1x / 2x velocity amplitude, per axis, in mm/s.
+  // Same omit-when-invalid contract as the dominant frequency above: an axis
+  // whose harmonic band is not observable has its key absent, never 0.
+  //
+  // These are AMPLITUDES ONLY. No ratio, no imbalance/misalignment indicator
+  // and no threshold is computed here or anywhere else in the firmware -- a
+  // 2x/1x ratio is derived downstream from these two raw numbers, where the
+  // definition can still change without a reflash.
+  if (velDataValid && vel.velocity_1x_x_valid) {
+    aDoc["velocity_1x_x_mm_s"] = roundf(vel.velocity_1x_x_mm_s * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.velocity_1x_y_valid) {
+    aDoc["velocity_1x_y_mm_s"] = roundf(vel.velocity_1x_y_mm_s * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.velocity_1x_z_valid) {
+    aDoc["velocity_1x_z_mm_s"] = roundf(vel.velocity_1x_z_mm_s * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.velocity_2x_x_valid) {
+    aDoc["velocity_2x_x_mm_s"] = roundf(vel.velocity_2x_x_mm_s * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.velocity_2x_y_valid) {
+    aDoc["velocity_2x_y_mm_s"] = roundf(vel.velocity_2x_y_mm_s * 1000.0f) / 1000.0f;
+  }
+  if (velDataValid && vel.velocity_2x_z_valid) {
+    aDoc["velocity_2x_z_mm_s"] = roundf(vel.velocity_2x_z_mm_s * 1000.0f) / 1000.0f;
+  }
   // [M1A] Declares which engine produced these vibration figures, so a
   // consumer can distinguish them from the deprecated VRMS-register values
   // still present on /sensor and /vibration.
   aDoc["vibration_source"]         = "fifo_dsp";
 
-  char aBuf[600];
-  size_t szA = serializeJson(aDoc, aBuf, sizeof(aBuf));
-  enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_EVENT, aBuf, szA, MQTT_QOS);
+  // [Phase 3E] 600 -> 1024. Worst case observed on the running device was 543 B
+  // for the Phase 3D payload; the six new keys add at most
+  //   6 * ( 18 name + 2 quotes + 1 colon + 14 value + 1 comma ) = 216 B
+  // giving ~759 B worst case and ~265 B of margin. taskAnalytics has an 8 KB
+  // stack (STACK_SIZE_ANALYTICS) so the extra 424 B of frame is affordable.
+  char aBuf[1024];
+
+  // Truncation is NOT relied on as a safety net: measureJson gives the exact
+  // length before anything is written, so an oversized payload is dropped with
+  // a log rather than published as malformed JSON that a consumer would fail
+  // to parse (or, worse, parse partially).
+  const size_t needA = measureJson(aDoc);
+  size_t szA = 0;
+  if (needA + 1u > sizeof(aBuf)) {
+    Serial.printf("[ACCEL-RMS] payload %u B exceeds buffer %u B -- event dropped\n",
+                  (unsigned)needA, (unsigned)sizeof(aBuf));
+  } else {
+    szA = serializeJson(aDoc, aBuf, sizeof(aBuf));
+    enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_EVENT, aBuf, szA, MQTT_QOS);
+  }
 
   // [M1A] Hand the velocity figure to Core 0's alarm/health/latch path.
   // Published AFTER the MQTT enqueue so telemetry is never delayed by mutex

@@ -45,6 +45,34 @@
 // can be given a defensible threshold without field data that does not exist
 // yet, and a fabricated threshold is worse than no threshold.
 //
+// [Phase 3E] 1x / 2x BAND-INTEGRATED VELOCITY AMPLITUDE -- a third additive
+// read of the SAME spectrum, after both the RMS sum and the dominant-frequency
+// scan are complete:
+//  12. f1 = rpmAtCapture / 60, f2 = 2 * f1. Both come from the RPM measured at
+//      the instant of THIS capture (carried with the waveform), never from a
+//      live RPM read at analysis time -- pairing a spectrum with a speed
+//      sampled a second later would be a timing skew, not a measurement.
+//  13. k = round(f / dF), band = { k-1, k, k+1 }
+//  14. amplitude = sqrt( sum of ms_v[k] over the band ) * 1000  -> mm/s
+//
+// This is a BAND-INTEGRATED velocity amplitude, NOT the amplitude of a single
+// FFT bin. The distinction matters: at frequency resolution dF = Fs/N the true
+// harmonic almost never lands on a bin centre, and the symmetric Hann window
+// spreads a pure tone across neighbouring bins, so a single-bin read
+// systematically under-reports. Summing k-1, k, k+1 recovers the main lobe.
+//
+// Because the summand is the identical ms_v[k] the RMS loop accumulates, each
+// amplitude is expressed in the same units, with the same normalization, and
+// is by construction <= that axis's velocity RMS. Nothing new is invented and
+// no second transform is performed -- these are partial sums of a total that
+// was already being computed.
+//
+// Phase 3E reports AMPLITUDES ONLY. There is deliberately no 2x/1x ratio, no
+// imbalance or misalignment indicator, no severity and no threshold: a ratio
+// is trivially derived downstream from the two raw numbers, whereas a ratio
+// computed here would freeze one particular definition into firmware before
+// any field data exists to justify it.
+//
 // The high-pass floor is what makes step 7 safe: 1/(2*pi*f)^2 diverges as
 // f->0, so the near-DC bins would amplify residual offset and window leakage
 // without bound. Gating at bin 8 removes k=0 (division by zero) and the first
@@ -97,6 +125,30 @@ struct VibVelocityRms {
   bool  dominant_frequency_x_valid;
   bool  dominant_frequency_y_valid;
   bool  dominant_frequency_z_valid;
+
+  // ---- [Phase 3E] band-integrated 1x / 2x velocity amplitude, APPENDED.
+  // Everything above is unchanged and unreordered.
+  //
+  // Same flag contract as Phase 3D: the paired _valid is the sole authority,
+  // and a false one leaves the value at 0.0f meaning "not computed", NEVER
+  // "0 mm/s measured". Publish only what its flag admits.
+  //
+  // A false flag here does NOT imply the RMS or the dominant frequency are
+  // unusable: the commonest cause is simply that the harmonic's band falls
+  // outside the observable range (below the high-pass floor at low RPM), which
+  // is a property of the speed, not a fault in the capture.
+  float velocity_1x_x_mm_s;           // mm/s, sqrt(sum ms_v over {k1-1,k1,k1+1})
+  float velocity_1x_y_mm_s;
+  float velocity_1x_z_mm_s;
+  bool  velocity_1x_x_valid;
+  bool  velocity_1x_y_valid;
+  bool  velocity_1x_z_valid;
+  float velocity_2x_x_mm_s;           // mm/s, same construction around 2*f1
+  float velocity_2x_y_mm_s;
+  float velocity_2x_z_mm_s;
+  bool  velocity_2x_x_valid;
+  bool  velocity_2x_y_valid;
+  bool  velocity_2x_z_valid;
 };
 
 // ----------------------------------------------------------------------------
@@ -127,10 +179,21 @@ struct VibVelocityRms {
 // [Phase 3D] The signature is UNCHANGED: dominant frequency rides in the
 // existing out-struct rather than in a new function, because a new function
 // would have to transform the waveform again.
+//
+// [Phase 3E] rpmAtCapture is the ONE new input, and it is an input purely
+// because a harmonic band cannot be located without knowing the shaft speed
+// that defines it. It must be the RPM measured at the instant this waveform
+// was captured, travelling with the waveform; passing a live RPM read at
+// analysis time would pair a spectrum with a speed from ~1-2 s later.
+//
+// rpmAtCapture <= 0 (or non-finite) is NOT an error: the RMS and the dominant
+// frequency are computed exactly as before and only the 1x/2x fields come back
+// invalid. The function's return value does not depend on it.
 // ----------------------------------------------------------------------------
 bool VibVelocity_ComputeRms(const int16_t*  x,
                             const int16_t*  y,
                             const int16_t*  z,
                             uint16_t        sampleCount,
                             uint32_t        srHz,
+                            float           rpmAtCapture,
                             VibVelocityRms* out);
