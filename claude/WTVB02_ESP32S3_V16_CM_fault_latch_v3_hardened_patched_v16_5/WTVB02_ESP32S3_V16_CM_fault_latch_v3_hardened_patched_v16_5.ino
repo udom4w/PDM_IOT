@@ -505,7 +505,15 @@ static constexpr const char* GPRS_PASS = "";
 // --- Proximity / RPM Sensor Configuration ---
 #define PIN_RPM               17      // Proximity sensor pulse input (PC817 or NPN)
 #define PULSE_PER_REV         1       // Pulses per revolution
-#define MAX_RPM               3000   // Spike reject ceiling
+// [v16.6-rpmsep] MAX_RPM is the MAXIMUM MEASURABLE SPEED, and nothing else.
+// It feeds exactly two gates: RPM_MIN_INTERVAL_US (below) and the spike-reject
+// comparison in processRPM(). It NO LONGER sets the ISR debounce -- see
+// RPM_DEBOUNCE_US, which is now derived from measured bounce physics instead.
+// 3000 -> 4000 so the ceilings clear 3600 RPM:
+//   RPM_MIN_INTERVAL_US = 60e6/(4000*1) = 15,000 us  <  15,583 us (3600 RPM
+//                                                       worst case, -6.5% jitter)
+//   spike reject        = 4000 * 1.1    =  4,400 RPM  >  3,600 RPM
+#define MAX_RPM               4000   // Maximum measurable speed (spike-reject + interval ceiling)
 #define MIN_RPM_VALID         300      // Below this -> treat as zero
 #define RATED_RPM             NAMEPLATE_RPM   // Rated speed (centre of RUNNING band)
 #define RATED_RPM_TOL         75       // +/-75 RPM around RATED_RPM -> RUNNING band (5% of 1500)
@@ -2801,16 +2809,106 @@ static bool g_rtcValid = false;
 // PROXIMITY / RPM -- ISR Variables (volatile, written in IRAM ISR)
 // ============================================================================
 
+// (B) MAXIMUM MEASURABLE RPM -- the shortest interval that can still be a real
+// revolution. Derived from MAX_RPM, never hardcoded. Consumed by processRPM()'s
+// interval gate; a shorter interval than this cannot be a genuine revolution at
+// or below MAX_RPM.
 static const uint32_t RPM_MIN_INTERVAL_US =
     60000000UL / (MAX_RPM * PULSE_PER_REV);
-// [v16.5.5] Align ISR debounce with RPM_MIN_INTERVAL_US.
-// Prevent sub-20 ms bounce edges from corrupting the next accepted interval.
-static const uint32_t RPM_DEBOUNCE_US =
-    RPM_MIN_INTERVAL_US;
+
+// (A) MINIMUM PULSE SEPARATION / BOUNCE REJECTION -- a completely separate
+// concern from (B), and no longer derived from it.
+//
+// [v16.5.5] previously set this to RPM_MIN_INTERVAL_US (20,000 us at
+// MAX_RPM 3000). That tied bounce rejection to the speed ceiling, so at ~2990
+// RPM the real pulse interval (20,033 us nominal) fell inside the debounce
+// window and REAL edges were discarded as bounce: 19.3% of revolutions lost,
+// each loss producing a ~40 ms interval -> raw RPM ~1500 -> the EMA propagated
+// the error down to 1,241 RPM while the shaft was turning at ~2990.
+//
+// [v16.6-rpmsep] The value now comes from the measured bounce distribution
+// (15-minute [RPM-DIAG] capture, 21,587 bounce samples at 588 / ~1500 / ~2990
+// RPM), not from any speed:
+//     bounce p50            =   972 us
+//     bounce p99.99         = 4,701 us
+//     bounce MAX observed   = 4,704 us   <- hard ceiling, zero samples above
+//     5,000 .. 18,000 us    = ZERO records (dead zone)
+//     real edge min observed= 18,777 us
+// 8,000 us sits inside that dead zone: 1.70x above the largest bounce ever
+// observed, and still 1.95x below the worst-case real pulse at 3600 RPM
+// (15,583 us = 16,667 us nominal with the measured -6.5% jitter).
+// Bounce was speed-independent in the capture (967 us @1500, 973 us @2750-2999),
+// consistent with an electrical origin rather than a mechanical harmonic.
+static const uint32_t RPM_DEBOUNCE_US = 8000UL;
 
 volatile uint32_t g_rpmLastPulseTime  = 0;
 volatile uint32_t g_rpmPulseInterval  = 0;
 volatile uint32_t g_rpmTotalPulses    = 0;
+
+// ============================================================================
+// [RPM-DIAG -- TEMPORARY DIAGNOSTIC ONLY, REMOVE AFTER INVESTIGATION]
+// ============================================================================
+// Records EVERY proximity edge the ISR sees -- accepted and rejected alike --
+// so the ~3000 RPM instability can be attributed to a specific stage.
+// A rejected edge is invisible everywhere outside the ISR (it updates no
+// state), which is why the capture has to happen inside it.
+//
+// PURELY OBSERVATIONAL. The ISR's accept condition, RPM_DEBOUNCE_US,
+// RPM_MIN_INTERVAL_US, the EMA, the spike-reject gate and the motor state
+// machine are all untouched: this block only appends to a private ring.
+//
+// Lock-free single-producer (ISR) / single-consumer (Core 0 processRPM):
+// head advances only in the ISR, tail only in the drain. No function calls,
+// no floats and no Serial inside the ISR -- everything expensive happens in
+// the drain. Set RPM_DIAG_ENABLE to 0 to compile the whole thing out.
+// ============================================================================
+#define RPM_DIAG_ENABLE        1
+#define RPM_DIAG_RING_SIZE     256   // power of two; 3000 RPM = 50 edges/s, drain @4 Hz
+
+// reason codes for RpmDiagRec_t.reason
+#define RPM_DIAG_ACCEPT            0
+#define RPM_DIAG_REJECT_DEBOUNCE   1
+
+typedef struct {
+  uint32_t t_us;         // micros() at the edge
+  uint32_t interval_us;  // now - g_rpmLastPulseTime, exactly as the ISR computed it
+  uint32_t pulse_count;  // g_rpmTotalPulses after this edge was handled
+  uint8_t  accepted;     // 1 = passed the debounce gate, 0 = rejected
+  uint8_t  reason;       // RPM_DIAG_* above
+} RpmDiagRec_t;
+
+static volatile RpmDiagRec_t g_rpmDiagRing[RPM_DIAG_RING_SIZE];
+static volatile uint16_t     g_rpmDiagHead    = 0;   // ISR writes
+static volatile uint16_t     g_rpmDiagTail    = 0;   // drain reads
+static volatile uint32_t     g_rpmDiagDropped = 0;   // ring full -> record lost
+static volatile uint32_t     g_rpmDiagSeen    = 0;   // total edges observed
+static volatile uint32_t     g_rpmDiagRejects = 0;   // total rejected edges
+static volatile uint32_t     g_rpmDiagMinIv   = 0xFFFFFFFFUL;  // min interval_us seen
+static volatile uint32_t     g_rpmDiagMaxIv   = 0;             // max interval_us seen
+
+// IRAM-resident, no calls, no allocation -- safe from the ISR.
+static inline void IRAM_ATTR rpmDiagPush(uint32_t t_us, uint32_t interval_us,
+                                         uint8_t accepted, uint8_t reason,
+                                         uint32_t pulseCount) {
+  g_rpmDiagSeen++;
+  if (!accepted) g_rpmDiagRejects++;
+  // [RPM-DIAG] interval extremes. The very first edge after boot measures
+  // against g_rpmLastPulseTime == 0, so it is excluded from the minimum by the
+  // pulse-count guard rather than by any magic threshold.
+  if (pulseCount > 1u) {
+    if (interval_us < g_rpmDiagMinIv) g_rpmDiagMinIv = interval_us;
+    if (interval_us > g_rpmDiagMaxIv) g_rpmDiagMaxIv = interval_us;
+  }
+  uint16_t h    = g_rpmDiagHead;
+  uint16_t next = (uint16_t)((h + 1) % RPM_DIAG_RING_SIZE);
+  if (next == g_rpmDiagTail) { g_rpmDiagDropped++; return; }  // full: drop newest, never block
+  g_rpmDiagRing[h].t_us        = t_us;
+  g_rpmDiagRing[h].interval_us = interval_us;
+  g_rpmDiagRing[h].pulse_count = pulseCount;
+  g_rpmDiagRing[h].accepted    = accepted;
+  g_rpmDiagRing[h].reason      = reason;
+  g_rpmDiagHead = next;
+}
 
 // RPM processing state (Core 0 only -- no mutex needed)
 static float           g_rpmFiltered       = 0.0f;  // EMA evidence signal -- state-machine input only; [v16.5.4] reset (with g_rpmEvidence.valid=false) after a pulse gap/idle > MAX_EMA_INTERVAL_US, otherwise never reset by state
@@ -2904,7 +3002,19 @@ void IRAM_ATTR rpmISR() {
     g_rpmPulseInterval = interval;
     g_rpmLastPulseTime = now;
     g_rpmTotalPulses++;
+#if RPM_DIAG_ENABLE
+    // [RPM-DIAG] observational only -- appended AFTER the real state update,
+    // so nothing above can be perturbed by it.
+    rpmDiagPush(now, interval, 1, RPM_DIAG_ACCEPT, g_rpmTotalPulses);
+#endif
   }
+#if RPM_DIAG_ENABLE
+  else {
+    // [RPM-DIAG] the rejected edge. It updates NO state here (unchanged
+    // behaviour) -- it is recorded only so the drain can report it.
+    rpmDiagPush(now, interval, 0, RPM_DIAG_REJECT_DEBOUNCE, g_rpmTotalPulses);
+  }
+#endif
 }
 
 // NVS: ???? runtime_hour ??? Flash
@@ -4059,6 +4169,86 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
 
 // Process RPM -- ???? ISR vars -> ????? rpm / motor_state / prox / runtime_hour
 // ???????? taskStateMachine ??? 250 ms (Core 0, no mutex needed)
+// ============================================================================
+// [RPM-DIAG -- TEMPORARY DIAGNOSTIC ONLY, REMOVE AFTER INVESTIGATION]
+// rpmDiagDrain() -- Core 0, called at the end of processRPM() (~4 Hz)
+// ============================================================================
+// Empties the ISR ring and prints one [RPM-DIAG] block per proximity edge,
+// accepted or rejected. Read-only: it touches no RPM state and feeds nothing
+// back into the EMA, the spike-reject gate or the state machine.
+//
+// Field provenance -- read this before drawing conclusions:
+//   t, interval_us, pulse, reason, pulse_count  captured IN the ISR, at the
+//                                               instant of the edge
+//   debounce_us                                 the compile-time constant
+//   raw_rpm                                     recomputed here from the
+//                                               recorded interval_us with the
+//                                               SAME expression processRPM()
+//                                               uses; for a REJECTED edge it
+//                                               is what the RPM would have
+//                                               been had the edge been taken
+//   filtered_rpm, age_ms                        sampled at DRAIN time, not at
+//                                               edge time (g_rpmFiltered is
+//                                               Core-0 state the ISR cannot
+//                                               see). Up to ~250 ms newer than
+//                                               the edge -- do not read them as
+//                                               per-edge values.
+// ============================================================================
+#if RPM_DIAG_ENABLE
+static void rpmDiagDrain(float filteredRpm, uint32_t ageMs) {
+  // Snapshot head once: the ISR may append while we drain, and those records
+  // simply belong to the next drain.
+  const uint16_t head = g_rpmDiagHead;
+  uint16_t tail = g_rpmDiagTail;
+
+  while (tail != head) {
+    const uint32_t t_us     = g_rpmDiagRing[tail].t_us;
+    const uint32_t iv       = g_rpmDiagRing[tail].interval_us;
+    const uint32_t pcount   = g_rpmDiagRing[tail].pulse_count;
+    const uint8_t  accepted = g_rpmDiagRing[tail].accepted;
+    const uint8_t  reason   = g_rpmDiagRing[tail].reason;
+    tail = (uint16_t)((tail + 1) % RPM_DIAG_RING_SIZE);
+
+    const float rawRpm = (iv > 0) ? ((60000000.0f / (float)iv) / PULSE_PER_REV) : 0.0f;
+
+    if (accepted) {
+      Serial.printf("[RPM-DIAG]\nt=%lu\ninterval_us=%lu\ndebounce_us=%lu\n"
+                    "pulse=ACCEPT\nraw_rpm=%.1f\nfiltered_rpm=%.1f\nage_ms=%lu\n"
+                    "pulse_count=%lu\n",
+                    (unsigned long)t_us, (unsigned long)iv,
+                    (unsigned long)RPM_DEBOUNCE_US,
+                    rawRpm, filteredRpm, (unsigned long)ageMs,
+                    (unsigned long)pcount);
+    } else {
+      const char* reasonStr = (reason == RPM_DIAG_REJECT_DEBOUNCE) ? "DEBOUNCE" : "UNKNOWN";
+      Serial.printf("[RPM-DIAG]\nt=%lu\ninterval_us=%lu\ndebounce_us=%lu\n"
+                    "pulse=REJECT\nreason=%s\nraw_rpm=%.1f\nfiltered_rpm=%.1f\n"
+                    "age_ms=%lu\npulse_count=%lu\n",
+                    (unsigned long)t_us, (unsigned long)iv,
+                    (unsigned long)RPM_DEBOUNCE_US, reasonStr,
+                    rawRpm, filteredRpm, (unsigned long)ageMs,
+                    (unsigned long)pcount);
+    }
+  }
+  g_rpmDiagTail = tail;
+
+  // Cumulative counters, printed only when they move, so a quiet bus stays quiet.
+  static uint32_t s_lastSeen = 0, s_lastRej = 0, s_lastDrop = 0;
+  const uint32_t seen = g_rpmDiagSeen, rej = g_rpmDiagRejects, drop = g_rpmDiagDropped;
+  if (seen != s_lastSeen || rej != s_lastRej || drop != s_lastDrop) {
+    const uint32_t minIv = g_rpmDiagMinIv, maxIv = g_rpmDiagMaxIv;
+    Serial.printf("[RPM-DIAG-STAT] edges=%lu accepted=%lu rejected=%lu ring_dropped=%lu "
+                  "reject_pct=%.1f min_interval_us=%lu max_interval_us=%lu\n",
+                  (unsigned long)seen, (unsigned long)(seen - rej), (unsigned long)rej,
+                  (unsigned long)drop,
+                  seen ? (100.0f * (float)rej / (float)seen) : 0.0f,
+                  (unsigned long)((minIv == 0xFFFFFFFFUL) ? 0UL : minIv),
+                  (unsigned long)maxIv);
+    s_lastSeen = seen; s_lastRej = rej; s_lastDrop = drop;
+  }
+}
+#endif  // RPM_DIAG_ENABLE
+
 static void processRPM(VibrationData_t* data) {
   uint32_t interval, pulseCopy;
   noInterrupts();
@@ -4139,6 +4329,13 @@ static void processRPM(VibrationData_t* data) {
                    : 0.0f;
   g_diagPulseCount       = pulseCopy;
   g_diagTimeSincePulseMs = timeSincePulseMs;
+
+#if RPM_DIAG_ENABLE
+  // [RPM-DIAG] TEMPORARY. Placed after the EMA update above so filtered_rpm
+  // reflects this cycle, and before the state machine so the print cannot sit
+  // between evidence construction and the state decision. Read-only.
+  rpmDiagDrain(g_rpmFiltered, timeSincePulseMs);
+#endif
 
   // [v16.5.3-rpmdiag1] DIAGNOSTIC ONLY -- [PULSE] fires once per detected new
   // pulse (naturally bounded to processRPM()'s own ~250ms/4Hz call rate, so
