@@ -3183,9 +3183,13 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   // [v16.5] gate เหมือน rms_overall/x/y/z ด้านบน -- ป้องกัน CF garbage
   // ตอน STOPPED เข้าไปนอน buffer แล้วถูก replay ออก MQTT ซ้ำทีหลัง
   s->cf_max            = isRunningBuf ? data->cf_max : 0.0f;
-  s->freq_x            = data->freq_x;
-  s->freq_y            = data->freq_y;
-  s->freq_z            = data->freq_z;
+  // [Phase 3F] freq_x/y/z are the FIFO/DSP dominant frequency, filled from the
+  // carrier in the velocity block below. NaN until then, exactly like
+  // velocity_rms_* in this same struct: NaN is what the serializer tests to
+  // decide whether the key is publishable at all.
+  s->freq_x            = NAN;
+  s->freq_y            = NAN;
+  s->freq_z            = NAN;
   s->rpm               = data->rpm;
   s->motor_state       = data->motor_state;
   s->machine_state     = (uint8_t)state;
@@ -3233,6 +3237,11 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
         s->capture_ts_ms        = vc.timestampMs;
         s->sample_rate_hz       = vc.sampleRateHz;
         s->sample_count         = vc.sampleCount;
+        // [Phase 3F] Per-axis: an axis whose flag is clear stays NaN and its
+        // key is omitted on replay, independently of the other two.
+        if (vc.domFreqXValid) s->freq_x = vc.domFreqX;
+        if (vc.domFreqYValid) s->freq_y = vc.domFreqY;
+        if (vc.domFreqZValid) s->freq_z = vc.domFreqZ;
         s->velocity_data_valid  = true;
       }
     }
@@ -3480,9 +3489,13 @@ static bool replayTelemBuf() {
   r["motor_state"]  = snap.motor_state;
   r["rotation_signal_ok"] = snap.prox;
 
-  r["freq_x"] = roundf(snap.freq_x * 10) / 10.0f;
-  r["freq_y"] = roundf(snap.freq_y * 10) / 10.0f;
-  r["freq_z"] = roundf(snap.freq_z * 10) / 10.0f;
+  // [Phase 3F] FIFO/DSP dominant frequency, per axis, published only when the
+  // slot holds a real number. NaN means that axis had no reportable peak when
+  // the slot was captured, and JSON cannot carry NaN -- omitting the key is
+  // what stops it becoming a 0 or a null a consumer might read as 0 Hz.
+  if (isfinite(snap.freq_x)) r["freq_x"] = roundf(snap.freq_x * 10) / 10.0f;
+  if (isfinite(snap.freq_y)) r["freq_y"] = roundf(snap.freq_y * 10) / 10.0f;
+  if (isfinite(snap.freq_z)) r["freq_z"] = roundf(snap.freq_z * 10) / 10.0f;
 
   r["kurtosis_max"]  = round(snap.kurtosis_max * 1000) / 1000.0f;
   r["crest_factor"]  = round(snap.cf_max        * 100)  / 100.0f;
@@ -8097,6 +8110,49 @@ static bool displayVelocity(float* outOverall, float* outX, float* outY, float* 
   return true;
 }
 
+// [Phase 3F] The one read of the FIFO/DSP dominant frequency, and from here on
+// the CANONICAL source of Fx/Fy/Fz. Same carrier, same mutex and the same
+// VIB_VELOCITY_MAX_AGE_MS_TBD deadline as displayVelocity(), so "stale" keeps
+// meaning one thing across the whole firmware.
+//
+// Fx/Fy/Fz are now a PRESENTATION NAME for dominant_frequency_x/y/z_hz. They
+// are no longer the sensor's own frequency registers (0x44-0x46); those are
+// still read and still available on the SensorData path, but only as a
+// comparison reference -- see the [Phase 3F] note at the /sensor builder.
+//
+// Validity is PER AXIS because the DSP reports it per axis: an axis whose
+// spectrum yielded no reportable peak comes back false and its caller must
+// print "--" / omit the key rather than publish a number. The return value is
+// the capture-level gate (carrier present, valid and fresh); a false return
+// leaves every ok* false.
+//
+// Deliberately NOT gated on motor_state or RPM. The dominant frequency is a
+// property of the captured waveform alone -- it is computed before, and
+// independently of, the 1x/2x harmonic block that needs rpmAtCapture. Gating it
+// on motor state would make Fx unavailable exactly where it is most useful:
+// a machine whose speed signal is missing.
+static bool dspDominantFreq(float* outX, bool* okX,
+                            float* outY, bool* okY,
+                            float* outZ, bool* okZ) {
+  if (okX) *okX = false;
+  if (okY) *okY = false;
+  if (okZ) *okZ = false;
+  if (mutexVelCarrier == NULL) return false;
+  VelocityCarrier_t vc;
+  if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) != pdTRUE) return false;
+  vc = g_velCarrier;                    // whole-struct copy: no torn read
+  xSemaphoreGive(mutexVelCarrier);
+  if (!vc.valid || vc.timestampMs == 0u ||
+      (uint32_t)(millis() - vc.timestampMs) > VIB_VELOCITY_MAX_AGE_MS_TBD) return false;
+  if (outX) *outX = vc.domFreqX;
+  if (outY) *outY = vc.domFreqY;
+  if (outZ) *outZ = vc.domFreqZ;
+  if (okX) *okX = vc.domFreqXValid;
+  if (okY) *okY = vc.domFreqYValid;
+  if (okZ) *okZ = vc.domFreqZValid;
+  return true;
+}
+
 void drawWarningScreen(VibrationData_t* data, bool blink) {
   char buf[32];
 
@@ -8184,24 +8240,37 @@ void drawAxisScreen(VibrationData_t* data) {
   float dAll = 0.0f, dX = 0.0f, dY = 0.0f, dZ = 0.0f;
   const bool dOk = isRunningDisp && displayVelocity(&dAll, &dX, &dY, &dZ);
 
+  // [Phase 3F] FX/FY/FZ now read the FIFO/DSP dominant frequency instead of the
+  // sensor's frequency registers. The labels are unchanged on purpose -- the
+  // operator sees the same screen, only the number behind it got a defensible
+  // source. An axis with no reportable peak prints "--", the same convention
+  // VX/VY/VZ already use, so a missing measurement can never be misread as a
+  // measured 0 Hz.
+  float fX = 0.0f, fY = 0.0f, fZ = 0.0f;
+  bool  fXok = false, fYok = false, fZok = false;
+  dspDominantFreq(&fX, &fXok, &fY, &fYok, &fZ, &fZok);
+
   if (dOk) snprintf(buf, sizeof(buf), "VX = %03.2f", dX);
   else     snprintf(buf, sizeof(buf), "VX = --");
   u8g2.drawStr(5, 26, buf);
-  snprintf(buf, sizeof(buf), "FX = %02.0f", data->freq_x);
+  if (fXok) snprintf(buf, sizeof(buf), "FX = %02.0f", fX);
+  else      snprintf(buf, sizeof(buf), "FX = --");
   u8g2.drawStr(70, 26, buf);
 
   // Row 2: VY / FY   (y=37)
   if (dOk) snprintf(buf, sizeof(buf), "VY = %03.2f", dY);
   else     snprintf(buf, sizeof(buf), "VY = --");
   u8g2.drawStr(5, 37, buf);
-  snprintf(buf, sizeof(buf), "FY = %02.0f", data->freq_y);
+  if (fYok) snprintf(buf, sizeof(buf), "FY = %02.0f", fY);
+  else      snprintf(buf, sizeof(buf), "FY = --");
   u8g2.drawStr(70, 37, buf);
 
   // Row 3: VZ / FZ   (y=48)
   if (dOk) snprintf(buf, sizeof(buf), "VZ = %03.2f", dZ);
   else     snprintf(buf, sizeof(buf), "VZ = --");
   u8g2.drawStr(5, 48, buf);
-  snprintf(buf, sizeof(buf), "FZ = %02.0f", data->freq_z);
+  if (fZok) snprintf(buf, sizeof(buf), "FZ = %02.0f", fZ);
+  else      snprintf(buf, sizeof(buf), "FZ = --");
   u8g2.drawStr(70, 48, buf);
 
   // Row 4: MAX / [2/3]  (y=60)
@@ -8483,13 +8552,36 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     }
   }
 
-  // Raw dominant frequency per axis (registers 0x44-0x46). [Phase2] The
-  // freq_ratio_x/y/z derivation and its RPM_FREQ_GATE were removed with the
-  // frequency-ratio pipeline; the raw Hz values themselves are kept -- they have
-  // consumers outside that pipeline (the OLED detail screen and /sensor).
-  float freqX = roundf(data->freq_x * 10.0f) / 10.0f;
-  float freqY = roundf(data->freq_y * 10.0f) / 10.0f;
-  float freqZ = roundf(data->freq_z * 10.0f) / 10.0f;
+  // [Phase 3F] freq_x/y/z are now the FIFO/DSP dominant frequency -- derived
+  // from the RAW waveform through the same FFT that produces velocity RMS, not
+  // from the sensor's frequency registers.
+  //
+  // The registers 0x44-0x46 are still read every poll and still live in
+  // data->freq_x/y/z. They are kept deliberately, as a REFERENCE ONLY, so the
+  // two sources can be compared on real hardware; nothing downstream treats
+  // them as Fx/Fy/Fz any more.
+  float freqX = 0.0f, freqY = 0.0f, freqZ = 0.0f;
+  bool  freqXok = false, freqYok = false, freqZok = false;
+  {
+    float dfx = 0.0f, dfy = 0.0f, dfz = 0.0f;
+    if (dspDominantFreq(&dfx, &freqXok, &dfy, &freqYok, &dfz, &freqZok)) {
+      freqX = roundf(dfx * 10.0f) / 10.0f;
+      freqY = roundf(dfy * 10.0f) / 10.0f;
+      freqZ = roundf(dfz * 10.0f) / 10.0f;
+    }
+  }
+
+  // [Phase 3F] Migration comparison, reference vs canonical. Logged at the
+  // /sensor cadence rather than per FIFO capture because the register values
+  // only exist on the Core 0 sensor path -- reaching them from the capture
+  // consumer would mean new cross-core plumbing for a diagnostic, which is not
+  // worth the coupling. The values are never forced toward each other.
+  Serial.printf("[FREQ-SRC] canonical(dsp) x=%s y=%s z=%s | "
+                "reference(reg 0x44-46) x=%.1f y=%.1f z=%.1f\n",
+                freqXok ? String(freqX, 1).c_str() : "--",
+                freqYok ? String(freqY, 1).c_str() : "--",
+                freqZok ? String(freqZ, 1).c_str() : "--",
+                data->freq_x, data->freq_y, data->freq_z);
 
   // [Phase2] calcTrend() split into two dedicated functions; trendDirStr removed
   // with the legacy trend_dir it formatted.
@@ -8557,9 +8649,13 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     s["current_age_s"] = round(currentAgeS * 10) / 10.0f;
 
     // Harmonic feature extraction
-    s["freq_x"]       = freqX;
-    s["freq_y"]       = freqY;
-    s["freq_z"]       = freqZ;
+    // [Phase 3F] Published ONLY when that axis produced a reportable peak.
+    // An omitted key means "not measured"; it must never be filled with a 0
+    // that a consumer could read as a measured 0 Hz. Same contract the
+    // dominant_frequency_* and velocity_rms_* keys already follow.
+    if (freqXok) s["freq_x"] = freqX;
+    if (freqYok) s["freq_y"] = freqY;
+    if (freqZok) s["freq_z"] = freqZ;
     // [Phase2] freq_ratio_x/y/z REMOVED with the frequency-ratio pipeline.
 
     // v15.1: CF ครบ 3 แกน + max
@@ -8952,13 +9048,19 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       // เพื่อให้ debug log ตรงกับค่าที่ publish จริงใน doc["rms"]
       // [Phase2] rms/peak and frx/fry/frz (freq_ratio) dropped from this line --
       // the values no longer exist. Velocity is reported by velOk/vOverall.
+      // [Phase 3F] fx/fy/fz are the FIFO/DSP dominant frequency and print "--"
+      // per axis when that axis had no reportable peak -- same convention as
+      // vel above, so the log never shows a 0 Hz that was never measured.
       Serial.printf("[MQTT] /vibration %d B | %s vel=%s mm/s rpm=%.1f "
-                    "state=%d | health=%d%% | fx=%.1f fy=%.1f fz=%.1f | "
+                    "state=%d | health=%d%% | fx=%s fy=%s fz=%s | "
                     "cf=%.2f kurt_max=%.3f(%s) bear=%s\n",
                     jsonSize, alarmLevel,
                     velOk ? String(vOverall, 2).c_str() : "--", data->rpm,
                     data->motor_state,
-                    healthScore, freqX, freqY, freqZ,
+                    healthScore,
+                    freqXok ? String(freqX, 1).c_str() : "--",
+                    freqYok ? String(freqY, 1).c_str() : "--",
+                    freqZok ? String(freqZ, 1).c_str() : "--",
                     crestFactor, kmax, kaxis, bearingAlert);
     } else if (!connBefore8) {
       Serial.printf("[MQTT] /vibration NOT_CONNECTED (skipped, no send attempt)\n");
