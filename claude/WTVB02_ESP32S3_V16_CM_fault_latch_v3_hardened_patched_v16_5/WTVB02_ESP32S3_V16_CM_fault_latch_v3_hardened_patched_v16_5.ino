@@ -8712,9 +8712,10 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // An omitted key means "not measured"; it must never be filled with a 0
     // that a consumer could read as a measured 0 Hz. Same contract the
     // dominant_frequency_* and velocity_rms_* keys already follow.
-    if (freqXok) s["freq_x"] = freqX;
-    if (freqYok) s["freq_y"] = freqY;
-    if (freqZok) s["freq_z"] = freqZ;
+    // [Phase 3H] freq_x/y/z MOVED to /vibration. They are canonical machine
+    // vibration, and /vibration is the topic that carries machine vibration
+    // truth; /sensor now describes the sensor and the device only. Moved, not
+    // copied -- one canonical value, one destination.
     // [Phase2] freq_ratio_x/y/z REMOVED with the frequency-ratio pipeline.
 
     // v15.1: CF ครบ 3 แกน + max
@@ -8722,7 +8723,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // means "not measured"; it is never filled with a 0 a consumer could read
     // as a measured crest factor of zero, and never falls back to the legacy
     // register value.
-    if (crestFactorOk) s["crest_factor"] = crestFactor;
+    // [Phase 3H] crest_factor MOVED to /vibration, for the same reason as
+    // freq_x/y/z above.
     // [Phase 3G] cf_x/cf_y/cf_z are NO LONGER PUBLISHED. They were the
     // sensor's own per-axis crest factors (registers 0x47/0x53/0x5F), and
     // Phase 1 exports one crest factor only -- the FIFO/DSP
@@ -8738,7 +8740,9 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     s["kurtosis_max"]   = kmax;
     s["kurtosis_axis"]           = kaxis;
     s["kurtosis_valid"]          = kurtosisValid;
-    s["dominant_vibration_axis"] = domVibAxis;  // แกนที่ velocity RMS สูงสุด
+    // [Phase 3H] dominant_vibration_axis MOVED to /vibration -- it is derived
+    // from the canonical velocity RMS, so it belongs beside the values it is
+    // derived from.
     s["bearing_alert"]           = bearingAlert;
 
     s["motor_state"]           = data->motor_state;
@@ -9006,6 +9010,26 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
         doc["velocity_rms_y"]       = roundf(vY * 1000.0f) / 1000.0f;
         doc["velocity_rms_z"]       = roundf(vZ * 1000.0f) / 1000.0f;
       }
+
+      // [Phase 3H] The rest of the canonical vibration set, moved here from
+      // /sensor. Every value below comes from the same FIFO capture as the
+      // velocity figures above, computed in the same publishTelemetry() call
+      // from the same TelemetrySnapshot -- one timestamp, one cadence, no way
+      // for a frequency to be stale relative to the velocity beside it.
+      //
+      // Each key keeps the omit-when-invalid contract it already had: an axis
+      // or a figure the DSP could not produce is ABSENT, never 0. That is what
+      // lets Node-RED's undefined filter and the API's _num() both report
+      // "not measured" instead of inventing a zero.
+      //
+      // Gated independently of velOk on purpose: frequency and crest factor
+      // carry their own validity, and the crest factor is an acceleration
+      // figure that can be sound when the velocity integration was rejected.
+      if (freqXok) doc["freq_x"] = freqX;
+      if (freqYok) doc["freq_y"] = freqY;
+      if (freqZok) doc["freq_z"] = freqZ;
+      if (crestFactorOk) doc["crest_factor"] = crestFactor;
+      doc["dominant_vibration_axis"] = domVibAxis;
     }
 
     // [Phase2] LEGACY VRMS/VPEAK REMOVED from /vibration: rms, vx, vy, vz, peak.
@@ -9085,7 +9109,19 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // [P1-S2] sync_age_s REMOVED -- see the observability-gap note above.
 
     char   jsonBuffer[2048];
-    size_t jsonSize = serializeJson(doc, jsonBuffer, sizeof(jsonBuffer));
+    // [Phase 3H] Measure before serializing, not after. The post-serialize
+    // check below still stands as a second line of defence, but measureJson()
+    // gives the exact length while the buffer is still untouched, so an
+    // oversized payload is refused rather than written truncated and then
+    // detected. Same discipline the /event payload already uses.
+    const size_t vibNeed = measureJson(doc);
+    size_t jsonSize = 0;
+    if (vibNeed + 1u > sizeof(jsonBuffer)) {
+      Serial.printf("[MQTT] /vibration payload %u B exceeds buffer %u B -- not published\n",
+                    (unsigned)vibNeed, (unsigned)sizeof(jsonBuffer));
+    } else {
+      jsonSize = serializeJson(doc, jsonBuffer, sizeof(jsonBuffer));
+    }
     // [M1B-7 E5/F1] FAIL CLOSED. topic นี้เดิม "ไม่มี guard เลย" -- serializeJson()
     // ตัด payload แล้ว publish ออกไปเงียบ ๆ ไม่มีแม้แต่ warning ต่างจาก /sensor และ
     // /decision ที่อย่างน้อยยัง warn M1B-7 เพิ่ม field provenance เข้ามาใน doc นี้
