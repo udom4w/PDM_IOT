@@ -561,16 +561,16 @@ static constexpr const char* GPRS_PASS = "";
                                       // gate รอง: rpm >= 400 เป็น safety floor เพิ่มเติม
                                       // ป้องกัน false drift alert ระหว่าง STARTING/STOPPING
 
-// --- Bearing Alert (Kurtosis) Thresholds ---
-#define KURTOSIS_EARLY_WARNING  4.0f  // Kurtosis > 4.0 → EARLY_WARNING (ISO 13373-2)
-
+// [Phase 1] Bearing-alert kurtosis thresholds REMOVED together with the whole
+// legacy bearing pipeline: KURTOSIS_EARLY_WARNING, KURTOSIS_CONFIRMED and
+// BEARING_STABLE_CYCLES. They fed bearing_alert only -- never alarm_level,
+// whose bearing escalation was already disabled in v16.3l. Machine condition
+// is decided solely by FIFO/DSP velocity against VIB_WARNING_MMS /
+// VIB_CRITICAL_MMS, which this change does not touch.
+//
 // [v16.3m] RMS sanity cap: ค่าสูงสุดที่เป็นไปได้จริง
 // ถ้า rms > นี้ = garbage จาก sensor reconfig fail → ไม่ update peak hold และไม่ latch
 // ตั้งไว้ที่ 3× CRITICAL threshold = 21.3 mm/s
-#define KURTOSIS_CONFIRMED      6.0f  // Kurtosis > 6.0 → CONFIRMED bearing fault
-#define BEARING_STABLE_CYCLES   2     // [v16.3k] ลดจาก 8 → 2 cycles (~1 min @ 30s) หลัง RUNNING
-                                      // เพียงพอสำหรับ sensor stabilize หลัง startup transient
-                                      // ลดเวลารอ bear=NORMAL จาก 4 นาที → 1 นาที
                                       // ก่อนประเมิน bearing -- หลีกเลี่ยง startup transient
 #define NVS_SAVE_INTERVAL_MS  30000UL // Save runtime_hour to NVS every 30 s
 
@@ -1788,11 +1788,8 @@ typedef struct {
   float cf_z;            // Acceleration Crest Factor Z (reg 0x5F / 1000) [v15.1]
   float cf_max;          // max(cf_x, cf_y, cf_z)                         [v15.1]
 
-  float kurtosis_x;      // Acceleration Kurtosis X (reg 0x48 / 1000) -- bearing impact
-  float kurtosis_y;      // Acceleration Kurtosis Y (reg 0x54 / 1000) [v15.1]
-  float kurtosis_z;      // Acceleration Kurtosis Z (reg 0x60 / 1000) [v15.1]
-  float kurtosis_max;    // max(kurtosis_x, y, z) -- ใช้ใน bearing alert  [v15.1]
-  uint8_t kurtosis_dominant_axis; // 0=X, 1=Y, 2=Z (แกนที่ kurtosis_max มาจาก) [v15.1]
+  // [Phase 1] kurtosis_x/y/z/max + kurtosis_dominant_axis REMOVED -- the sensor's
+  // own kurtosis registers fed bearing_alert only, and that pipeline is gone.
 
   float peak;            // velocity peak hold [mm/s] -- true peak (reset ทุก publish)
   float freq_x;
@@ -1865,7 +1862,7 @@ typedef struct {
   uint8_t         motor_state;   // == vib.motor_state (MotorRunState_t) -- read directly by taskAnalytics
   int             health_score;  // Business Decision -- computed by computeHealthScore(), not present in VibrationData_t
   MachineState_t  alarm_level;   // effective g_systemState.state at capture (incl. MAINTENANCE) -- not present in VibrationData_t
-  VibrationData_t vib;           // full measurement record -- all other fields (rms_x/y/z, cf_max, kurtosis_max, temperature, current_a, timestamp, valid, ...) read from here
+  VibrationData_t vib;           // full measurement record -- all other fields (cf_max, temperature, current_a, timestamp, valid, ...) read from here
   bool            currentEvidenceValid;  // [P4-02] telemetry mirror of g_currentEvidenceValid at capture time -- pure copy, no computation
   float           currentFilteredA;      // [v16.5i] telemetry mirror of g_currentFilteredA at capture time -- pure copy, no computation; paired 1:1 with currentEvidenceValid above
 } TelemetrySnapshot;
@@ -2280,7 +2277,6 @@ typedef struct {
   // [Phase2] rms_overall / rms_x/y/z / vel_peak_* REMOVED -- the replay payload
   // no longer carries legacy VRMS/VPEAK (see the replay serializer).
   float    temperature;       // °C
-  float    kurtosis_max;      // max kurtosis (bearing health)
   float    cf_max;            // crest factor max
   float    freq_x;            // Hz dominant frequency per axis
   float    freq_y;
@@ -2288,7 +2284,6 @@ typedef struct {
   float    rpm;               // filtered RPM
   uint8_t  motor_state;       // MotorRunState_t (0=STOPPED … 3=STOPPING)
   uint8_t  machine_state;     // MachineState_t cast to uint8_t
-  uint8_t  kurtosis_axis;     // dominant axis: 0=X,1=Y,2=Z
   uint8_t  prox;              // rotation signal ok flag
 
   // ── [M1B-6] FIFO-DSP velocity, ADDITIVE ────────────────────────────────
@@ -2328,7 +2323,12 @@ typedef struct {
 // or the bytes memcpy'd on replay.
 // [Phase2] 100 B -> 68 B: the eight legacy VRMS/VPEAK floats (rms_overall,
 // rms_x/y/z, vel_peak_x/y/z, vel_peak_overall) were removed from the slot.
-#define TELEM_SLOT_EXPECTED_SIZE 68u
+// [Phase 1] 68 B -> 64 B: kurtosis_max (float) and kurtosis_axis (uint8_t) were
+// removed with the legacy bearing pipeline. Only the float shrinks the record --
+// the uint8_t sat in the motor_state/machine_state/prox group and its byte is
+// absorbed by the padding that already aligned the velocity floats behind it.
+// Saves 4 B x TELEM_BUF_SIZE (120) = 480 B of static RAM.
+#define TELEM_SLOT_EXPECTED_SIZE 64u
 static_assert(sizeof(TelemetrySlot_t) == TELEM_SLOT_EXPECTED_SIZE,
               "TelemetrySlot_t size changed unexpectedly");
 
@@ -2950,7 +2950,8 @@ static const char* analysisReasonStr(AnalysisReason_t r) {
   return "?";
 }
 static MotorRunState_t g_prevMotorRunState  = MOTOR_STOPPED;  // v15.2: track transition
-static volatile uint8_t g_bearingStableCnt  = 0;              // v16.0: cycles since RUNNING stable; volatile: written by Core1 (publishTelemetry/taskButtonHandler), read by Core0 (processRPM/taskStateMachine) [fault_latch v3 mandatory fix]
+// [Phase 1] g_bearingStableCnt REMOVED -- its only reader was the bearing_alert
+// warm-up gate, deleted with the rest of the legacy bearing pipeline.
 static bool            g_trendFreqFlushed   = false;          // v16.0: freq_ratio flushed on RUNNING entry
 
 // Runtime hour accumulation (NVS persistent)
@@ -3181,7 +3182,6 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   }
   // [Phase2] legacy VRMS/VPEAK capture removed from the telemetry-buffer slot.
   s->temperature       = data->temperature;
-  s->kurtosis_max      = data->kurtosis_max;
   // [v16.5] gate เหมือน rms_overall/x/y/z ด้านบน -- ป้องกัน CF garbage
   // ตอน STOPPED เข้าไปนอน buffer แล้วถูก replay ออก MQTT ซ้ำทีหลัง
   // [Phase 3G] cf_max now carries the FIFO/DSP crest factor, filled from the
@@ -3200,7 +3200,6 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   s->rpm               = data->rpm;
   s->motor_state       = data->motor_state;
   s->machine_state     = (uint8_t)state;
-  s->kurtosis_axis     = data->kurtosis_dominant_axis;
   s->prox              = data->prox;
 
   // ── [M1B-6] FIFO-DSP velocity block ───────────────────────────────────
@@ -3507,11 +3506,9 @@ static bool replayTelemBuf() {
   // canonical keys back on /sensor, giving one value two topics. They are
   // emitted once, on the replay /vibration payload built further down, which
   // is the exact mirror of what the live path does.
-  r["kurtosis_max"]  = round(snap.kurtosis_max * 1000) / 1000.0f;
+  // [Phase 1] kurtosis_max REMOVED from the replay /sensor payload.
 
-  const char* kaxisStr = (snap.kurtosis_axis == 0) ? "X" :
-                         (snap.kurtosis_axis == 1) ? "Y" : "Z";
-  r["kurtosis_axis"] = kaxisStr;
+  // [Phase 1] kurtosis_axis REMOVED from the replay /sensor payload.
 
   // ── [M1B-6] FIFO-DSP velocity ─────────────────────────────────────────
   // [Phase1] vibration_source_legacy REMOVED -- rms/vx/vy/vz/peak are gone
@@ -3806,7 +3803,12 @@ static void checkAndLatchFault(const VibrationData_t* data,
     }
     g_fl.rms = latchedVel;   // [mm/s] velocity_rms_overall (unit unchanged)
   }
-  g_fl.kurtosis = data->kurtosis_max;
+  // [Phase 1] The kurtosis measurement is gone, but FaultLatch_t.kurtosis and
+  // its NVS key FL_KEY_KURT are RETAINED so the persisted record layout is
+  // unchanged -- an existing latch saved by earlier firmware still loads. The
+  // slot is written 0.0f as an explicit placeholder and is no longer published
+  // on any topic; it is not a measurement and must never be read as one.
+  g_fl.kurtosis = 0.0f;
   g_flCount++;
 
   // [v16.3n] FIX: ipc1 stack overflow
@@ -3827,7 +3829,7 @@ static void checkAndLatchFault(const VibrationData_t* data,
   Serial.printf("[LATCH] LATCHED ev=%u(%s) sev=%u ts=%lu vel=%.2f kurt=%.3f n=%lu\n",
                 evCode, faultEventStr(evCode), faultSeverity(evCode),
                 (unsigned long)epochNow,
-                snapRms, data->kurtosis_max,
+                snapRms, g_fl.kurtosis,
                 (unsigned long)g_flCount);
 
   xSemaphoreGive(mutexFaultLatch);  // ← release mutex ก่อน NVS write
@@ -4233,9 +4235,6 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
       g_runInBandSince = 0;               // [v16.3z] หลุด band -> reset warm-up
       g_motorRunState  = MOTOR_STARTING;
     }
-    if (g_prevMotorRunState == MOTOR_STOPPED) {
-      g_bearingStableCnt = 0;
-    }
   }
 }
 
@@ -4375,7 +4374,6 @@ static void processRPM(VibrationData_t* data) {
   // Core 0 writes g_velPeakHold / Core 1 reads+resets -- atomic float (4-byte aligned)
   if (g_motorRunState == MOTOR_STOPPED &&
       g_prevMotorRunState != MOTOR_STOPPED) {
-    g_bearingStableCnt   = 0;
     g_trendFreqFlushed   = false;  // ต้องตัดสินใจ resume/clear อีกครั้งเมื่อ start ใหม่
     g_motorStoppedSince  = millis();  // [v16.3aa] เริ่มจับเวลาหยุด เพื่อตัดสิน resume vs clear
     g_tempAtStop         = data->temperature;  // [v16.3ad] จำ temp ตอนหยุด (ตรวจ cold start ตอน resume)
@@ -5995,9 +5993,12 @@ void taskModbusRead(void* parameter) {
   // Frequency register เป็น unsigned เหมือน CF และ Kurtosis (ดู datasheet §6.4.13)
   // int16_t ทำให้ค่าสูง เช่น 0xFFB2 = 65458 กลายเป็น -78 → freq_z = -7.8 Hz
   uint16_t raw_fx = 0, raw_fy = 0, raw_fz = 0;
-  uint16_t raw_cfx = 0, raw_kx = 0;  // v15.0: CFX (0x47), KX (0x48) -- unsigned per datasheet §6.4.14
-  uint16_t raw_cfy = 0, raw_ky = 0;  // v15.1: CFY (0x53), KY (0x54) -- unsigned per datasheet §6.4.15
-  uint16_t raw_cfz = 0, raw_kz = 0;  // v15.1: CFZ (0x5F), KZ (0x60) -- unsigned per datasheet §6.4.16
+  // [Phase 1] raw_kx/ky/kz REMOVED. The CF registers are still read -- KX/KY/KZ
+  // simply sit in word 2 of the same 2-register transaction and are no longer
+  // taken off the wire. The reads themselves are unchanged (see below).
+  uint16_t raw_cfx = 0;  // v15.0: CFX (0x47) -- unsigned per datasheet §6.4.14
+  uint16_t raw_cfy = 0;  // v15.1: CFY (0x53) -- unsigned per datasheet §6.4.15
+  uint16_t raw_cfz = 0;  // v15.1: CFZ (0x5F) -- unsigned per datasheet §6.4.16
 
   Serial.println("[CORE 0] Modbus task started");
 
@@ -6331,25 +6332,25 @@ void taskModbusRead(void* parameter) {
       }
       vTaskDelay(pdMS_TO_TICKS(5));
 
-      // Transaction 3: CFX (0x47) + KX (0x48) -- Accel Crest Factor & Kurtosis [v15.0]
+      // Transaction 3: CFX (0x47) + KX (0x48) -- Accel Crest Factor [v15.0]
       // Optional -- ถ้า fail ปล่อยค่าเดิม (0) ไม่กระทบ success หลัก
+      // [Phase 1] Still a 2-register read: the register map puts CFX and KX
+      // adjacent, so the transaction width is fixed by the device, not by us.
+      // Word 2 (KX) is simply no longer read out -- no bus traffic changes.
       if (modbus.readHoldingRegisters(REG_CFX, 2) == modbus.ku8MBSuccess) {
         raw_cfx = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.14
-        raw_kx  = (uint16_t)modbus.getResponseBuffer(1);
       }
       vTaskDelay(pdMS_TO_TICKS(5));
 
       // Transaction 4: CFY (0x53) + KY (0x54) -- Y-axis [v15.1]
       if (modbus.readHoldingRegisters(REG_CFY, 2) == modbus.ku8MBSuccess) {
         raw_cfy = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.15
-        raw_ky  = (uint16_t)modbus.getResponseBuffer(1);
       }
       vTaskDelay(pdMS_TO_TICKS(5));
 
       // Transaction 5: CFZ (0x5F) + KZ (0x60) -- Z-axis [v15.1]
       if (modbus.readHoldingRegisters(REG_CFZ, 2) == modbus.ku8MBSuccess) {
         raw_cfz = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.16
-        raw_kz  = (uint16_t)modbus.getResponseBuffer(1);
       }
       vTaskDelay(pdMS_TO_TICKS(5));
 
@@ -6624,27 +6625,13 @@ void taskModbusRead(void* parameter) {
       localData.cf_y       = (raw_cfy > 0) ? raw_cfy / 1000.0f : 0.0f;
       localData.cf_z       = (raw_cfz > 0) ? raw_cfz / 1000.0f : 0.0f;
 
-      localData.kurtosis_x = (raw_kx  > 0) ? raw_kx  / 1000.0f : 0.0f;
-      localData.kurtosis_y = (raw_ky  > 0) ? raw_ky  / 1000.0f : 0.0f;
-      localData.kurtosis_z = (raw_kz  > 0) ? raw_kz  / 1000.0f : 0.0f;
+      // [Phase 1] kurtosis_x/y/z scaling REMOVED with the bearing pipeline.
 
-      // Derived: max CF และ max Kurtosis พร้อม dominant axis [v15.1]
-      // kurtosis_max ใช้ใน bearing alert: > 4.0 = early warning, > 6.0 = confirmed
-      // kurtosis_dominant_axis ใช้ localize fault: 0=X(radial), 1=Y(radial), 2=Z(axial)
+      // Derived: max CF [v15.1]. cf_x/y/z remain a validation REFERENCE for the
+      // canonical FIFO/DSP crest factor -- see the [CF-SRC] log. No product
+      // consumer reads them.
+      // [Phase 1] kurtosis_max / kurtosis_dominant_axis derivation REMOVED.
       localData.cf_max = max(localData.cf_x, max(localData.cf_y, localData.cf_z));
-
-      if (localData.kurtosis_x >= localData.kurtosis_y &&
-          localData.kurtosis_x >= localData.kurtosis_z) {
-        localData.kurtosis_max            = localData.kurtosis_x;
-        localData.kurtosis_dominant_axis  = 0;  // X
-      } else if (localData.kurtosis_y >= localData.kurtosis_z) {
-        localData.kurtosis_max            = localData.kurtosis_y;
-        localData.kurtosis_dominant_axis  = 1;  // Y
-      } else {
-        localData.kurtosis_max            = localData.kurtosis_z;
-        localData.kurtosis_dominant_axis  = 2;  // Z
-      }
-      // ถ้าทุกแกน = 0 (transactions ทั้งหมด fail) kurtosis_max = 0 -- ไม่ trigger alert
 
       // Step 4: Misc
       localData.temperature = raw_temp / 100.0f;
@@ -6667,15 +6654,16 @@ void taskModbusRead(void* parameter) {
 
       // ถ้าค่าใดค่าหนึ่งเป็น NaN/Inf → skip cycle นี้ทั้งหมด (ไม่เข้า State Machine)
       // [Phase2] legacy rms_overall / vel_peak_* dropped from this guard along
-      // with the fields themselves; temperature / CF / kurtosis still checked.
+      // with the fields themselves; temperature / CF still checked.
+      // [Phase 1] the kurtosis_max term is gone with the field. It was already
+      // unreachable -- kurtosis_max derived from uint16/1000.0f, which can be
+      // neither NaN nor Inf -- so removing it cannot change which cycles pass.
       if (!isFloatSafe(localData.temperature)   ||
-          !isFloatSafe(localData.cf_max)        ||
-          !isFloatSafe(localData.kurtosis_max)) {
+          !isFloatSafe(localData.cf_max)) {
         Serial.printf("[SENSOR] ! NaN/Inf detected in derived values -- skipping cycle "
-                      "(temp=%.2f cf=%.2f kurt=%.2f) [v16.3u]\n",
+                      "(temp=%.2f cf=%.2f) [v16.3u]\n",
                       localData.temperature,
-                      localData.cf_max,
-                      localData.kurtosis_max);
+                      localData.cf_max);
         // ไม่ set localData.valid = true → State Machine ไม่รับค่านี้
         rs485Disable("NAN-GUARD");
         xLastWakeTime = xTaskGetTickCount();
@@ -7778,7 +7766,9 @@ void taskNetwork(void* parameter) {
           flDoc["fault_ts_unknown"] = true;
         }
         flDoc["fault_rms"]          = roundf(snapRms  * 100.0f)  / 100.0f;
-        flDoc["fault_kurtosis"]     = roundf(snapKurt * 1000.0f) / 1000.0f;
+        // [Phase 1] fault_kurtosis REMOVED from /decision -- no topic carries a
+        // kurtosis field any more. snapKurt is still read from the latch record
+        // so the NVS layout and its recovery path stay untouched.
         flDoc["fault_latch_count"]  = snapCount;
 
         char   flBuf[1024];
@@ -7923,7 +7913,6 @@ void taskButtonHandler(void* parameter) {
             // ── Enter Warm-up phase ──
             g_systemState.state = STATE_WARMUP;
             g_warmupStartTs    = millis();
-            g_bearingStableCnt = 0;
             g_trendFreqFlushed  = false;
 
             // ── Queue maintenance event for Network task to publish (MQTT audit) ──
@@ -8648,40 +8637,26 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
                 crestFactorOk ? String(crestFactor, 2).c_str() : "--",
                 data->cf_max, data->cf_x, data->cf_y, data->cf_z);
 
-  // v16.0: Bearing alert -- state-aware + stabilization gate
-  // STOPPED/STARTING/STOPPING → ชื่อ state จริง (ไม่ใช่ INVALID_STATE)
-  // RUNNING < BEARING_STABLE_CYCLES → WARMING_UP (หลีกเลี่ยง startup transient)
-  // RUNNING ≥ BEARING_STABLE_CYCLES → ประเมิน kurtosis จริง
-  const char* bearingAlert;
-  if (data->motor_state == 2) {
-    if (g_bearingStableCnt < BEARING_STABLE_CYCLES) {
-      g_bearingStableCnt++;
-      bearingAlert = "WARMING_UP";
-    } else if (data->kurtosis_max >= KURTOSIS_CONFIRMED) {
-      bearingAlert = "CONFIRMED";
-    } else if (data->kurtosis_max >= KURTOSIS_EARLY_WARNING) {
-      bearingAlert = "EARLY_WARNING";
-    } else {
-      bearingAlert = "NORMAL";
-    }
-  } else if (data->motor_state == 1) {
-    bearingAlert = "STARTING";
-  } else if (data->motor_state == 3) {
-    bearingAlert = "STOPPING";
-  } else {
-    bearingAlert = "STOPPED";
-  }
-  const char* dominantAxis = (data->kurtosis_dominant_axis == 0) ? "X" :
-                             (data->kurtosis_dominant_axis == 1) ? "Y" : "Z";
+  // [Phase 1] BEARING ALERT REMOVED AT ORIGIN.
+  //
+  // bearing_alert was a second machine-condition opinion derived from the
+  // sensor's own kurtosis registers, published beside alarm_level while being
+  // computed by a different engine from different physics. Measured over 24 h
+  // the two disagreed in 69% of samples -- 1045 of them showing a bearing
+  // fault while alarm_level read NORMAL.
+  //
+  // It decided nothing: it never fed alarmCode/alarmLevel (bearing escalation
+  // was already disabled in v16.3l), never reached the API or the dashboard,
+  // and never triggered a notification. Phase 1 makes alarm_level the single
+  // machine-condition verdict, so the competing opinion stops being published.
+  //
+  // The bearing DIAGNOSIS is not replaced -- it is withdrawn. Nothing here
+  // asserts a healthy bearing either; the claim is simply no longer made.
 
   // v16.0: kurtosis valid เฉพาะ MOTOR_RUNNING
   // ขณะ STOPPED/STARTING/STOPPING: noise floor → kurtosis สูงผิดปกติ (ไม่มีความหมาย)
-  bool kurtosisValid = (data->motor_state == 2);  // MOTOR_RUNNING เท่านั้น
-  float kx  = kurtosisValid ? round(data->kurtosis_x   * 1000) / 1000.0f : 0.0f;
-  float ky  = kurtosisValid ? round(data->kurtosis_y   * 1000) / 1000.0f : 0.0f;
-  float kz  = kurtosisValid ? round(data->kurtosis_z   * 1000) / 1000.0f : 0.0f;
-  float kmax = kurtosisValid ? round(data->kurtosis_max * 1000) / 1000.0f : 0.0f;
-  const char* kaxis = kurtosisValid ? dominantAxis : "-";
+  // [Phase 1] kurtosisValid / kx / ky / kz / kmax / kaxis REMOVED with the
+  // kurtosis pipeline. No topic carries a kurtosis field any more.
 
   // dominant_vibration_axis: axis carrying the highest velocity RMS.
   // [Phase2] Re-sourced from the FIFO/DSP velocity carrier -- it previously read
@@ -8828,17 +8803,11 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // but now solely as a validation reference in the [CF-SRC] log; no
     // product consumer reads them any more.
 
-    // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING (ส่ง 0 เมื่อไม่ใช่ RUNNING)
-    s["kurtosis_x"]     = kx;
-    s["kurtosis_y"]     = ky;
-    s["kurtosis_z"]     = kz;
-    s["kurtosis_max"]   = kmax;
-    s["kurtosis_axis"]           = kaxis;
-    s["kurtosis_valid"]          = kurtosisValid;
+    // [Phase 1] kurtosis_x/y/z/max/axis/valid REMOVED from /sensor.
     // [Phase 3H] dominant_vibration_axis MOVED to /vibration -- it is derived
     // from the canonical velocity RMS, so it belongs beside the values it is
     // derived from.
-    s["bearing_alert"]           = bearingAlert;
+    // [Phase 1] bearing_alert REMOVED from /sensor.
 
     s["motor_state"]           = data->motor_state;
     s["rotation_signal_ok"]    = data->prox;
@@ -8977,10 +8946,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       d["velocity_ema_timestamp_ms"] = em.timestampMs;
     }
 
-    d["bearing_alert"]              = bearingAlert;
-    d["kurtosis_max"]               = kmax;
-    d["kurtosis_axis"]              = kaxis;
-    d["kurtosis_valid"]             = kurtosisValid;
+    // [Phase 1] bearing_alert + kurtosis_max/axis/valid REMOVED from /decision.
     d["dominant_vibration_axis"]    = domVibAxis;
 
     // [Phase2] REMOVED from /decision: freq_alert, freq_drift_x/y/z (freq_ratio
@@ -9165,7 +9131,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     //
     // NOTE dominant_vibration_axis is derived from LEGACY rms_x/y/z, not from
     // FIFO-DSP velocity -- a further reason not to surface it as Product-1.
-    doc["bearing_alert"]           = bearingAlert;
+    // [Phase 1] bearing_alert REMOVED from /vibration -- this was the ONLY
+    // legacy bearing field that still reached a live consumer.
     // ── [P1-S2] TREND / DIAGNOSTIC / INTERNAL-STATE BLOCK REMOVED ────────────
     // sensor_status (a hardcoded "ONLINE" constant), deglitch_count,
     // rms_slope, trend_dir, spike_count, freq_drift_x/y/z, freq_alert,
@@ -9257,8 +9224,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
                     freqXok ? String(freqX, 1).c_str() : "--",
                     freqYok ? String(freqY, 1).c_str() : "--",
                     freqZok ? String(freqZ, 1).c_str() : "--",
-                    crestFactorOk ? String(crestFactor, 2).c_str() : "--",
-                    kmax, kaxis, bearingAlert);
+                    crestFactorOk ? String(crestFactor, 2).c_str() : "--");
     } else if (!connBefore8) {
       Serial.printf("[MQTT] /vibration NOT_CONNECTED (skipped, no send attempt)\n");
     } else {
@@ -10404,7 +10370,7 @@ void setup() {
   }
 
   if (cfgOk) {
-    Serial.println("[Init] Sensor config OK -- CF/VRMS/Kurtosis will be active");
+    Serial.println("[Init] Sensor config OK -- CF/VRMS will be active");
   } else {
     Serial.println("[Init] WARNING: Sensor config partial after 3 attempts");
     Serial.println("[Init] MODE may still be set -- CF/VRMS active until next power cycle");
