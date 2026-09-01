@@ -54,6 +54,31 @@ struct VibAccelRms {
   float rms_z;
   float rms_overall;   // sqrt(rms_x^2 + rms_y^2 + rms_z^2) -- triaxial vector magnitude
   bool  valid;
+
+  // ---- [Phase 3G] crest factor, APPENDED -- every field above is unchanged
+  // and unreordered, so existing readers are unaffected.
+  //
+  //   crest_factor = max_i sqrt(dx_i^2 + dy_i^2 + dz_i^2) / rms_overall
+  //   d = a - mean(a), per axis, over THIS capture only
+  //
+  // Numerator and denominator are both DC-removed time-domain acceleration in
+  // m/s^2 from the same capture, so the ratio is dimensionless. Taking the peak
+  // of the VECTOR magnitude rather than the largest per-axis crest makes it
+  // independent of how the sensor happens to be mounted, and keeps it defined
+  // when one axis sits near the noise floor -- a per-axis max would divide a
+  // small peak by a smaller RMS there and report a meaningless spike.
+  //
+  // The window is time-domain on purpose. The Hann window used by the velocity
+  // path tapers the ends of the capture to zero, so a transient near an edge
+  // would be attenuated toward nothing and the answer would depend on where in
+  // the buffer the impact happened to land. A spectral peak is worse still: an
+  // impulse spreads its energy across bins, so the tallest bin FALLS as the
+  // signal becomes more impulsive -- the opposite of what a crest factor means.
+  //
+  // crest_factor_valid is the sole authority: when false the value is 0.0f
+  // meaning "not computed", NEVER "a measured crest factor of zero".
+  float crest_factor;
+  bool  crest_factor_valid;
 };
 
 // ----------------------------------------------------------------------------

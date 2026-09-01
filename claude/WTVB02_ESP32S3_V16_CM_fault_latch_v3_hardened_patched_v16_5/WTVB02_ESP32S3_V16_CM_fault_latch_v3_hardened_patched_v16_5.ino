@@ -2049,6 +2049,11 @@ typedef struct {
   bool     domFreqXValid;
   bool     domFreqYValid;
   bool     domFreqZValid;
+  // [Phase 3G] Crest factor from the SAME capture as every field above. It is
+  // an ACCELERATION quantity, so its validity is independent of `valid` (which
+  // is velocity validity) -- crestFactorValid is the only flag that governs it.
+  float    crestFactor;
+  bool     crestFactorValid;
 } VelocityCarrier_t;
 
 // ----------------------------------------------------------------------------
@@ -3174,15 +3179,17 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   } else {
     s->buffered_ts = 0u;
   }
-  // [v16.3af] gate เหมือน publishTelemetry -- ไม่ใช่ RUNNING = ค่า sensor เป็น
-  // noise-floor/garbage ที่ยังไม่ได้ deglitch -> เก็บ 0 กัน replay ส่ง garbage ออก MQTT ทีหลัง
-  bool isRunningBuf   = (data->motor_state == 2);
   // [Phase2] legacy VRMS/VPEAK capture removed from the telemetry-buffer slot.
   s->temperature       = data->temperature;
   s->kurtosis_max      = data->kurtosis_max;
   // [v16.5] gate เหมือน rms_overall/x/y/z ด้านบน -- ป้องกัน CF garbage
   // ตอน STOPPED เข้าไปนอน buffer แล้วถูก replay ออก MQTT ซ้ำทีหลัง
-  s->cf_max            = isRunningBuf ? data->cf_max : 0.0f;
+  // [Phase 3G] cf_max now carries the FIFO/DSP crest factor, filled from the
+  // carrier in the velocity block below. NaN until then, exactly like
+  // velocity_rms_* and freq_* in this same struct: NaN is what the serializer
+  // tests to decide whether the key is publishable at all. The legacy register
+  // value is deliberately NOT used as a fallback.
+  s->cf_max            = NAN;
   // [Phase 3F] freq_x/y/z are the FIFO/DSP dominant frequency, filled from the
   // carrier in the velocity block below. NaN until then, exactly like
   // velocity_rms_* in this same struct: NaN is what the serializer tests to
@@ -3242,6 +3249,9 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
         if (vc.domFreqXValid) s->freq_x = vc.domFreqX;
         if (vc.domFreqYValid) s->freq_y = vc.domFreqY;
         if (vc.domFreqZValid) s->freq_z = vc.domFreqZ;
+        // [Phase 3G] Same capture, same mutex, same freshness gate as the
+        // velocity and frequency fields beside it.
+        if (vc.crestFactorValid) s->cf_max = vc.crestFactor;
         s->velocity_data_valid  = true;
       }
     }
@@ -3498,7 +3508,12 @@ static bool replayTelemBuf() {
   if (isfinite(snap.freq_z)) r["freq_z"] = roundf(snap.freq_z * 10) / 10.0f;
 
   r["kurtosis_max"]  = round(snap.kurtosis_max * 1000) / 1000.0f;
-  r["crest_factor"]  = round(snap.cf_max        * 100)  / 100.0f;
+  // [Phase 3G] FIFO/DSP crest factor, published only when the slot holds a
+  // real number. NaN means the capture produced none, and JSON cannot carry
+  // NaN -- omitting the key stops it becoming a 0 or a null a consumer might
+  // read as a measured crest factor. Live /sensor follows the same rule, so
+  // replayed and live payloads carry identical semantics.
+  if (isfinite(snap.cf_max)) r["crest_factor"] = round(snap.cf_max * 100) / 100.0f;
 
   const char* kaxisStr = (snap.kurtosis_axis == 0) ? "X" :
                          (snap.kurtosis_axis == 1) ? "Y" : "Z";
@@ -8153,6 +8168,31 @@ static bool dspDominantFreq(float* outX, bool* okX,
   return true;
 }
 
+// [Phase 3G] The one read of the FIFO/DSP crest factor, and from here on the
+// CANONICAL source of the crest_factor product field. Same carrier, same mutex
+// and the same VIB_VELOCITY_MAX_AGE_MS_TBD deadline as displayVelocity() and
+// dspDominantFreq(), so "stale" keeps meaning one thing firmware-wide.
+//
+// Deliberately does NOT test vc.valid: that flag is velocity validity, and the
+// crest factor is an acceleration quantity carrying its own flag. Freshness is
+// still enforced -- a stale acceleration figure misleads exactly as much as a
+// stale velocity one.
+//
+// The sensor's own crest-factor registers (0x47/0x53/0x5F) are still read and
+// still available on the SensorData path, but only as a validation reference;
+// nothing downstream treats them as the product crest_factor any more.
+static bool dspCrestFactor(float* outCf) {
+  if (mutexVelCarrier == NULL) return false;
+  VelocityCarrier_t vc;
+  if (xSemaphoreTake(mutexVelCarrier, pdMS_TO_TICKS(5)) != pdTRUE) return false;
+  vc = g_velCarrier;                    // whole-struct copy: no torn read
+  xSemaphoreGive(mutexVelCarrier);
+  if (!vc.crestFactorValid || vc.timestampMs == 0u ||
+      (uint32_t)(millis() - vc.timestampMs) > VIB_VELOCITY_MAX_AGE_MS_TBD) return false;
+  if (outCf) *outCf = vc.crestFactor;
+  return true;
+}
+
 void drawWarningScreen(VibrationData_t* data, bool blink) {
   char buf[32];
 
@@ -8490,9 +8530,28 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
   // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน RMS/peak/kurtosis ด้านบน --
   // ขณะ STOPPED/STARTING/STOPPING ค่า CF จาก sensor เป็น noise-floor/garbage
   // ที่ไม่ผ่าน deglitch (deglitch ทำงานเฉพาะ motor_state==2) -> ต้อง gate เป็น 0
-  float crestFactor = (data->motor_state == 2 && data->cf_max > 0.0f)
-                      ? roundf(data->cf_max * 100.0f) / 100.0f
-                      : 0.0f;
+  // [Phase 3G] crest_factor is now vector_peak / acceleration_rms_overall,
+  // computed from the RAW FIFO waveform -- not the sensor's own CF registers.
+  // Registers 0x47/0x53/0x5F are still read and still live in data->cf_x/y/z,
+  // kept deliberately as a REFERENCE ONLY for the comparison log below.
+  //
+  // No motor_state gate is needed or wanted here: FIFO capture is admitted only
+  // while the motor is RUNNING, so a fresh carrier entry already implies it.
+  float crestFactor   = 0.0f;
+  bool  crestFactorOk = dspCrestFactor(&crestFactor);
+  if (crestFactorOk) {
+    crestFactor = roundf(crestFactor * 100.0f) / 100.0f;
+  }
+
+  // [Phase 3G] Migration comparison, reference vs canonical. The two are NOT
+  // expected to agree and are never forced toward each other: the sensor
+  // derives its CF from an internal 16 kHz stream while this one sees 2 kHz, so
+  // impulse energy above 1 kHz is invisible here and the canonical figure reads
+  // systematically lower.
+  Serial.printf("[CF-SRC] canonical(dsp) %s | reference(reg 0x47/53/5F) "
+                "cf_max=%.2f x=%.2f y=%.2f z=%.2f\n",
+                crestFactorOk ? String(crestFactor, 2).c_str() : "--",
+                data->cf_max, data->cf_x, data->cf_y, data->cf_z);
 
   // v16.0: Bearing alert -- state-aware + stabilization gate
   // STOPPED/STARTING/STOPPING → ชื่อ state จริง (ไม่ใช่ INVALID_STATE)
@@ -8659,12 +8718,18 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // [Phase2] freq_ratio_x/y/z REMOVED with the frequency-ratio pipeline.
 
     // v15.1: CF ครบ 3 แกน + max
-    s["crest_factor"]   = crestFactor;                           // = cf_max
-    // [v16.5] gate ด้วย MOTOR_RUNNING เหมือน crestFactor/rms/peak/kurtosis --
-    // ป้องกัน per-axis CF garbage ตอน STOPPED/STARTING/STOPPING
-    s["cf_x"]           = (data->motor_state == 2) ? round(data->cf_x * 100) / 100.0f : 0.0f;
-    s["cf_y"]           = (data->motor_state == 2) ? round(data->cf_y * 100) / 100.0f : 0.0f;
-    s["cf_z"]           = (data->motor_state == 2) ? round(data->cf_z * 100) / 100.0f : 0.0f;
+    // [Phase 3G] Published ONLY when the capture produced one. An omitted key
+    // means "not measured"; it is never filled with a 0 a consumer could read
+    // as a measured crest factor of zero, and never falls back to the legacy
+    // register value.
+    if (crestFactorOk) s["crest_factor"] = crestFactor;
+    // [Phase 3G] cf_x/cf_y/cf_z are NO LONGER PUBLISHED. They were the
+    // sensor's own per-axis crest factors (registers 0x47/0x53/0x5F), and
+    // Phase 1 exports one crest factor only -- the FIFO/DSP
+    // vector_peak / acceleration_rms_overall published as crest_factor
+    // above. The registers are still read and still reach data->cf_x/y/z,
+    // but now solely as a validation reference in the [CF-SRC] log; no
+    // product consumer reads them any more.
 
     // v16.0: Kurtosis valid เฉพาะ MOTOR_RUNNING (ส่ง 0 เมื่อไม่ใช่ RUNNING)
     s["kurtosis_x"]     = kx;
@@ -9053,7 +9118,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       // vel above, so the log never shows a 0 Hz that was never measured.
       Serial.printf("[MQTT] /vibration %d B | %s vel=%s mm/s rpm=%.1f "
                     "state=%d | health=%d%% | fx=%s fy=%s fz=%s | "
-                    "cf=%.2f kurt_max=%.3f(%s) bear=%s\n",
+                    "cf=%s kurt_max=%.3f(%s) bear=%s\n",
                     jsonSize, alarmLevel,
                     velOk ? String(vOverall, 2).c_str() : "--", data->rpm,
                     data->motor_state,
@@ -9061,7 +9126,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
                     freqXok ? String(freqX, 1).c_str() : "--",
                     freqYok ? String(freqY, 1).c_str() : "--",
                     freqZok ? String(freqZ, 1).c_str() : "--",
-                    crestFactor, kmax, kaxis, bearingAlert);
+                    crestFactorOk ? String(crestFactor, 2).c_str() : "--",
+                    kmax, kaxis, bearingAlert);
     } else if (!connBefore8) {
       Serial.printf("[MQTT] /vibration NOT_CONNECTED (skipped, no send attempt)\n");
     } else {
@@ -9368,6 +9434,12 @@ static void processPendingAccelSnapshot() {
       g_velCarrier.domFreqXValid = velDataValid && vel.dominant_frequency_x_valid;
       g_velCarrier.domFreqYValid = velDataValid && vel.dominant_frequency_y_valid;
       g_velCarrier.domFreqZValid = velDataValid && vel.dominant_frequency_z_valid;
+      // [Phase 3G] Gated on dataValid (ACCELERATION validity), not velDataValid:
+      // a capture can yield a usable acceleration record while the velocity
+      // integration is rejected, and the crest factor belongs to the former.
+      g_velCarrier.crestFactor      = (dataValid && rms.crest_factor_valid)
+                                        ? rms.crest_factor : 0.0f;
+      g_velCarrier.crestFactorValid = dataValid && rms.crest_factor_valid;
       xSemaphoreGive(mutexVelCarrier);
     }
   }
