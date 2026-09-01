@@ -1637,6 +1637,16 @@ typedef enum {
   STATE_WARMUP
 } MachineState_t;
 
+// [Phase 3J] vibration_status as a compact code, so a buffered slot can carry
+// the CAPTURE-TIME status instead of a replay having to re-derive it from
+// globals that have since moved on. The three values are exactly the three the
+// live serializer has always published -- no meaning is added or changed here.
+typedef enum {
+  VIB_STATUS_OK               = 0,
+  VIB_STATUS_UNAVAILABLE      = 1,
+  VIB_STATUS_THRESHOLDS_UNSET = 2
+} VibrationStatus_t;
+
 typedef enum {
   PAGE_MACHINE = 0,
   PAGE_AXIS,
@@ -2285,6 +2295,13 @@ typedef struct {
   uint8_t  motor_state;       // MotorRunState_t (0=STOPPED … 3=STOPPING)
   uint8_t  machine_state;     // MachineState_t cast to uint8_t
   uint8_t  prox;              // rotation signal ok flag
+  // [Phase 3J] VibrationStatus_t at capture time. Deliberately placed here: the
+  // three uint8_t above left one byte of alignment padding before the velocity
+  // floats, and this field occupies exactly that pad -- sizeof(TelemetrySlot_t)
+  // stays 64 B, so the 120-slot ring costs not one additional byte of RAM.
+  // NOTE: because the size is unchanged, TELEM_SLOT_EXPECTED_SIZE below cannot
+  // flag this edit. That is intended, not an oversight.
+  uint8_t  vibration_status;  // VibrationStatus_t cast to uint8_t
 
   // ── [M1B-6] FIFO-DSP velocity, ADDITIVE ────────────────────────────────
   // Every legacy field above keeps its exact prior meaning and its existing
@@ -2333,7 +2350,7 @@ static_assert(sizeof(TelemetrySlot_t) == TELEM_SLOT_EXPECTED_SIZE,
               "TelemetrySlot_t size changed unexpectedly");
 
 // [M1B-6] Schema version carried on every replayed record.
-#define TELEM_SLOT_SCHEMA_VERSION 1u
+#define TELEM_SLOT_SCHEMA_VERSION 2u   // [Phase 3J] 1 -> 2: replay payload contract changed
 
 // Ring buffer storage (static — data segment, not heap)
 static TelemetrySlot_t  g_telemBuf[TELEM_BUF_SIZE];
@@ -3200,6 +3217,10 @@ static void pushTelemBuf(const VibrationData_t* data, MachineState_t state) {
   s->rpm               = data->rpm;
   s->motor_state       = data->motor_state;
   s->machine_state     = (uint8_t)state;
+  // [Phase 3J] Capture-time vibration_status. Recorded here, never re-derived on
+  // replay: by the time a backlog drains the globals it comes from describe a
+  // different moment entirely.
+  s->vibration_status  = (uint8_t)currentVibStatus();
   s->prox              = data->prox;
 
   // ── [M1B-6] FIFO-DSP velocity block ───────────────────────────────────
@@ -3517,21 +3538,14 @@ static bool replayTelemBuf() {
   // come from their own sensor registers (0x47.., 0x44.., 0x40), not from
   // VRMS, and are untouched.
   r["schema_version"]          = snap.schema_version;
-  r["velocity_data_valid"]     = snap.velocity_data_valid;
-  if (snap.velocity_data_valid) {
-    // Published ONLY when valid. When invalid the four values are NaN, which
-    // JSON cannot represent -- omitting the keys is what prevents a NaN from
-    // being coerced into a 0 or a null that a consumer might read as a real
-    // measurement of zero vibration.
-    r["velocity_rms_x"]       = roundf(snap.velocity_rms_x       * 1000.0f) / 1000.0f;
-    r["velocity_rms_y"]       = roundf(snap.velocity_rms_y       * 1000.0f) / 1000.0f;
-    r["velocity_rms_z"]       = roundf(snap.velocity_rms_z       * 1000.0f) / 1000.0f;
-    r["velocity_rms_overall"] = roundf(snap.velocity_rms_overall * 1000.0f) / 1000.0f;
-    r["capture_id"]           = snap.capture_id;
-    r["capture_ts_ms"]        = snap.capture_ts_ms;
-    r["sample_rate_hz"]       = snap.sample_rate_hz;
-    r["sample_count"]         = snap.sample_count;
-  }
+  // [Phase 3J] velocity_data_valid, velocity_rms_x/y/z/overall and the capture
+  // provenance (capture_id / capture_ts_ms / sample_rate_hz / sample_count) are
+  // REMOVED from the replay /sensor payload. Live /sensor has carried no
+  // vibration data since Phase 1 -- it describes the sensor and the device only
+  // -- and this payload was still shaped like the pre-Phase-1 topic. The values
+  // are not dropped: they move to the replay /vibration payload below, beside
+  // the frequency and crest factor they were captured with. One canonical
+  // value, one topic, live and replayed alike.
 
   // time_synced — ถูก set ใน block ด้านบนแล้วถ้า bufTsValid=false
   // ถ้า bufTsValid=true ใช้ค่าจาก NTP sync state
@@ -3593,21 +3607,59 @@ static bool replayTelemBuf() {
     // read straight off the values already stored in the slot -- the same
     // comparison the live path makes on the velocity carrier. Nothing is
     // recomputed and no DSP runs here; this only labels which of three stored
-    // numbers is largest. Omitted entirely when the slot's velocity is invalid
-    // (the four velocity_rms_* fields are NaN then), because an axis label
-    // derived from NaN would be a guess.
-    if (snap.velocity_data_valid &&
-        isfinite(snap.velocity_rms_x) &&
-        isfinite(snap.velocity_rms_y) &&
-        isfinite(snap.velocity_rms_z)) {
-      rv["dominant_vibration_axis"] =
-          (snap.velocity_rms_x >= snap.velocity_rms_y &&
+    // numbers is largest.
+    // [Phase 3J] Emitted UNCONDITIONALLY, with "-" for unknown, matching the
+    // live serializer exactly. Previously the key was omitted when velocity was
+    // invalid, which made a replayed record a different SHAPE from the live one
+    // it is supposed to reproduce. "-" is the live representation for "no axis
+    // measured"; no axis is ever guessed.
+    const bool axisKnown = snap.velocity_data_valid &&
+                           isfinite(snap.velocity_rms_x) &&
+                           isfinite(snap.velocity_rms_y) &&
+                           isfinite(snap.velocity_rms_z);
+    rv["dominant_vibration_axis"] = !axisKnown ? "-"
+        : (snap.velocity_rms_x >= snap.velocity_rms_y &&
            snap.velocity_rms_x >= snap.velocity_rms_z) ? "X"
         : (snap.velocity_rms_y >= snap.velocity_rms_z) ? "Y"
                                                        : "Z";
+
+    // ── [Phase 3J] The rest of the canonical set, from stored capture-time
+    // values only. Every field below is either read directly out of the slot or
+    // rendered by a pure formatter; nothing here evaluates a threshold, reads a
+    // live global, or forms a verdict. That is what keeps the RMS state machine
+    // the single place a machine condition is ever decided.
+    rv["vibration_source"]    = "fifo_dsp";
+    rv["vibration_status"]    = vibStatusStr((VibrationStatus_t)snap.vibration_status);
+    rv["velocity_data_valid"] = snap.velocity_data_valid;
+    if (snap.velocity_data_valid) {
+      // Same guard as live: published ONLY when the capture produced them. When
+      // invalid the four are NaN, which JSON cannot carry -- omitting the keys
+      // is what stops a NaN becoming a 0 a consumer reads as zero vibration.
+      rv["velocity_rms_overall"] = roundf(snap.velocity_rms_overall * 1000.0f) / 1000.0f;
+      rv["velocity_rms_x"]       = roundf(snap.velocity_rms_x       * 1000.0f) / 1000.0f;
+      rv["velocity_rms_y"]       = roundf(snap.velocity_rms_y       * 1000.0f) / 1000.0f;
+      rv["velocity_rms_z"]       = roundf(snap.velocity_rms_z       * 1000.0f) / 1000.0f;
     }
 
-    char   vbuf[512];
+    // Operating context carried by the live payload and stored in the slot.
+    // current_a / current_valid / current_age_s and operating_hours_total are
+    // NOT stored, so they are absent rather than invented.
+    rv["temp"]        = round(snap.temperature * 10) / 10.0f;
+    rv["rpm"]         = snap.rpm;
+    rv["motor_state"] = snap.motor_state;
+
+    // [Phase 3J] alarm_level: the verdict THIS record carried when it was
+    // captured, rendered by the same pure formatter the live path uses. It is
+    // transported, never recomputed -- re-deriving it from the stored velocity
+    // would bypass the hysteresis and capture-persistence the state machine
+    // applied, and could publish a verdict the device never actually reported.
+    rv["alarm_level"] = alarmLevelStr((MachineState_t)snap.machine_state,
+                                      snap.motor_state);
+
+    // [Phase 3J] 512 -> 1024 B: the canonical set above roughly doubles the
+    // payload (worst case ~577 B). measureJson() below still refuses anything
+    // that would not fit, so the guard remains fail-closed, never truncating.
+    char   vbuf[1024];
     // [Phase 3I] measureJson() BEFORE serializing, matching the live
     // /vibration guard: the exact length is known while the buffer is still
     // untouched, so an oversized payload is refused outright instead of being
@@ -4456,6 +4508,50 @@ static inline bool vibThresholdsConfigured() {
   return (VIB_WARNING_MMS  > 0.0f) &&
          (VIB_CRITICAL_MMS > 0.0f) &&
          (VIB_CRITICAL_MMS > VIB_WARNING_MMS);
+}
+
+// [Phase 3J] The one place vibration_status is DETERMINED. Lifted verbatim from
+// the ternary the live serializers already used, so the resulting value is
+// identical to what /vibration and /decision published before. It is read once
+// live at publish time and once at capture time by pushTelemBuf(), which is
+// what lets a replayed slot report the status it actually had rather than the
+// status the device happens to be in when the backlog finally drains.
+// [Phase 3J] PURE FORMATTERS -- no evaluation, no thresholds, no state read.
+// They exist so the live serializer and the buffered-replay serializer render
+// the same already-decided values through the same single expression. Adding a
+// second place that DECIDES a machine condition is exactly what these prevent.
+//
+// Placed HERE, after every typedef in the file, on purpose: Arduino inserts all
+// auto-generated prototypes immediately before the FIRST function definition,
+// so a helper defined earlier would push that insertion point ahead of
+// VibrationData_t / AnalysisReason_t / MqttOutboundTopic_t and break their
+// prototypes. Both callers sit above this line and reach it via the
+// auto-prototype, which is exactly what that mechanism is for.
+
+// Renders the capture-time alarm state. It does not evaluate anything: the
+// verdict was formed by the RMS state machine (hysteresis + capture
+// persistence) long before this is called, and is passed in. A non-RUNNING
+// motor reports NORMAL, matching the live rule that no alarm is asserted while
+// the machine is not turning.
+static const char* alarmLevelStr(MachineState_t state, uint8_t motorState) {
+  if (motorState != 2) return "NORMAL";          // not RUNNING -> no alarm asserted
+  return (state == STATE_CRITICAL) ? "CRITICAL"
+       : (state == STATE_WARNING)  ? "WARNING"
+                                   : "NORMAL";
+}
+
+// Renders a VibrationStatus_t. The three strings are the exact ones the live
+// serializer has always emitted.
+static const char* vibStatusStr(VibrationStatus_t st) {
+  return (st == VIB_STATUS_UNAVAILABLE)      ? "UNAVAILABLE"
+       : (st == VIB_STATUS_THRESHOLDS_UNSET) ? "THRESHOLDS_UNSET"
+                                             : "OK";
+}
+
+static VibrationStatus_t currentVibStatus() {
+  if (g_vibUnavailable)          return VIB_STATUS_UNAVAILABLE;
+  if (!vibThresholdsConfigured()) return VIB_STATUS_THRESHOLDS_UNSET;
+  return VIB_STATUS_OK;
 }
 
 // [M1A] Core 0's read of the Core 1 velocity carrier, with freshness applied.
@@ -7729,8 +7825,11 @@ void taskNetwork(void* parameter) {
           if (flSnap.motor_state == 2) {
             snapAlarmCode  = (flSnap.alarm_level == STATE_CRITICAL) ? 2 :
                              (flSnap.alarm_level == STATE_WARNING)  ? 1 : 0;
-            snapAlarmLevel = (snapAlarmCode == 2) ? "CRITICAL" :
-                             (snapAlarmCode == 1) ? "WARNING"  : "NORMAL";
+            // [Phase 3J] Shared pure formatter. Equivalent in both branches:
+            // inside this if the motor is RUNNING so the state maps exactly as
+            // before, and outside it snapAlarmLevel keeps its "NORMAL" default,
+            // which is what the helper returns for a non-RUNNING motor.
+            snapAlarmLevel = alarmLevelStr(flSnap.alarm_level, flSnap.motor_state);
             snapHealth     = flSnap.health_score;
           }
         }
@@ -8597,13 +8696,14 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
                   (state == STATE_WARNING)  ? 1 : 0;
     // [v16.3l] ปิด bearing escalation — kurtosis ไม่เสถียรพอสำหรับ V1
     // alarmCode ใช้ RMS state machine อย่างเดียว
-    alarmLevel  = (alarmCode == 2) ? "CRITICAL" :
-                  (alarmCode == 1) ? "WARNING"  : "NORMAL";
     // [v16.3l] ปิด bearing health penalty — ใช้ RMS-based health อย่างเดียว
   } else {
     alarmCode   = 0;
-    alarmLevel  = "NORMAL";
   }
+  // [Phase 3J] Same mapping as before, now expressed once and shared with the
+  // buffered-replay serializer. Behaviour is unchanged: RUNNING maps the state
+  // machine's verdict, anything else reports NORMAL.
+  alarmLevel = alarmLevelStr(state, data->motor_state);
 
   // [Phase2] currentPeak / reportedRms / reportedVx / reportedVy / reportedVz
   // REMOVED together with g_velPeakHold and VibrationData_t.rms_* -- there is
@@ -8926,9 +9026,9 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       }
     }
     d["vibration_source"]    = "fifo_dsp";
-    d["vibration_status"]    = g_vibUnavailable      ? "UNAVAILABLE"
-                             : !vibThresholdsConfigured() ? "THRESHOLDS_UNSET"
-                             : "OK";
+    // [Phase 3J] Last inline copy of the status rule, now routed through the
+    // same evaluator + formatter as /vibration. Identical values, one expression.
+    d["vibration_status"]    = vibStatusStr(currentVibStatus());
 
     // [M1B-2] Timestamp-aware EMA over the M1B-1 history ring. ADDITIVE:
     // `ema_rms` on /trend keeps its legacy VRMS-derived meaning untouched --
@@ -9017,9 +9117,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // THRESHOLDS_UNSET แปลว่า alarm_level คือ state ที่ HELD ไว้ ไม่ใช่ผลประเมินสด
     // -- semantics เดียวกับ /decision ทุกประการ (คัด ternary มาตรง ๆ)
     doc["vibration_source"]        = "fifo_dsp";
-    doc["vibration_status"]        = g_vibUnavailable          ? "UNAVAILABLE"
-                                   : !vibThresholdsConfigured() ? "THRESHOLDS_UNSET"
-                                   : "OK";
+    doc["vibration_status"]        = vibStatusStr(currentVibStatus());
     // [Phase2] vibration_source_legacy REMOVED -- rms/vx/vy/vz/peak are gone from
     // this topic, so there is no legacy source left to declare provenance for.
 
