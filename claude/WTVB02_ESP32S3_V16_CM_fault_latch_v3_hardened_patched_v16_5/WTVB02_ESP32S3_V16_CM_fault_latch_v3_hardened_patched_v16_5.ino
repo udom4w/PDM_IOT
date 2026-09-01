@@ -9216,7 +9216,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       // vel above, so the log never shows a 0 Hz that was never measured.
       Serial.printf("[MQTT] /vibration %d B | %s vel=%s mm/s rpm=%.1f "
                     "state=%d | health=%d%% | fx=%s fy=%s fz=%s | "
-                    "cf=%s kurt_max=%.3f(%s) bear=%s\n",
+                    "cf=%s\n",
                     jsonSize, alarmLevel,
                     velOk ? String(vOverall, 2).c_str() : "--", data->rpm,
                     data->motor_state,
