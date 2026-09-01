@@ -3499,21 +3499,15 @@ static bool replayTelemBuf() {
   r["motor_state"]  = snap.motor_state;
   r["rotation_signal_ok"] = snap.prox;
 
-  // [Phase 3F] FIFO/DSP dominant frequency, per axis, published only when the
-  // slot holds a real number. NaN means that axis had no reportable peak when
-  // the slot was captured, and JSON cannot carry NaN -- omitting the key is
-  // what stops it becoming a 0 or a null a consumer might read as 0 Hz.
-  if (isfinite(snap.freq_x)) r["freq_x"] = roundf(snap.freq_x * 10) / 10.0f;
-  if (isfinite(snap.freq_y)) r["freq_y"] = roundf(snap.freq_y * 10) / 10.0f;
-  if (isfinite(snap.freq_z)) r["freq_z"] = roundf(snap.freq_z * 10) / 10.0f;
-
+  // [Phase 3I] freq_x/y/z and crest_factor are NO LONGER in this /sensor
+  // payload. Phase 3H made /vibration the one canonical carrier of machine
+  // vibration truth and moved them there on the LIVE path, but this replay
+  // serializer was written back when /sensor was canonical and kept emitting
+  // them -- so after any MQTT outage the buffered slots put the very same
+  // canonical keys back on /sensor, giving one value two topics. They are
+  // emitted once, on the replay /vibration payload built further down, which
+  // is the exact mirror of what the live path does.
   r["kurtosis_max"]  = round(snap.kurtosis_max * 1000) / 1000.0f;
-  // [Phase 3G] FIFO/DSP crest factor, published only when the slot holds a
-  // real number. NaN means the capture produced none, and JSON cannot carry
-  // NaN -- omitting the key stops it becoming a 0 or a null a consumer might
-  // read as a measured crest factor. Live /sensor follows the same rule, so
-  // replayed and live payloads carry identical semantics.
-  if (isfinite(snap.cf_max)) r["crest_factor"] = round(snap.cf_max * 100) / 100.0f;
 
   const char* kaxisStr = (snap.kurtosis_axis == 0) ? "X" :
                          (snap.kurtosis_axis == 1) ? "Y" : "Z";
@@ -3546,6 +3540,107 @@ static bool replayTelemBuf() {
   // ถ้า bufTsValid=true ใช้ค่าจาก NTP sync state
   if (bufTsValid) {
     r["time_synced"] = g_timeSync.synced;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // [Phase 3I] REPLAY /vibration -- the canonical vibration fields
+  // ══════════════════════════════════════════════════════════════════════
+  // Mirrors the live /vibration contract for a buffered slot: the canonical
+  // set lives on /vibration and nowhere else, replayed or live.
+  //
+  // Published BEFORE the /sensor payload below on purpose. The slot is popped
+  // only after the /sensor publish succeeds, so ordering decides what a failed
+  // publish costs: send /vibration first and a failure here returns with the
+  // slot still queued and nothing yet emitted, which retries cleanly. The
+  // reverse order would have to choose between dropping the vibration data or
+  // re-sending /sensor. The remaining split case -- /vibration accepted, then
+  // /sensor refused -- replays /vibration once more on the next attempt; a
+  // repeat of a historical sample already tagged replayed=true with its own
+  // buffered_at is idempotent for a timestamp-keyed consumer, whereas losing
+  // it is not recoverable.
+  //
+  // Scope: this block moves the five canonical keys only. velocity_rms_* stay
+  // on the replay /sensor payload where they already were -- they are outside
+  // this fix and moving them is a separate data-contract change.
+  {
+    StaticJsonDocument<512> rv;
+
+    rv["plant"]      = PLANT_ID;
+    rv["machine_id"] = MACHINE_ID;
+    rv["sensor_id"]  = SENSOR_ID;
+    rv["stage"]      = "vibration";
+
+    // Same replay metadata as the /sensor payload, so a consumer can tell a
+    // replayed vibration sample from a live one and pair it with its slot.
+    rv["replayed"]    = true;
+    rv["buffered_at"] = snap.buffered_ts;
+    rv["sent_at"]     = sentAt;
+    if (bufTsValid) {
+      rv["timestamp"]    = tsBufReplayed;
+      rv["time_synced"]  = g_timeSync.synced;
+    } else {
+      rv["time_synced"]  = false;
+    }
+
+    // [Phase 3I] Same omit-when-invalid contract as the live path: a value the
+    // capture never produced is ABSENT, never 0. NaN is what the slot stores
+    // for "not measured" and JSON cannot carry NaN, so testing isfinite() here
+    // is what stops it becoming a 0 or a null a consumer reads as a real 0 Hz
+    // or a real crest factor of zero.
+    if (isfinite(snap.freq_x)) rv["freq_x"] = roundf(snap.freq_x * 10) / 10.0f;
+    if (isfinite(snap.freq_y)) rv["freq_y"] = roundf(snap.freq_y * 10) / 10.0f;
+    if (isfinite(snap.freq_z)) rv["freq_z"] = roundf(snap.freq_z * 10) / 10.0f;
+    if (isfinite(snap.cf_max)) rv["crest_factor"] = round(snap.cf_max * 100) / 100.0f;
+
+    // dominant_vibration_axis: the axis carrying the highest velocity RMS,
+    // read straight off the values already stored in the slot -- the same
+    // comparison the live path makes on the velocity carrier. Nothing is
+    // recomputed and no DSP runs here; this only labels which of three stored
+    // numbers is largest. Omitted entirely when the slot's velocity is invalid
+    // (the four velocity_rms_* fields are NaN then), because an axis label
+    // derived from NaN would be a guess.
+    if (snap.velocity_data_valid &&
+        isfinite(snap.velocity_rms_x) &&
+        isfinite(snap.velocity_rms_y) &&
+        isfinite(snap.velocity_rms_z)) {
+      rv["dominant_vibration_axis"] =
+          (snap.velocity_rms_x >= snap.velocity_rms_y &&
+           snap.velocity_rms_x >= snap.velocity_rms_z) ? "X"
+        : (snap.velocity_rms_y >= snap.velocity_rms_z) ? "Y"
+                                                       : "Z";
+    }
+
+    char   vbuf[512];
+    // [Phase 3I] measureJson() BEFORE serializing, matching the live
+    // /vibration guard: the exact length is known while the buffer is still
+    // untouched, so an oversized payload is refused outright instead of being
+    // written truncated and detected afterwards.
+    const size_t rvNeed = measureJson(rv);
+    if (rvNeed + 1u > sizeof(vbuf)) {
+      Serial.printf("[TelemBuf] replay /vibration payload %u B exceeds buffer %u B -- keeping slot\n",
+                    (unsigned)rvNeed, (unsigned)sizeof(vbuf));
+      return false;  // ไม่ pop — จะ retry รอบหน้า
+    }
+
+    size_t vsz = serializeJson(rv, vbuf, sizeof(vbuf));
+    if (vsz == 0 || vsz >= sizeof(vbuf) - 1) {
+      Serial.printf("[TelemBuf] WARN: replay /vibration JSON truncated vsz=%u\n", (unsigned)vsz);
+      return false;  // ไม่ pop — จะ retry รอบหน้า
+    }
+
+#ifdef DEBUG_MQTT_TIMING
+    uint32_t t0_pubV = millis();
+#endif
+    bool pubOkV = mqttClient.publish(g_mqttTopic, vbuf, (int)vsz, false, MQTT_QOS);
+#ifdef DEBUG_MQTT_TIMING
+    dbgLogMqttPublish(g_mqttTopic, vsz, MQTT_QOS, pubOkV,
+                      mqttClient.lastError(), millis() - t0_pubV);
+#endif
+    if (!pubOkV) {
+      Serial.printf("[TelemBuf] replay /vibration publish FAILED (err=%d) — keeping slot\n",
+                    mqttClient.lastError());
+      return false;  // ไม่ pop ออก — จะ retry เมื่อ MQTT reconnect อีกครั้ง
+    }
   }
 
   char buf[1536];  // [M1B-6] 1024 -> 1536, matches the enlarged replay doc
