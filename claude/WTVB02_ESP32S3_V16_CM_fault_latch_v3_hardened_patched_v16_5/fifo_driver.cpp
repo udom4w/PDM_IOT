@@ -1610,13 +1610,15 @@ FifoError FifoDriver_Request(const FifoCaptureRequest* req, uint32_t* outHandle)
   // one exists (matching D-18's "one code per distinct failure", not the
   // table header's literal "else ERR_NOT_PERMITTED" read as uniform --
   // SS16.1/SS17.6 already assign ERR_CIRCUIT_OPEN and ERR_BUSY/
-  // ERR_RESULT_NOT_RELEASED their own dedicated codes). The three
+  // ERR_RESULT_NOT_RELEASED their own dedicated codes). The two remaining
   // application-state gates have no dedicated code and use the generic
-  // ERR_NOT_PERMITTED, exactly as SS19.2's table states.
+  // ERR_NOT_PERMITTED, exactly as SS19.2's table states. [P1-FIFO-1] SS19.2's
+  // third application-state gate (network) is no longer implemented -- see
+  // the removal note at the gate site below.
   //
   // [Interpretive decision, disclosed] req->requirePermissive == false is
-  // implemented as bypassing ONLY the three application-state gates
-  // (motor/sensor/network), never the four driver-internal structural
+  // implemented as bypassing ONLY the two application-state gates
+  // (motor/sensor), never the four driver-internal structural
   // ones -- those protect real invariants (no concurrent capture, no
   // defeating a tripped breaker, no admitting during an unexpired
   // cooldown, no racing an unreleased result) that cannot be safely
@@ -1673,9 +1675,16 @@ FifoError FifoDriver_Request(const FifoCaptureRequest* req, uint32_t* outHandle)
     if (!req->admissionContext.sensorHealthy) {
       return FifoError::ERR_NOT_PERMITTED;
     }
-    if (req->admissionContext.mqttReconnecting) {  // inverted, per SS19.2
-      return FifoError::ERR_NOT_PERMITTED;
-    }
+    // [P1-FIFO-1] SS19.2's network gate (mqttReconnecting) REMOVED.
+    // It made cloud-uplink health a precondition for LOCAL measurement:
+    // MQTT down -> every scheduled capture rejected ERR_NOT_PERMITTED ->
+    // g_velCarrier never updated -> OLED Vrms, local alarm evaluation and
+    // buffered telemetry all went blind for the whole outage (measured:
+    // 1,207 rejections / 0 results across one 2,415 s outage). TelemBuf
+    // already buffers what cannot be published, so a capture taken while
+    // offline is not wasted. motorStable and sensorHealthy stay -- those
+    // are physical preconditions for a meaningful sample; uplink state
+    // is not.
   }
 
   // Admitted. captureId assigned synchronously here (not by
