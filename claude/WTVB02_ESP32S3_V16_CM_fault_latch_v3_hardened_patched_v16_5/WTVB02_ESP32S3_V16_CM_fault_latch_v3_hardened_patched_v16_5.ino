@@ -3495,6 +3495,23 @@ static bool replayTelemBuf() {
   // ยังส่งข้อมูลออกไปได้ เพื่อให้เห็นว่าเคยมีข้อมูลอยู่ แต่ timestamp ใช้ไม่ได้
   bool bufTsValid = (snap.buffered_ts > 1000000000UL &&  // > 2001
                      snap.buffered_ts < 2000000000UL);   // < 2033
+
+  // [Replay-Contract] Capture-time string for the /vibration replay payload
+  // ONLY. tsBufReplayed above is the clock AT REPLAY and keeps feeding
+  // r["timestamp"] on /sensor unchanged. rv["timestamp"] (below) needs the
+  // ORIGINAL capture moment instead, so historical points land at the time
+  // the sample was taken, not the time the backlog happened to drain.
+  // DateTime(uint32_t) is the same epoch constructor already used at the
+  // NTP-sync call site (syncRTCFromModem()/parseGSMDateTime()).
+  char tsBufCapture[26] = "not_available";
+  if (bufTsValid) {
+    DateTime capDt((uint32_t)snap.buffered_ts);
+    snprintf(tsBufCapture, sizeof(tsBufCapture),
+             "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             capDt.year(), capDt.month(), capDt.day(),
+             capDt.hour(), capDt.minute(), capDt.second());
+  }
+
   if (!bufTsValid) {
     r["timestamp"]   = "INVALID";
     r["time_synced"] = false;
@@ -3587,7 +3604,11 @@ static bool replayTelemBuf() {
     rv["buffered_at"] = snap.buffered_ts;
     rv["sent_at"]     = sentAt;
     if (bufTsValid) {
-      rv["timestamp"]    = tsBufReplayed;
+      // [Replay-Contract] Capture time, not replay time -- see tsBufCapture
+      // above. r["timestamp"] on /sensor (unchanged, above) still uses
+      // tsBufReplayed; only the /vibration payload's historical accuracy
+      // is corrected here.
+      rv["timestamp"]    = tsBufCapture;
       rv["time_synced"]  = g_timeSync.synced;
     } else {
       rv["time_synced"]  = false;
