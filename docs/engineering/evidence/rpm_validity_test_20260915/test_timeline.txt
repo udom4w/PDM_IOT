@@ -1,0 +1,130 @@
+RPM-Invalid Physical Test — pump01 — Timeline & Evidence Ledger
+Date: 2026-09-15
+All timestamps UTC unless marked "Bangkok" (operator-reported, UTC+7).
+
+EVIDENCE TYPE LEGEND
+  [OPERATOR OBSERVED]   Reported by the human operator; not independently
+                        verified by tooling (e.g. the physical act of
+                        disconnecting/reconnecting a wire, the dashboard
+                        screenshot).
+  [API OBSERVED]        Retrieved directly by Claude via SSH+curl against
+                        the read-only Machine Detail API
+                        (http://127.0.0.1:8088/api/machine/plant01/pump01
+                        on host iotprom), saved verbatim to a JSON file in
+                        this directory, and SHA256-hashed.
+  [REPO/SOURCE EVIDENCE] Derived from firmware/Node-RED/API source code
+                        already reviewed in this engagement (not re-derived
+                        here).
+
+-----------------------------------------------------------------------------
+PHASE 0 — PRE-TEST BASELINE
+-----------------------------------------------------------------------------
+[API OBSERVED] 2026-09-15T03:10:24Z (server) / 03:10:21Z (operator machine)
+  File: phase0_pretest.json
+  SHA256: 95204fc72e26f694a8857a49b58a7c61cde6b660cfbd5c5e2c0542a26c71b478
+  motor_state=RUNNING(2) online=true acquisition_fault=false
+  current_a=0.73 current_valid=true
+  rpm=1483 rpm_valid=true
+  vibration_status=OK velocity_data_valid=true
+  trend.status=VALID trend.samples=20 trend.slope_reseeded=false trend.gap_count=17
+  RESULT: baseline satisfied, cleared to proceed.
+
+-----------------------------------------------------------------------------
+PHASE 1 — PHYSICAL DISCONNECT
+-----------------------------------------------------------------------------
+[OPERATOR OBSERVED] T0 = 10:13 Bangkok (~2026-09-15T03:13:00Z, minute precision
+  as reported by operator; no seconds given)
+  Operator message (Thai): "ถอดสาย GPIO17 แล้ว T0 = 10:13น. เวลาไทย"
+  ("GPIO17 wire disconnected. T0 = 10:13 Thai time.")
+  Only the verified GPIO17 RPM/proximity signal conductor was reported
+  disconnected; no wiring log or independent physical-layer confirmation
+  exists for this event beyond the operator's report.
+
+-----------------------------------------------------------------------------
+PHASE 2 — INVALID STATE
+-----------------------------------------------------------------------------
+[API OBSERVED] 2026-09-15T03:13:46Z  (~T0+46s)
+  File: phase2_poll_20260915T031346Z.json
+  SHA256: e669290e23bdeb86d3b85dc58cb7178c9c5964997dd9c14158693e8ed7a85928
+  last_seen=2026-09-15T03:13:26Z (~T0+26s)
+  motor_state=RUNNING(2) online=true acquisition_fault=false
+  current_a=0.73 current_valid=true
+  rpm=null rpm_valid=false          <-- first independently observed invalid reading
+  vibration_status=OK velocity_data_valid=true
+
+[API OBSERVED] 2026-09-15T03:14:02Z  (~T0+62s)
+  File: phase2_poll_20260915T031402Z.json
+  SHA256: 32fe745ffdec849466c5be0813c097478c4b32a8f92f60da3a2101d0364df8a4
+  last_seen=2026-09-15T03:13:56Z (~T0+56s)
+  motor_state=RUNNING(2) online=true acquisition_fault=false
+  current_a=0.74 current_valid=true
+  rpm=null rpm_valid=false          <-- confirms persistence, 60s hold satisfied
+  vibration_status=OK velocity_data_valid=true
+  trend.status=VALID trend.gap_count=17 (unchanged -- vibration/trend pipeline
+  unaffected by the RPM-only fault, exactly as designed)
+
+RESULT: invalid state independently confirmed twice, ~16s apart, spanning
+the required 60-second hold. motor_state, current_valid, vibration_status,
+acquisition_fault, online all remained exactly as required throughout.
+
+-----------------------------------------------------------------------------
+PHASE 3 — DASHBOARD
+-----------------------------------------------------------------------------
+[OPERATOR OBSERVED] reported after Phase 2, no explicit screenshot timestamp
+  or file provided.
+  Operator message (Thai): "Phase 3 — PASS. Dashboard แสดง RPM — ขณะเครื่อง RUNNING"
+  ("Dashboard shows RPM — while the machine is RUNNING.")
+  No screenshot file was shared with Claude; this line records the
+  operator's report only. Not independently verified by tooling.
+
+-----------------------------------------------------------------------------
+PHASE 4 — RECONNECT / RECOVERY
+-----------------------------------------------------------------------------
+[OPERATOR OBSERVED] T1 = 10:17:05 Bangkok (2026-09-15T03:17:05Z, second
+  precision as reported by operator)
+  Operator message (Thai): "เสียบ GPIO17 กลับแล้ว T1 = 10:17:05 เวลาไทย"
+  ("GPIO17 plugged back in. T1 = 10:17:05 Thai time.")
+  Same caveat as Phase 1: reported by operator, no independent wiring log.
+
+[API OBSERVED] 2026-09-15T03:17:32Z  (~T1+27s)
+  File: phase4_poll_20260915T031732Z.json
+  SHA256: 471bb4e110117713366a02a6e17dcb5f0dcbcca241c285887ff4100af4fcc3f0
+  last_seen=2026-09-15T03:17:28Z (~T1+23s)
+  motor_state=RUNNING(2) online=true acquisition_fault=false
+  current_a=0.72 current_valid=true
+  rpm=1484 rpm_valid=true          <-- first independently observed recovery reading
+  vibration_status=OK velocity_data_valid=true
+
+[API OBSERVED] 2026-09-15T03:17:44Z  (~T1+39s)
+  File: phase4_poll_20260915T031744Z.json
+  SHA256: 505ebf599940b286cb0273f52434e82caf6c181e9025e686d52974ef96b78ade
+  last_seen=2026-09-15T03:17:28Z (same underlying sample, fresh independent poll)
+  motor_state=RUNNING(2) online=true acquisition_fault=false
+  current_a=0.72 current_valid=true
+  rpm=1484 rpm_valid=true          <-- second consecutive confirming reading
+  vibration_status=OK velocity_data_valid=true
+
+[API OBSERVED] 2026-09-15T03:17:55Z  (~T1+50s)
+  File: phase4_poll_20260915T031755Z.json
+  SHA256: 4255b3b048e2da2d57c586d37fa9fdab9c117d9d495cc3c926dc3fcef62e1b51
+  last_seen=2026-09-15T03:17:28Z (same underlying sample, fresh independent poll)
+  motor_state=RUNNING(2) online=true acquisition_fault=false
+  current_a=0.72 current_valid=true
+  rpm=1484 rpm_valid=true          <-- third confirming reading
+  vibration_status=OK velocity_data_valid=true
+  trend.status=VALID trend.gap_count=17
+
+RESULT: recovery requirement (>=2 consecutive rpm_valid=true, numeric rpm in
+1450-1500, current_valid=true, motor_state=RUNNING, vibration_status=OK,
+acquisition_fault=false) satisfied with THREE consecutive independently
+observed readings.
+
+-----------------------------------------------------------------------------
+REPO/SOURCE EVIDENCE (for context, not re-derived in this test)
+-----------------------------------------------------------------------------
+[REPO/SOURCE EVIDENCE] GPIO17 = RPM/proximity signal input, INPUT_PULLUP,
+  FALLING-edge interrupt (WTVB02_ESP32S3_..._v16_5.ino, line ~506/10512-10513)
+[REPO/SOURCE EVIDENCE] MAX_EMA_INTERVAL_US = 2,000,000 (2.0s) -- g_rpmEvidence
+  validity timeout (line ~540)
+[REPO/SOURCE EVIDENCE] contract.py operating_condition.rpm/rpm_valid logic
+  (line ~180-182 of the production-installed contract.py)
