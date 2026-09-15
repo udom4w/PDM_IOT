@@ -1,0 +1,37 @@
+--- line_message_builder_SME_WORDING_V1_pre_review_fixes.js	2026-09-15 13:43:33.856244800 +0700
++++ line_message_builder_SME_WORDING.js	2026-09-15 13:42:53.593056900 +0700
+@@ -106,7 +106,12 @@
+     // normal when no valid measurement exists."
+     if (motorCode === 2) {
+         // D — machine confirmed RUNNING, but vibration cannot be confirmed.
+-        text = '⚠️ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n'
++        // [SME-Wording-1-Fix1] Leading emoji changed from ⚠️ to ❓: ❓ carries
++        // no severity connotation (unlike ⚠️/🚨), matching D's actual
++        // meaning ("unconfirmed", not "elevated"), and avoids sharing an
++        // emoji with state B (WARNING) in LINE's truncated notification
++        // preview. Per LINE_SME_WORDING_FINAL_REVIEW_20260915.md Defect 2.
++        text = '❓ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n'
+             + '🏭 โรงงาน: ' + plant + '\n'
+             + '⚙️ เครื่อง: ' + mId + '\n\n'
+             + '🔎 เกิดอะไรขึ้น:\n'
+@@ -127,8 +132,19 @@
+             + '🏭 โรงงาน: ' + plant + '\n'
+             + '⚙️ เครื่อง: ' + mId + '\n\n'
+             + '🔎 เกิดอะไรขึ้น:\n'
++            // [SME-Wording-1-Fix2] "สถานะปกติ" -> "เรื่องธรรมดา": removes
++            // the word "ปกติ" from this clause. "ปกติ" is also the trigger
++            // word used elsewhere to mean "vibration confirmed OK" (A/B/D);
++            // this clause was never claiming vibration is normal (it refers
++            // to the STOPPED status, and "ตอนนี้" already says "ไม่มีการวัด"),
++            // but reusing the same word here was an avoidable ambiguity
++            // risk for a reader skimming quickly. Per
++            // LINE_SME_WORDING_FINAL_REVIEW_20260915.md Defect 1. Meaning,
++            // tone, and sentence structure otherwise unchanged; "ไม่ใช่
++            // ความผิดปกติของระบบ" is left as-is (idiomatic, unambiguous,
++            // negated -- cannot be misread as "vibration is fine").
+             + 'เครื่องนี้อยู่ในสถานะหยุดทำงาน จึงไม่มีการวัดค่าการสั่นสะเทือนในขณะนี้ '
+-            + '(เป็นสถานะปกติของเครื่องที่หยุดทำงาน ไม่ใช่ความผิดปกติของระบบ)\n\n'
++            + '(เป็นเรื่องธรรมดาสำหรับเครื่องที่หยุดทำงาน ไม่ใช่ความผิดปกติของระบบ)\n\n'
+             + '📌 ตอนนี้:\n'
+             + 'ค่าการสั่นสะเทือน: ไม่มีการวัด (เครื่องหยุดทำงาน)\n'
+             + 'สถานะเครื่อง: ' + motorStateText + '\n\n'

@@ -1,0 +1,342 @@
+{
+  "results": {
+    "A_NORMAL_valid": {
+      "dropped": false,
+      "text": "✅ กลับสู่สถานะปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nค่าการสั่นสะเทือนของเครื่องนี้กลับสู่ระดับปกติแล้ว หลังจากที่เคยตรวจพบความผิดปกติก่อนหน้านี้\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 0.34 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการเพิ่มเติม ระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n⏰ 15 ก.ย. 2569 13:44:16 น."
+    },
+    "B_WARNING_valid": {
+      "dropped": false,
+      "text": "⚠️ แจ้งเตือน: พบการสั่นสะเทือนสูงกว่าปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบค่าการสั่นสะเทือนของเครื่องนี้สูงกว่าระดับปกติ ขณะที่เครื่องกำลังทำงานอยู่\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 2.25 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nเฝ้าระวังอย่างใกล้ชิด แนะนำให้ตรวจสอบเครื่องในรอบตรวจถัดไป\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "C_CRITICAL_valid": {
+      "dropped": false,
+      "text": "🚨 แจ้งเตือน: พบการสั่นสะเทือนระดับวิกฤต\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบค่าการสั่นสะเทือนของเครื่องนี้สูงถึงระดับวิกฤต ซึ่งอาจเป็นสัญญาณของความเสียหายที่กำลังเกิดขึ้น\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 4.68 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบเครื่องโดยด่วน หากเป็นไปได้ให้พิจารณาหยุดเครื่องเพื่อตรวจสอบก่อนเดินเครื่องต่อ\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "D_RUNNING_unavailable": {
+      "dropped": false,
+      "text": "❓ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบไม่สามารถอ่านค่าการสั่นสะเทือนจากเซนเซอร์ได้ในขณะนี้ ขณะที่เครื่องยังกำลังทำงานอยู่ จึงยังไม่สามารถยืนยันได้ว่าเครื่องอยู่ในสภาพปกติหรือไม่\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่มีข้อมูล\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nแนะนำให้ตรวจสอบการเชื่อมต่อของเซนเซอร์ หากสังเกตเห็นความผิดปกติของเครื่องด้วยวิธีอื่น (เสียง ความร้อน) ให้ตรวจสอบเครื่องเพิ่มเติม\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "D2_RUNNING_unavailable_recoveryTagged": {
+      "dropped": false,
+      "text": "❓ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบไม่สามารถอ่านค่าการสั่นสะเทือนจากเซนเซอร์ได้ในขณะนี้ ขณะที่เครื่องยังกำลังทำงานอยู่ จึงยังไม่สามารถยืนยันได้ว่าเครื่องอยู่ในสภาพปกติหรือไม่\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่มีข้อมูล\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nแนะนำให้ตรวจสอบการเชื่อมต่อของเซนเซอร์ หากสังเกตเห็นความผิดปกติของเครื่องด้วยวิธีอื่น (เสียง ความร้อน) ให้ตรวจสอบเครื่องเพิ่มเติม\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "E_STOPPED": {
+      "dropped": false,
+      "text": "ℹ️ เครื่องหยุดทำงาน\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nเครื่องนี้อยู่ในสถานะหยุดทำงาน จึงไม่มีการวัดค่าการสั่นสะเทือนในขณะนี้ (เป็นเรื่องธรรมดาสำหรับเครื่องที่หยุดทำงาน ไม่ใช่ความผิดปกติของระบบ)\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่มีการวัด (เครื่องหยุดทำงาน)\nสถานะเครื่อง: หยุดทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการ ระบบจะเริ่มตรวจสอบค่าการสั่นสะเทือนอีกครั้งเมื่อเครื่องเริ่มทำงาน\n\n⏰ 15 ก.ย. 2569 13:44:16 น."
+    },
+    "F_RUNNING_rpmInvalid_vibValid_NORMAL": {
+      "dropped": false,
+      "text": "✅ กลับสู่สถานะปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nค่าการสั่นสะเทือนของเครื่องนี้กลับสู่ระดับปกติแล้ว หลังจากที่เคยตรวจพบความผิดปกติก่อนหน้านี้\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 0.34 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการเพิ่มเติม ระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n⏰ 15 ก.ย. 2569 13:44:16 น."
+    },
+    "F2_RUNNING_rpmInvalid_vibValid_CRITICAL": {
+      "dropped": false,
+      "text": "🚨 แจ้งเตือน: พบการสั่นสะเทือนระดับวิกฤต\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบค่าการสั่นสะเทือนของเครื่องนี้สูงถึงระดับวิกฤต ซึ่งอาจเป็นสัญญาณของความเสียหายที่กำลังเกิดขึ้น\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 4.68 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบเครื่องโดยด่วน หากเป็นไปได้ให้พิจารณาหยุดเครื่องเพื่อตรวจสอบก่อนเดินเครื่องต่อ\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth": {
+      "step1_text": "🚨 แจ้งเตือน: พบการสั่นสะเทือนระดับวิกฤต\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบค่าการสั่นสะเทือนของเครื่องนี้สูงถึงระดับวิกฤต ซึ่งอาจเป็นสัญญาณของความเสียหายที่กำลังเกิดขึ้น\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 6.93 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบเครื่องโดยด่วน หากเป็นไปได้ให้พิจารณาหยุดเครื่องเพื่อตรวจสอบก่อนเดินเครื่องต่อ\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30",
+      "step2_text": "✅ กลับสู่สถานะปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nค่าการสั่นสะเทือนของเครื่องนี้กลับสู่ระดับปกติแล้ว หลังจากที่เคยตรวจพบความผิดปกติก่อนหน้านี้\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 0.34 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการเพิ่มเติม ระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n⏰ 15 ก.ย. 2569 13:44:16 น."
+    },
+    "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery": {
+      "step1_text": "❓ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบไม่สามารถอ่านค่าการสั่นสะเทือนจากเซนเซอร์ได้ในขณะนี้ ขณะที่เครื่องยังกำลังทำงานอยู่ จึงยังไม่สามารถยืนยันได้ว่าเครื่องอยู่ในสภาพปกติหรือไม่\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่มีข้อมูล\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nแนะนำให้ตรวจสอบการเชื่อมต่อของเซนเซอร์ หากสังเกตเห็นความผิดปกติของเครื่องด้วยวิธีอื่น (เสียง ความร้อน) ให้ตรวจสอบเครื่องเพิ่มเติม\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30",
+      "step2_text": "❓ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบไม่สามารถอ่านค่าการสั่นสะเทือนจากเซนเซอร์ได้ในขณะนี้ ขณะที่เครื่องยังกำลังทำงานอยู่ จึงยังไม่สามารถยืนยันได้ว่าเครื่องอยู่ในสภาพปกติหรือไม่\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่มีข้อมูล\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nแนะนำให้ตรวจสอบการเชื่อมต่อของเซนเซอร์ หากสังเกตเห็นความผิดปกติของเครื่องด้วยวิธีอื่น (เสียง ความร้อน) ให้ตรวจสอบเครื่องเพิ่มเติม\n\n⏰ 15 ก.ย. 2569 13:44:16 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    }
+  },
+  "assertions": [
+    {
+      "case": "A_NORMAL_valid",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "I_no_confirmed_recovery_header_when_unavailable",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "I_no_confirmed_recovery_header_when_unavailable",
+      "pass": true
+    },
+    {
+      "case": "G2.step2",
+      "check": "I_no_confirmed_recovery_header_when_unavailable",
+      "pass": true
+    },
+    {
+      "case": "F_vs_A",
+      "check": "F_identical_to_RPM_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "F2_vs_C",
+      "check": "F2_identical_to_RPM_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "D_vs_E",
+      "check": "D_and_E_are_distinct_wording",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "E_states_no_measurement_taken",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "ABC_show_real_numeric_value",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "ABC_show_real_numeric_value",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "ABC_show_real_numeric_value",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "V2_contains_thammada",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "V2_parenthetical_no_ambiguous_pokati",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "V2_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "V2_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "G2.step1",
+      "check": "V2_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "G2.step2",
+      "check": "V2_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "V2_UNAVAILABLE_never_confirmed_recovery",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "V2_UNAVAILABLE_never_confirmed_recovery",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "V2_WARNING_starts_with_warning_emoji",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "V2_CRITICAL_starts_with_siren_emoji",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "V2_NORMAL_wording_unchanged_from_V1",
+      "pass": true
+    },
+    {
+      "case": "F_vs_A_post_fix",
+      "check": "V2_RPM_invalid_still_identical_to_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "F2_vs_C_post_fix",
+      "check": "V2_RPM_invalid_still_identical_to_valid_equivalent",
+      "pass": true
+    }
+  ],
+  "allPass": true
+}

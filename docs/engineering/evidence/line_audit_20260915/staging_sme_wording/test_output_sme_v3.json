@@ -1,0 +1,477 @@
+{
+  "results": {
+    "A_NORMAL_valid": {
+      "dropped": false,
+      "text": "✅ การสั่นสะเทือนกลับสู่ระดับปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nค่าการสั่นสะเทือนของเครื่องกลับเข้าสู่ระดับปกติ\nหลังจากก่อนหน้านี้ตรวจพบค่าที่สูงขึ้น\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 0.34 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการเพิ่มเติม\nระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n⏰ 15 ก.ย. 2569 14:12:59 น."
+    },
+    "B_WARNING_valid": {
+      "dropped": false,
+      "text": "⚠️ พบการสั่นสะเทือนสูงกว่าระดับเฝ้าระวัง\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบการสั่นสะเทือนสูงกว่าระดับเฝ้าระวัง\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 2.25 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nติดตามค่าการสั่นสะเทือนต่อเนื่อง\nและตรวจสอบเครื่องในรอบตรวจถัดไป\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "C_CRITICAL_valid": {
+      "dropped": false,
+      "text": "🚨 พบการสั่นสะเทือนระดับวิกฤต\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบการสั่นสะเทือนถึงระดับวิกฤต\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 4.68 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบเครื่องโดยด่วน\nและพิจารณาหยุดเครื่องตามขั้นตอนความปลอดภัยก่อนเดินเครื่องต่อ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "D_RUNNING_unavailable": {
+      "dropped": false,
+      "text": "❓ ยังไม่สามารถประเมินการสั่นสะเทือนได้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบยังไม่ได้รับข้อมูลการสั่นสะเทือนที่พร้อมใช้งาน\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่พร้อมใช้งาน\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบระบบวัดและรอข้อมูลกลับมา\nยังไม่ควรสรุปว่าเครื่องอยู่ในภาวะปกติ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "D2_RUNNING_unavailable_recoveryTagged": {
+      "dropped": false,
+      "text": "❓ ยังไม่สามารถประเมินการสั่นสะเทือนได้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบยังไม่ได้รับข้อมูลการสั่นสะเทือนที่พร้อมใช้งาน\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่พร้อมใช้งาน\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบระบบวัดและรอข้อมูลกลับมา\nยังไม่ควรสรุปว่าเครื่องอยู่ในภาวะปกติ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "E_STOPPED": {
+      "dropped": false,
+      "text": "⏹️ เครื่องหยุดทำงาน\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nเครื่องไม่ได้กำลังทำงาน จึงไม่มีการวัดการสั่นสะเทือนในขณะนี้\n\n📌 ตอนนี้:\nสถานะเครื่อง: หยุดทำงาน\n\n🔧 ควรทำอะไร:\nเมื่อเครื่องกลับมาทำงาน ระบบจะเริ่มประเมินการสั่นสะเทือนอีกครั้ง\n\n⏰ 15 ก.ย. 2569 14:12:59 น."
+    },
+    "F_RUNNING_rpmInvalid_vibValid_NORMAL": {
+      "dropped": false,
+      "text": "✅ การสั่นสะเทือนกลับสู่ระดับปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nค่าการสั่นสะเทือนของเครื่องกลับเข้าสู่ระดับปกติ\nหลังจากก่อนหน้านี้ตรวจพบค่าที่สูงขึ้น\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 0.34 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการเพิ่มเติม\nระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n⏰ 15 ก.ย. 2569 14:12:59 น."
+    },
+    "F2_RUNNING_rpmInvalid_vibValid_CRITICAL": {
+      "dropped": false,
+      "text": "🚨 พบการสั่นสะเทือนระดับวิกฤต\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบการสั่นสะเทือนถึงระดับวิกฤต\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 4.68 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบเครื่องโดยด่วน\nและพิจารณาหยุดเครื่องตามขั้นตอนความปลอดภัยก่อนเดินเครื่องต่อ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    },
+    "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth": {
+      "step1_text": "🚨 พบการสั่นสะเทือนระดับวิกฤต\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบตรวจพบการสั่นสะเทือนถึงระดับวิกฤต\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 6.93 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบเครื่องโดยด่วน\nและพิจารณาหยุดเครื่องตามขั้นตอนความปลอดภัยก่อนเดินเครื่องต่อ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30",
+      "step2_text": "✅ การสั่นสะเทือนกลับสู่ระดับปกติ\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nค่าการสั่นสะเทือนของเครื่องกลับเข้าสู่ระดับปกติ\nหลังจากก่อนหน้านี้ตรวจพบค่าที่สูงขึ้น\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: 0.34 mm/s\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nไม่ต้องดำเนินการเพิ่มเติม\nระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n⏰ 15 ก.ย. 2569 14:12:59 น."
+    },
+    "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery": {
+      "step1_text": "❓ ยังไม่สามารถประเมินการสั่นสะเทือนได้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบยังไม่ได้รับข้อมูลการสั่นสะเทือนที่พร้อมใช้งาน\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่พร้อมใช้งาน\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบระบบวัดและรอข้อมูลกลับมา\nยังไม่ควรสรุปว่าเครื่องอยู่ในภาวะปกติ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30",
+      "step2_text": "❓ ยังไม่สามารถประเมินการสั่นสะเทือนได้\n\n🏭 โรงงาน: plant01\n⚙️ เครื่อง: pump01\n\n🔎 เกิดอะไรขึ้น:\nระบบยังไม่ได้รับข้อมูลการสั่นสะเทือนที่พร้อมใช้งาน\n\n📌 ตอนนี้:\nค่าการสั่นสะเทือน: ไม่พร้อมใช้งาน\nสถานะเครื่อง: กำลังทำงาน\n\n🔧 ควรทำอะไร:\nตรวจสอบระบบวัดและรอข้อมูลกลับมา\nยังไม่ควรสรุปว่าเครื่องอยู่ในภาวะปกติ\n\n⏰ 15 ก.ย. 2569 14:12:59 น.\n\n📖 คำสั่ง:\n  ack pump01\n  snooze pump01 30"
+    }
+  },
+  "assertions": [
+    {
+      "case": "A_NORMAL_valid",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "H_no_Health_label",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "I_no_confirmed_recovery_header_when_unavailable",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "I_no_confirmed_recovery_header_when_unavailable",
+      "pass": true
+    },
+    {
+      "case": "G2.step2",
+      "check": "I_no_confirmed_recovery_header_when_unavailable",
+      "pass": true
+    },
+    {
+      "case": "F_vs_A",
+      "check": "F_identical_to_RPM_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "F2_vs_C",
+      "check": "F2_identical_to_RPM_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "F_no_rpm_word_in_any_message",
+      "pass": true
+    },
+    {
+      "case": "D_vs_E",
+      "check": "D_and_E_are_distinct_wording",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "E_states_no_measurement_taken",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "ABC_show_real_numeric_value",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "ABC_show_real_numeric_value",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "ABC_show_real_numeric_value",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "no_FIFO_DSP_in_user_text",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "V3_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "V3_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "G2.step1",
+      "check": "V3_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "G2.step2",
+      "check": "V3_D_starts_with_question_mark_emoji",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "V3_UNAVAILABLE_never_confirmed_recovery",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "V3_UNAVAILABLE_never_confirmed_recovery",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "V3_STOPPED_never_confirmed_recovery",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "V3_STOPPED_never_uses_pokati",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "V3_motor_state_line_correct",
+      "pass": true
+    },
+    {
+      "case": "ABCD_titles",
+      "check": "V3_four_states_titles_distinct",
+      "pass": true
+    },
+    {
+      "case": "ABCD_titles",
+      "check": "V3_four_states_emojis_distinct",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "V3_WARNING_starts_with_warning_emoji",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "V3_CRITICAL_starts_with_siren_emoji",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "V3_NORMAL_starts_with_check_emoji",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "V3_CRITICAL_no_damage_claim",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "V3_CRITICAL_no_damage_claim",
+      "pass": true
+    },
+    {
+      "case": "A_NORMAL_valid",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "B_WARNING_valid",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "C_CRITICAL_valid",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "D_RUNNING_unavailable",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "D2_RUNNING_unavailable_recoveryTagged",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "E_STOPPED",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "F_RUNNING_rpmInvalid_vibValid_NORMAL",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "F2_RUNNING_rpmInvalid_vibValid_CRITICAL",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step1",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "G1_CRITICAL_to_recovery_NORMAL_vibValidBoth.step2",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step1",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "G2_CRITICAL_to_recovery_NORMAL_vibUnavailableAtRecovery.step2",
+      "check": "V3_no_hardcoded_threshold_numbers",
+      "pass": true
+    },
+    {
+      "case": "F_vs_A_v3",
+      "check": "V3_RPM_invalid_still_identical_to_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "F2_vs_C_v3",
+      "check": "V3_RPM_invalid_still_identical_to_valid_equivalent",
+      "pass": true
+    },
+    {
+      "case": "G1.step1",
+      "check": "V3_automatic_recovery_sequence_intact",
+      "pass": true
+    },
+    {
+      "case": "G1.step2",
+      "check": "V3_automatic_recovery_sequence_intact",
+      "pass": true
+    },
+    {
+      "case": "G2.step2",
+      "check": "V3_automatic_recovery_sequence_intact",
+      "pass": true
+    }
+  ],
+  "allPass": true
+}

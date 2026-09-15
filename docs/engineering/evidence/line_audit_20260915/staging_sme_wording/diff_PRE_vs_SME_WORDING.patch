@@ -1,0 +1,229 @@
+--- line_message_builder_PRE_SME_WORDING_currently_deployed.js	2026-09-15 13:34:48.820065100 +0700
++++ line_message_builder_SME_WORDING.js	2026-09-15 13:34:42.305628100 +0700
+@@ -1,5 +1,7 @@
+ // =============================================
+-// LINE MESSAGE BUILDER — Multi-Tenant v2
++// LINE MESSAGE BUILDER — Multi-Tenant v2 — SME wording
++// [SME-Wording-1] Wording/string-building only, per
++// docs/engineering/evidence/line_audit_20260915/LINE_SME_MESSAGE_SPEC_20260915.md
+ // Messaging API — lookup token + groupId ต่อ plant
+ // =============================================
+ 
+@@ -10,13 +12,17 @@
+ var mId = msg._machineId || (p.machine_id || 'N/A').toUpperCase();
+ var alertType = msg._alertType || 'alert';
+ 
+-// [Verdict-Fix-1] Authoritative live-verdict + Motor State, read from the
+-// field Health Logic now computes/carries. Absent (e.g. the synthetic
+-// Escalation Timer payload, which bypasses Health Logic) is treated as
+-// "not live" -- never as a false positive.
++// [Verdict-Fix-1] Authoritative live-verdict, read from the field Health
++// Logic computes/carries — UNCHANGED. This patch never re-derives or
++// alters this value; it only changes how it is worded below.
+ var verdictLive = p.alarm_verdict_live === true;
+-var MOTOR_STATE_NAMES = { 0: 'STOPPED', 1: 'STARTING', 2: 'RUNNING', 3: 'STOPPING' };
+-var motorStateText = MOTOR_STATE_NAMES[Number(p.motor_state)] || 'UNKNOWN';
++var motorCode = Number(p.motor_state);
++
++// [SME-Wording-1] Plain-Thai motor-state vocabulary, replacing the prior
++// English "RUNNING"/"STOPPED"/etc. labels. Same motorCode input, same
++// four-way mapping — wording only.
++var MOTOR_STATE_NAMES_TH = { 0: 'หยุดทำงาน', 1: 'เริ่มทำงาน', 2: 'กำลังทำงาน', 3: 'กำลังหยุด' };
++var motorStateText = MOTOR_STATE_NAMES_TH[motorCode] || 'ไม่ทราบสถานะ';
+ 
+ // --- lookup token ตาม plant ---
+ var accessToken = tokens[plant];
+@@ -36,7 +42,7 @@
+     return null;
+ }
+ 
+-// --- ตรวจ snooze / backoff ---
++// --- ตรวจ snooze / backoff --- (UNCHANGED)
+ var machines = flow.get('machines') || {};
+ var m = machines[mId];
+ 
+@@ -49,7 +55,7 @@
+     flow.set('machines', machines);
+ }
+ 
+-// --- เวลาไทย ---
++// --- เวลาไทย --- (UNCHANGED)
+ var timeThai = new Date().toLocaleString('th-TH', {
+     timeZone: 'Asia/Bangkok',
+     hour12: false,
+@@ -61,44 +67,25 @@
+     second: '2-digit'
+ }) + ' น.';
+ 
+-// [Notify-Fix-1]
+-// LINE presentation uses canonical FIFO-DSP velocity_rms_overall.
+-// Legacy p.rms remains untouched elsewhere in the flow.
+-// Never fabricate a velocity value when FIFO-DSP is unavailable.
+-var velRms =
++// [SME-Wording-1] Plain-Thai vibration value text, used only in the
++// CONFIRMED states (A/B/C). Same [Notify-Fix-1] guard as before — never
++// fabricate a value when FIFO-DSP data is unavailable. "FIFO-DSP" itself
++// is no longer surfaced as the primary user-facing explanation anywhere
++// in this file (spec requirement 4).
++var velValueText =
+     (p.velocity_data_valid === true &&
+         typeof p.velocity_rms_overall === 'number')
+-        ? p.velocity_rms_overall.toFixed(2) + ' mm/s (Source: FIFO-DSP)'
+-        : 'N/A (FIFO-DSP unavailable)';
+-
+-var text = '';
+-
+-if (alertType === 'alert') {
++        ? p.velocity_rms_overall.toFixed(2) + ' mm/s'
++        : 'ไม่มีข้อมูล';
+ 
+-    var emoji = p.alarm_level === 'CRITICAL' ? '🚨' : '⚠️';
++var commandBlock = '\n\n📖 คำสั่ง:\n  ack ' + mId + '\n  snooze ' + mId + ' 30';
+ 
+-    // [Verdict-Fix-1] Never present alarm_level as a clean, confirmed
+-    // measurement-backed alert unless verdictLive is true. When it is not
+-    // (vibration unavailable and/or motor not confirmed RUNNING), the
+-    // header explicitly says the condition is unconfirmed instead of a
+-    // plain "แจ้งเตือน <LEVEL>!" framing.
+-    var alertHeader = verdictLive
+-        ? (emoji + ' แจ้งเตือน ' + p.alarm_level + '!')
+-        : (emoji + ' ' + p.alarm_level +
+-           ' (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)');
+-
+-    text = alertHeader + '\n'
+-        + '🏭 Plant: ' + plant + '\n'
+-        + '⚙️ Machine: ' + mId + '\n'
+-        + '⚙️ Motor State: ' + motorStateText + '\n'
+-        + '📊 Velocity RMS: ' + velRms + '\n'
+-        + '⏰ ' + timeThai + '\n\n'
+-        + '📖 Commands:\n'
+-        + '  ack ' + mId + '\n'
+-        + '  snooze ' + mId + ' 30';
++var text = '';
+ 
+-} else if (alertType === 'escalation') {
++if (alertType === 'escalation') {
+ 
++    // UNCHANGED — out of scope for this spec, escalation timer behavior
++    // and wording untouched.
+     text = '🔴 ESCALATION!\n'
+         + '🏭 Plant: ' + plant + '\n'
+         + '⚙️ Machine: ' + mId + '\n'
+@@ -106,25 +93,103 @@
+         + '⏰ ' + timeThai + '\n\n'
+         + '⚠️ กรุณาตรวจสอบด่วน!';
+ 
+-} else if (alertType === 'recovery') {
++} else if (!verdictLive) {
+ 
+-    // [Verdict-Fix-1] Never say "กลับสู่ NORMAL" unless verdictLive is
+-    // true. The automatic recovery TRANSITION itself (when it fires, and
+-    // how often) is entirely unchanged -- only the wording of what this
+-    // specific message claims about the vibration condition changes.
+-    var recoveryHeader = verdictLive
+-        ? '✅ กลับสู่ NORMAL'
+-        : '⚠️ NORMAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)';
++    // [SME-Wording-1] States D (VIBRATION UNAVAILABLE) and E (STOPPED).
++    // Checked BEFORE the alertType-specific branches so this applies
++    // identically whether the payload arrived tagged 'alert' or
++    // 'recovery' — the fact being reported (no confirmed vibration
++    // reading) is the same either way. Neither branch below can ever
++    // produce the word "ปกติ" (normal) describing vibration — this is
++    // the direct implementation of "VIBRATION UNAVAILABLE must NEVER be
++    // described as NORMAL" and "STOPPED must not claim vibration is
++    // normal when no valid measurement exists."
++    if (motorCode === 2) {
++        // D — machine confirmed RUNNING, but vibration cannot be confirmed.
++        text = '⚠️ ไม่สามารถยืนยันสภาพการสั่นสะเทือนได้ในขณะนี้\n\n'
++            + '🏭 โรงงาน: ' + plant + '\n'
++            + '⚙️ เครื่อง: ' + mId + '\n\n'
++            + '🔎 เกิดอะไรขึ้น:\n'
++            + 'ระบบไม่สามารถอ่านค่าการสั่นสะเทือนจากเซนเซอร์ได้ในขณะนี้ ขณะที่เครื่องยังกำลังทำงานอยู่ '
++            + 'จึงยังไม่สามารถยืนยันได้ว่าเครื่องอยู่ในสภาพปกติหรือไม่\n\n'
++            + '📌 ตอนนี้:\n'
++            + 'ค่าการสั่นสะเทือน: ไม่มีข้อมูล\n'
++            + 'สถานะเครื่อง: ' + motorStateText + '\n\n'
++            + '🔧 ควรทำอะไร:\n'
++            + 'แนะนำให้ตรวจสอบการเชื่อมต่อของเซนเซอร์ หากสังเกตเห็นความผิดปกติของเครื่องด้วยวิธีอื่น (เสียง ความร้อน) ให้ตรวจสอบเครื่องเพิ่มเติม\n\n'
++            + '⏰ ' + timeThai
++            + commandBlock;
++    } else {
++        // E — machine not running (STOPPED/STARTING/STOPPING): no
++        // measurement exists, and this is never described as an error or
++        // as a normal vibration reading.
++        text = 'ℹ️ เครื่องหยุดทำงาน\n\n'
++            + '🏭 โรงงาน: ' + plant + '\n'
++            + '⚙️ เครื่อง: ' + mId + '\n\n'
++            + '🔎 เกิดอะไรขึ้น:\n'
++            + 'เครื่องนี้อยู่ในสถานะหยุดทำงาน จึงไม่มีการวัดค่าการสั่นสะเทือนในขณะนี้ '
++            + '(เป็นสถานะปกติของเครื่องที่หยุดทำงาน ไม่ใช่ความผิดปกติของระบบ)\n\n'
++            + '📌 ตอนนี้:\n'
++            + 'ค่าการสั่นสะเทือน: ไม่มีการวัด (เครื่องหยุดทำงาน)\n'
++            + 'สถานะเครื่อง: ' + motorStateText + '\n\n'
++            + '🔧 ควรทำอะไร:\n'
++            + 'ไม่ต้องดำเนินการ ระบบจะเริ่มตรวจสอบค่าการสั่นสะเทือนอีกครั้งเมื่อเครื่องเริ่มทำงาน\n\n'
++            + '⏰ ' + timeThai;
++    }
++
++} else if (alertType === 'alert') {
++
++    // A (WARNING) / B (CRITICAL) — reached only when verdictLive === true:
++    // motor confirmed RUNNING and vibration data confirmed genuinely
++    // valid. alarm_level itself is read verbatim, unchanged — no new
++    // severity calculation.
++    var isCritical = p.alarm_level === 'CRITICAL';
++    var title = isCritical
++        ? '🚨 แจ้งเตือน: พบการสั่นสะเทือนระดับวิกฤต'
++        : '⚠️ แจ้งเตือน: พบการสั่นสะเทือนสูงกว่าปกติ';
++    var whatHappened = isCritical
++        ? 'ระบบตรวจพบค่าการสั่นสะเทือนของเครื่องนี้สูงถึงระดับวิกฤต ซึ่งอาจเป็นสัญญาณของความเสียหายที่กำลังเกิดขึ้น'
++        : 'ระบบตรวจพบค่าการสั่นสะเทือนของเครื่องนี้สูงกว่าระดับปกติ ขณะที่เครื่องกำลังทำงานอยู่';
++    var whatToDo = isCritical
++        ? 'ตรวจสอบเครื่องโดยด่วน หากเป็นไปได้ให้พิจารณาหยุดเครื่องเพื่อตรวจสอบก่อนเดินเครื่องต่อ'
++        : 'เฝ้าระวังอย่างใกล้ชิด แนะนำให้ตรวจสอบเครื่องในรอบตรวจถัดไป';
++
++    text = title + '\n\n'
++        + '🏭 โรงงาน: ' + plant + '\n'
++        + '⚙️ เครื่อง: ' + mId + '\n\n'
++        + '🔎 เกิดอะไรขึ้น:\n'
++        + whatHappened + '\n\n'
++        + '📌 ตอนนี้:\n'
++        + 'ค่าการสั่นสะเทือน: ' + velValueText + '\n'
++        + 'สถานะเครื่อง: ' + motorStateText + '\n\n'
++        + '🔧 ควรทำอะไร:\n'
++        + whatToDo + '\n\n'
++        + '⏰ ' + timeThai
++        + commandBlock;
+ 
+-    text = recoveryHeader + '\n'
+-        + '🏭 Plant: ' + plant + '\n'
+-        + '⚙️ Machine: ' + mId + '\n'
+-        + '⚙️ Motor State: ' + motorStateText + '\n'
+-        + '📊 Velocity RMS: ' + velRms + '\n'
++} else if (alertType === 'recovery') {
++
++    // C — reached only when verdictLive === true: vibration confirmed
++    // genuinely OK AND motor confirmed RUNNING at the recovery instant.
++    // When verdictLive is false, execution never reaches here — it was
++    // already handled by the D/E branch above. This is the structural
++    // guarantee (unchanged from [Verdict-Fix-1], preserved by this
++    // patch) that prevents "กลับสู่ NORMAL" from ever being paired with
++    // an unavailable/unconfirmed reading (spec requirement 5 / test I).
++    text = '✅ กลับสู่สถานะปกติ\n\n'
++        + '🏭 โรงงาน: ' + plant + '\n'
++        + '⚙️ เครื่อง: ' + mId + '\n\n'
++        + '🔎 เกิดอะไรขึ้น:\n'
++        + 'ค่าการสั่นสะเทือนของเครื่องนี้กลับสู่ระดับปกติแล้ว หลังจากที่เคยตรวจพบความผิดปกติก่อนหน้านี้\n\n'
++        + '📌 ตอนนี้:\n'
++        + 'ค่าการสั่นสะเทือน: ' + velValueText + '\n'
++        + 'สถานะเครื่อง: ' + motorStateText + '\n\n'
++        + '🔧 ควรทำอะไร:\n'
++        + 'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะเฝ้าระวังค่าการสั่นสะเทือนต่อเนื่อง\n\n'
+         + '⏰ ' + timeThai;
+ }
+ 
+-// --- ส่ง Messaging API ---
++// --- ส่ง Messaging API --- (UNCHANGED)
+ msg._machineId = mId;
+ 
+ msg.headers = {
