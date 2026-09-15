@@ -1,0 +1,142 @@
+{
+  "A_RUNNING_valid_NORMAL": {
+    "dropped": false,
+    "healthWarnings": [],
+    "lineResult": {
+      "payload": {
+        "to": "TEST-GROUP-NOT-REAL-NEVER-SENT",
+        "messages": [
+          {
+            "type": "text",
+            "text": "✅ กลับสู่ NORMAL\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 0.51 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+          }
+        ]
+      },
+      "_machineId": "pump01",
+      "_alertType": "recovery",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer TEST-TOKEN-NOT-REAL-NEVER-SENT"
+      }
+    },
+    "lineText": "✅ กลับสู่ NORMAL\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 0.51 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+  },
+  "B_RUNNING_valid_WARNING": {
+    "dropped": false,
+    "healthWarnings": [],
+    "lineResult": {
+      "payload": {
+        "to": "TEST-GROUP-NOT-REAL-NEVER-SENT",
+        "messages": [
+          {
+            "type": "text",
+            "text": "⚠️ แจ้งเตือน WARNING!\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 5.20 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30"
+          }
+        ]
+      },
+      "_machineId": "pump01",
+      "_alertType": "alert",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer TEST-TOKEN-NOT-REAL-NEVER-SENT"
+      }
+    },
+    "lineText": "⚠️ แจ้งเตือน WARNING!\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 5.20 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30"
+  },
+  "C_RUNNING_valid_CRITICAL": {
+    "dropped": false,
+    "healthWarnings": [],
+    "lineResult": {
+      "payload": {
+        "to": "TEST-GROUP-NOT-REAL-NEVER-SENT",
+        "messages": [
+          {
+            "type": "text",
+            "text": "🚨 แจ้งเตือน CRITICAL!\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 8.90 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30"
+          }
+        ]
+      },
+      "_machineId": "pump01",
+      "_alertType": "alert",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer TEST-TOKEN-NOT-REAL-NEVER-SENT"
+      }
+    },
+    "lineText": "🚨 แจ้งเตือน CRITICAL!\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 8.90 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30"
+  },
+  "D_RUNNING_unavailable": {
+    "dropped": false,
+    "healthWarnings": [
+      "[Health] ⚠ VIB_UNAVAILABLE — velocity_data_valid=false velocity_rms_overall=undefined | passing through | machine=pump01"
+    ],
+    "lineResult": {
+      "payload": {
+        "to": "TEST-GROUP-NOT-REAL-NEVER-SENT",
+        "messages": [
+          {
+            "type": "text",
+            "text": "🚨 CRITICAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: N/A (FIFO-DSP unavailable)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30"
+          }
+        ]
+      },
+      "_machineId": "pump01",
+      "_alertType": "alert",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer TEST-TOKEN-NOT-REAL-NEVER-SENT"
+      }
+    },
+    "lineText": "🚨 CRITICAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: N/A (FIFO-DSP unavailable)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30"
+  },
+  "E_STOPPED": {
+    "dropped": false,
+    "healthWarnings": [
+      "[Health] ⚠ VIB_UNAVAILABLE — velocity_data_valid=false velocity_rms_overall=undefined | passing through | machine=pump01"
+    ],
+    "lineResult": {
+      "payload": {
+        "to": "TEST-GROUP-NOT-REAL-NEVER-SENT",
+        "messages": [
+          {
+            "type": "text",
+            "text": "⚠️ NORMAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: STOPPED\n📊 Velocity RMS: N/A (FIFO-DSP unavailable)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+          }
+        ]
+      },
+      "_machineId": "pump01",
+      "_alertType": "recovery",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer TEST-TOKEN-NOT-REAL-NEVER-SENT"
+      }
+    },
+    "lineText": "⚠️ NORMAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: STOPPED\n📊 Velocity RMS: N/A (FIFO-DSP unavailable)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+  },
+  "F_RUNNING_rpmInvalid_vibValid": {
+    "dropped": false,
+    "healthWarnings": [],
+    "lineResult": {
+      "payload": {
+        "to": "TEST-GROUP-NOT-REAL-NEVER-SENT",
+        "messages": [
+          {
+            "type": "text",
+            "text": "✅ กลับสู่ NORMAL\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 0.48 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+          }
+        ]
+      },
+      "_machineId": "pump01",
+      "_alertType": "recovery",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer TEST-TOKEN-NOT-REAL-NEVER-SENT"
+      }
+    },
+    "lineText": "✅ กลับสู่ NORMAL\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: 0.48 mm/s (Source: FIFO-DSP)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+  },
+  "G_CRITICAL_to_recovery_NORMAL": {
+    "step1_alert_text": "🚨 CRITICAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: N/A (FIFO-DSP unavailable)\n⏰ 15 ก.ย. 2569 12:18:49 น.\n\n📖 Commands:\n  ack pump01\n  snooze pump01 30",
+    "step2_recovery_text": "⚠️ NORMAL (ยืนยันสภาพจริงไม่ได้ — ข้อมูล vibration ไม่พร้อมใช้งาน / unconfirmed — vibration data unavailable)\n🏭 Plant: plant01\n⚙️ Machine: pump01\n⚙️ Motor State: RUNNING\n📊 Velocity RMS: N/A (FIFO-DSP unavailable)\n⏰ 15 ก.ย. 2569 12:18:49 น."
+  }
+}
