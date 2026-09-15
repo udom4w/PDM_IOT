@@ -1,0 +1,166 @@
+events {}
+http {
+  # [Product Integration phase] Every static asset (all four pages' CSS/JS)
+  # was being served as text/plain -- nginx's http{} block never included
+  # the standard MIME table, so default_type applied to everything. Classic
+  # <script src> tolerates this; browsers do NOT: a stylesheet served as
+  # text/plain is silently ignored by design (HTML spec strict MIME-type
+  # checking), and an ES module script REFUSES to execute at all. Required
+  # for the new /shared/*.js modules to load, and fixes every existing page.
+  include mime.types;
+  default_type application/octet-stream;
+
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+  }
+  # ------------------------
+  # HTTP → HTTPS redirect
+  # ------------------------
+  server {
+    listen 80;
+    server_name dash.promlogix.com influx.promlogix.com;
+    return 301 https://$host$request_uri;
+  }
+  # ------------------------
+  # DASH (Grafana + Node-RED + LINE Webhook)
+  # ------------------------
+  server {
+    listen 443 ssl;
+    server_name dash.promlogix.com;
+    ssl_certificate /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    # ------------------------
+    # Machine Detail (Product-1) -- static frontend, calls the existing
+    # read-only Machine Detail API below. Added ahead of the catch-all
+    # location / (Grafana) so it takes precedence for this one path only;
+    # nothing about the Grafana, Node-RED or LINE routes changes.
+    # ------------------------
+    # Bare-path -> trailing-slash redirects. location /x/ {alias ...} only
+    # matches WITH the trailing slash; without these, a bare /overview (no
+    # slash) silently falls through to the catch-all location / (Grafana)
+    # below instead of reaching the frontend at all. Diagnosed against a
+    # real production request in nginx's own access log.
+    location = / { return 302 /overview/; }
+    location = /overview  { return 301 /overview/; }
+    location = /plant     { return 301 /plant/; }
+    location = /machines  { return 301 /machines/; }
+    location = /machine   { return 301 /machine/; }
+    location /machine/ {
+      alias /usr/share/nginx/machine/;
+      index index.html;
+      try_files $uri $uri/ /machine/index.html;
+      add_header Cache-Control "no-cache";
+    }
+    # Customer Overview (fleet dashboard) -- same static volume as Machine
+    # Detail above (./frontend), just a different subdirectory, so no new
+    # docker-compose volume mount is required for this addition.
+    location /overview/ {
+      alias /usr/share/nginx/machine/overview/;
+      index index.html;
+      try_files $uri $uri/ /overview/index.html;
+    }
+    # Plant and Machine List -- navigation hierarchy layer. Same static
+    # volume as Machine Detail/Overview above, just further subdirectories,
+    # so no docker-compose volume mount change is required.
+    location /plant/ {
+      alias /usr/share/nginx/machine/plant/;
+      index index.html;
+      try_files $uri $uri/ /plant/index.html;
+    }
+    location /machines/ {
+      alias /usr/share/nginx/machine/machines/;
+      index index.html;
+      try_files $uri $uri/ /machines/index.html;
+    }
+    # Shared ES modules (api.js, shell.js) used by every page's app.js.
+    # Same static volume as the pages above, one more subdirectory --
+    # no docker-compose volume mount change required.
+    location /shared/ {
+      alias /usr/share/nginx/machine/shared/;
+      add_header Cache-Control "no-cache";
+    }
+    location /api/ {
+      proxy_pass http://iot-stack-api-1:8088/api/;
+      proxy_read_timeout 30;
+      proxy_connect_timeout 10;
+      proxy_send_timeout 30;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /api/ops/ {
+      limit_except GET HEAD {
+        auth_basic            "PromLogix Ops";
+        auth_basic_user_file  /etc/nginx/ops.htpasswd;
+      }
+
+      # Authenticated principal. nginx-controlled; overwrites any client value.
+      # Empty on GET/HEAD, which are public. [v1.5 F.2]
+      proxy_set_header  X-Ops-Actor       $remote_user;
+
+      # Proxy context, identical to location /api/ above. [v1.5 R-32]
+      proxy_set_header  Host              $host;
+      proxy_set_header  X-Real-IP         $remote_addr;
+      proxy_set_header  X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header  X-Forwarded-Proto $scheme;
+
+      proxy_pass        http://iot-stack-api-1:8088/api/ops/;
+    }
+    location / {
+      proxy_pass http://iot-stack-grafana-1:3000;
+      proxy_read_timeout 300;
+      proxy_connect_timeout 300;
+      proxy_send_timeout 300;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /nr/ {
+      proxy_pass http://iot-stack-nodered-1:1880/nr/;
+      proxy_read_timeout 300;
+      proxy_connect_timeout 300;
+      proxy_send_timeout 300;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_set_header X-Forwarded-Prefix /nr;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /line/callback {
+      proxy_pass http://iot-stack-nodered-1:1880/nr/api/line/callback;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+  }
+  # ------------------------
+  # INFLUX (แยก domain)
+  # ------------------------
+  server {
+    listen 443 ssl;
+    server_name influx.promlogix.com;
+    ssl_certificate /etc/nginx/certs/influx.pem;
+    ssl_certificate_key /etc/nginx/certs/influx.key;
+    location / {
+      proxy_pass http://iot-stack-influxdb-1:8086;
+      proxy_read_timeout 300;
+      proxy_connect_timeout 300;
+      proxy_send_timeout 300;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+  }
+}
