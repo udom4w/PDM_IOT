@@ -10,6 +10,7 @@ status.txt
 
 # Arduino build output
 build/
+build_*/
 *.bin
 *.elf
 *.map
