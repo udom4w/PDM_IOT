@@ -1,0 +1,24 @@
+PRE-FLASH STATE RECORD (controlled VRMS RAW capture session)
+==============================================================
+Fri Sep 18 18:12:50 SEAST 2026
+
+COM ports:
+Port Protocol Type              Board Name          FQBN                      Core
+COM5 serial   Serial Port (USB) ESP32 Family Device esp32:esp32:esp32_family  esp32:esp32
+              Serial Port (USB) Ozobot DRVKit       esp32:esp32:ozobot_drvkit esp32:esp32
+COM8 serial   Serial Port       Unknown
+
+
+Production binary (backup, to be restored after capture):
+  path: C:\Users\HP\AppData\Local\Temp\claude\label_fix_build\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino.bin
+608bd830c1b07013d97195f376da0fc35aea53b974f3f30633a7d82a4f641b6e */c/Users/HP/AppData/Local/Temp/claude/label_fix_build/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino.bin
+
+Validation binary (about to be flashed):
+  path: C:\Users\HP\AppData\Local\Temp\claude\fifo_dump_variant_build\WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino.bin
+c42069785dc617d945d278de3f87e2a364f2c9a85631228ac1ad6184915165f0 */c/Users/HP/AppData/Local/Temp/claude/fifo_dump_variant_build/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino.bin
+
+POST-SESSION CONFIRMATION
+==========================
+Fri Sep 18 18:20:06 SEAST 2026
+Production binary restored to COM5, esptool hash-verified on all 4 segments.
+Post-restore 90s health capture: 0 crashes, 0 resets, correct 5-txn Modbus sequence, both label fixes confirmed live, MQTT connected, 0 DEBUG_FIFO_DUMP output (confirms production default OFF held).

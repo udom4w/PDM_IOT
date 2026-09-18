@@ -1,0 +1,45 @@
+--- /c/Users/HP/Downloads/PDM_IOT_viblogix_worktree/claude/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino	2026-09-18 16:05:53.095822700 +0700
++++ /c/Users/HP/Downloads/PDM_IOT_viblogix_worktree/claude/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5/validation/fifo_dump_variant/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5/WTVB02_ESP32S3_V16_CM_fault_latch_v3_hardened_patched_v16_5.ino	2026-09-18 17:44:03.398617000 +0700
+@@ -323,7 +323,11 @@
+ // capture. Re-enable (uncomment) whenever the raw waveform is needed again;
+ // DumpFifoCaptureCsv() and the FIFO RAW capture path itself are UNCHANGED and
+ // still present -- only this egress switch is off.
+-// #define DEBUG_FIFO_DUMP
++// [VALIDATION-VARIANT ONLY, ISOLATED COPY -- NOT the production source]
++// Enabled here specifically for the VRMS RAW FIFO evidence-capture session.
++// This define is local to validation/fifo_dump_variant/ and has never been
++// applied to the tracked production .ino.
++#define DEBUG_FIFO_DUMP
+ 
+ // ============================================================================
+ // [BUILD FINGERPRINT] Firmware identity -- printed once at boot in setup(),
+@@ -10967,6 +10971,29 @@
+   const bool dataValid    = (aOk && rms.valid);
+   const bool velDataValid = (vOk && vel.valid);
+ 
++#ifdef DEBUG_FIFO_DUMP
++  // [VALIDATION-VARIANT ONLY] Serial-visible pairing record for the RAW FIFO
++  // evidence-capture session. Reads only already-computed local values
++  // (captureId/sampleCount/srHz already in scope above; vel.* just returned
++  // by VibVelocity_ComputeRms() on the line above) -- no new global state,
++  // no change to the MQTT payload built below, no change to any RMS
++  // arithmetic. Printed BEFORE the MQTT doc is built so it can never be
++  // blamed for altering aDoc's contents. Gated on velDataValid exactly like
++  // the MQTT payload's own omit-when-invalid contract, so this never prints
++  // a "not computed" 0.0 as if it were a measurement. Joins to the raw CSV
++  // dump (DumpFifoCaptureCsv(), Core 0, handleFifoCaptureCompletion()) by
++  // captureId -- the same field, same value, both derived from the same
++  // FifoCaptureResult.
++  if (velDataValid) {
++    Serial.printf("[FIFO-VRMS-DUMP] captureId=%lu t=%lums sr_hz=%lu sample_count=%u "
++                  "vx=%.6f vy=%.6f vz=%.6f voverall=%.6f\n",
++                  (unsigned long)captureId, (unsigned long)millis(),
++                  (unsigned long)srHz, (unsigned)sampleCount,
++                  (double)vel.rms_x, (double)vel.rms_y, (double)vel.rms_z,
++                  (double)vel.rms_overall);
++  }
++#endif  // DEBUG_FIFO_DUMP
++
+   StaticJsonDocument<512> aDoc;
+   aDoc["plant_id"]                 = PLANT_ID;
+   aDoc["machine_id"]               = MACHINE_ID;

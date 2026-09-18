@@ -1,0 +1,16 @@
+PHASE 8 SYNTHETIC SANITY TEST RESULTS
+======================================================================
+[PASS] 1_pure_sine_known_freq: f=100.0Hz A=5.0m/s^2 -> expected~5.6270mm/s, got=5.6279mm/s, rel_err=0.017%, dom_freq=100.000Hz
+[PASS] 1b_dominant_frequency_matches_known_tone: expected 100.0Hz, got 100.0000Hz (bin resolution=1.953125Hz)
+[PASS] 2_zero_signal_gives_zero_rms: all-zero input -> rms=0.000e+00mm/s (expected exactly 0)
+[PASS] 3_constant_dc_gives_near_zero_velocity_rms: pure DC (2048 counts, ~1g) -> velocity rms=0.000e+00mm/s (expected ~0; DC removal + HP floor must suppress it)
+[PASS] 4_single_axis_overall_equals_that_axis: X=5.627918 Y=0.000000 Z=0.000000 Overall=5.627918 (overall must == X exactly since Y=Z=0)
+[PASS] 5_equal_xyz_overall_is_sqrt3_times_axis: axis=5.627918mm/s, sqrt(3)*axis=9.747840, overall=9.747840, rel_err=0.00e+00%
+[PASS] 6_known_1x_2x_combo_matches_analytic_sum: f1=25.0Hz/A1=4.0 + f2=50.0Hz/A2=2.0 -> expected~18.5605mm/s, got=18.6161mm/s, rel_err=0.299%
+[PASS] hann_npg_matches_independent_closed_form: reference npg=0.3746337891, independently recomputed=0.3746337891
+[PASS] frequency_resolution_equals_fs_over_n: Fs/N = 1.953125 Hz, got 1.953125 Hz (spec: 2000/1024 = 1.953125 Hz)
+[PASS] bin_8_equals_15p625_hz: bin 8 * 1.953125 = 15.625 Hz (spec: 15.625 Hz)
+[PASS] velocity_scales_as_inverse_of_2pi_f_in_amplitude_domain: same accel amplitude at 50.0Hz vs 100.0Hz -> velocity ratio=2.0011 (expected ~2.0 = 100/50, i.e. RMS_v ~ A/omega; ms_v itself is divided by omega^2 in the power domain, per step 8)
+[PASS] accel_single_axis_overall_equals_that_axis: accel X=3.532313 Overall=3.532313
+
+SUMMARY: 12 PASS, 0 FAIL, 12 total
