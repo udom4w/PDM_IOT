@@ -184,7 +184,14 @@
 #include <U8g2lib.h>
 #include <TinyGsmClient.h>
 #include <MQTT.h>  // joel-gaehwiler/MQTT (arduino-mqtt) -- supports QoS 0/1/2
-#include <ModbusMaster.h>
+// [RX-Byte-Diag, BUILD-ONLY] Sketch-local diagnostic fork of ModbusMaster
+// v2.0.1 (see ModbusMasterDiag.h/.cpp in this sketch folder) -- resolves via
+// quoted include to this exact file, not the installed global library at
+// C:\Users\HP\AppData\Local\Arduino15\user\libraries\ModbusMaster\, which is
+// untouched. Adds only read-only RX-byte-count accessors; every other
+// method/constant/timing/retry/CRC behavior is byte-for-byte identical to
+// stock.
+#include "ModbusMasterDiag.h"
 #include <ArduinoJson.h>
 #include <RTClib.h>
 #include <Preferences.h>   // NVS Flash -- runtime_hour persistence
@@ -205,6 +212,21 @@
 #include "vib_window.h"    // [M1B-3] time-based trend windows over the history ring
 #include "vib_slope.h"     // [M1B-4] timestamp-aware velocity slope (mm/s per s)
 #include "vib_ttw.h"       // [M1B-5] Time-To-Warning from velocity + slope
+
+// [PHASE1.5-S1/S3/S5] Network transport abstraction + manager + Wi-Fi transport.
+// Grouped with the other local module headers, and placed before the first
+// function in this file because NetworkMode_t/NetworkState_t are custom types
+// that appear as parameters/return values below (.ino auto-prototype rule).
+// The GPRS transport is NOT here: it necessarily lives in this .ino because it
+// wraps modem/gsmClient objects defined in this file -- see GprsTransport.
+#include "net_transport.h"
+#include "network_manager.h"
+#include "net_transport_wifi.h"
+// [PHASE1.5-WIFIMGR] SoftAP captive-portal provisioning. Both are ESP32 core
+// 3.3.11 facilities (no third-party WiFiManager library) -- see
+// docs/engineering/PHASE1_5_WIFI_MANAGER_PROVISIONING_PLAN.md.
+#include <WebServer.h>
+#include <DNSServer.h>
 
 // [v16.6 logging refactor] Centralized logging framework -- see log.h.
 // Included near the top for the same .ino auto-prototype reason as the
@@ -381,6 +403,25 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 #define MODBUS_BAUDRATE 115200
 #define MODBUS_SLAVE_ID 0x50
 
+// [S1] SINGLE SOURCE OF TRUTH for taskModbusRead()'s normal polling period.
+// Previously the value 250 appeared independently in three places: the
+// xFrequency initializer, the FIFO-marker enqueue rate limit, and -- implicitly,
+// as a calibration constant nobody could see from the call site -- inside every
+// "N reads" window (warmup, FAULT_LATCH holdoff). A period change therefore
+// meant editing one visible site and silently re-scaling the others.
+// [S3] Changed 250ms -> 500ms (4Hz -> 2Hz), per the completed
+// MODBUS-ROOT-CAUSE FORENSIC AUDIT: an experiment to test whether the
+// independently-confirmed (Sniffer V2, 46/46) intermittent no-response
+// behavior changes under reduced polling load. This is explicitly NOT a
+// root-cause fix. SENSOR_WARMUP_MS/SENSOR_WARMUP_RECONFIG_FAIL_MS/
+// MOTOR_RUN_FAULT_LATCH_HOLDOFF_MS are already S1-converted to explicit ms
+// durations and are unaffected. STUCK_THRESHOLD and MODBUS_OFFLINE_THRESHOLD
+// (below) are READ COUNTS, not durations, and were deliberately left
+// unconverted by S1 -- their effective real-world windows double as a direct
+// consequence of this change alone (1.25s->2.5s, 750ms->1500ms). Per the S3
+// scope, neither constant nor any watchdog/offline logic is touched here.
+#define MODBUS_POLL_PERIOD_MS 500UL
+
 // --- CTR4A01 Current Sensor (shared RS485 bus, multi-drop Modbus) [v16.6a] ---
 // Register map reused verbatim from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino
 #define CURRENT_SENSOR_ID   0x01     // CTR4A01 slave address
@@ -409,11 +450,13 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 #define REG_VRMS_Y 0x5C  // VRMSY: Y-axis velocity RMS (mm/s) §6.4.15  [DEPRECATED]
 #define REG_VRMS_Z 0x68  // VRMSZ: Z-axis velocity RMS (mm/s) §6.4.16  [DEPRECATED]
 #define REG_TEMPERATURE 0x40
-#define REG_FREQ_X 0x44  // Frequency X,Y,Z (0x44~0x46) per WTVB02 manual
-#define REG_CFX    0x47  // CFX=Accel Crest Factor X, KX=Kurtosis X (0x47~0x48) §6.4.14
-                         // CFY=0x53, CFZ=0x5F (ไม่ต่อเนื่อง -- อ่านแยก transaction ถ้าต้องการ)
-#define REG_CFY    0x53  // CFY=Accel Crest Factor Y, KY=Kurtosis Y (0x53~0x54) §6.4.15
-#define REG_CFZ    0x5F  // CFZ=Accel Crest Factor Z, KZ=Kurtosis Z (0x5F~0x60) §6.4.16
+// [FREQ/CF-Cleanup] REG_FREQ_X (0x44) and REG_CFX/REG_CFY/REG_CFZ (0x47/0x53/
+// 0x5F) REMOVED. Their reads only ever fed a REFERENCE-ONLY comparison
+// ([FREQ-SRC]/[CF-SRC] diagnostic logs, also removed) against the canonical
+// FIFO/DSP dominant-frequency and crest-factor values -- no product consumer
+// ever read the register-derived numbers. See VRMS_FREQ_CF_DEPENDENCY_AUDIT
+// for the full trace. VRMS registers (0x50/0x5C/0x68 above) are UNAFFECTED --
+// they remain the stuck-axis watchdog's only input.
 // [Phase2] REG_PEAK_X (0x3A) REMOVED -- no reader left after peak_velocity_*.
 
 // --- Sensor Re-config Registers (v15.7) ---
@@ -542,8 +585,12 @@ static constexpr const char* GPRS_PASS = "";
 #define RUNNING_WARMUP_MS     2500    // [v16.3z] ต้อง in-band ต่อเนื่อง 2.5s ก่อนเป็น RUNNING (กัน bounce/spurious)
 // [vNext] TEMPORARY startup-settling suppression for FAULT_LATCH ONLY -- does not
 // affect newState (STATE_WARNING/CRITICAL, buzzer, live telemetry all still see the
-// real transient), DEGLITCH, or the FIFO Broker. See g_motorRunFaultLatchHoldoff.
-#define MOTOR_RUN_FAULT_LATCH_HOLDOFF_READS  4   // suppress FAULT_LATCH for N reads (~1s @ 250ms) immediately after STARTING->RUNNING -- mechanical/vibration settling transient, not a real fault
+// real transient), DEGLITCH, or the FIFO Broker. See g_motorRunFaultLatchHoldoffUntilMs.
+// [S1] Was MOTOR_RUN_FAULT_LATCH_HOLDOFF_READS = 4 ("~1s @ 250ms"). Converted
+// from a READ COUNT to an explicit duration: 4 reads x 250ms = 1000ms, so the
+// window is byte-for-byte the same at the current cadence, but it no longer
+// silently re-scales if the polling period changes.
+#define MOTOR_RUN_FAULT_LATCH_HOLDOFF_MS  1000UL  // suppress FAULT_LATCH for this long immediately after STARTING->RUNNING -- mechanical/vibration settling transient, not a real fault
 // [Commit 3A] Confirmed-absence timeouts -- deliberately separate from
 // NO_PULSE_STOPPING_MS/FORCE_STOP_TIMEOUT_MS above, which are calibrated for
 // "no signal at all" (sub-second/2s). These instead bound "evidence is fresh
@@ -822,6 +869,13 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 // window fields (+1024 B total). Measured Analytics high-water was 2940 B
 // remaining, so the raise keeps the same margin rather than spending it.
 #define STACK_SIZE_ANALYTICS 8192   // Phase 3: +decision engine +classifyFault on stack
+// [PHASE1.5-MQTTWORKER] Provisional -- UNKNOWN, REQUIRES HARDWARE VALIDATION
+// (uxTaskGetStackHighWaterMark()). Starting estimate: STACK_SIZE_NETWORK minus
+// the ~2200B JSON-serialization allowance that stack budgeted for (this task
+// never calls serializeJson()), since it runs the same TLS/RSA-2048 handshake
+// path TinyGSM's peak in that comment was sized for. See
+// PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §10.
+#define STACK_SIZE_MQTT_WORKER 22528
 
 #define PRIORITY_MODBUS    5  // Highest priority (time-critical)
 #define PRIORITY_STATE     4  // State machine
@@ -830,6 +884,9 @@ l0PCpmCF8SZ8OXd/UfRIbLk=
 #define PRIORITY_NETWORK   2  // Network (can tolerate delays)
 #define PRIORITY_BUTTON    2  // Button handling
 #define PRIORITY_BUZZER    1  // Lowest priority
+// [PHASE1.5-MQTTWORKER] <= PRIORITY_NETWORK: mostly blocked on network I/O,
+// never needs to preempt Display/Analytics. See implementation plan §5.
+#define PRIORITY_MQTT_WORKER 1
 
 // --- Queue Sizes ---
 #define QUEUE_SIZE_SENSOR 5
@@ -1594,9 +1651,27 @@ GsmTLSClient gsmClient(modem);
 // Set to 2800 for comfortable headroom.
 MQTTClient mqttClient(2800);  // Phase 5: 2800->3400 (fault_score+uncertainty+final_state+alarm_class+weights)
 
+// [PHASE1.5-S3/S5] Network manager + Wi-Fi transport.
+// Declared here (before any function that references them) so the .ino
+// auto-prototype pass sees the types. The manager starts with NO transports
+// registered; registration happens in taskNetwork() once GprsTransport (which
+// is defined further down, after the modem functions it wraps) exists.
+//
+// [PHASE1.5-S7] g_wifiTransport is the DEFAULT active transport now
+// (NETWORK_WIFI_ONLY). Constructing it does not touch the radio -- the radio is
+// only started by WiFiTransport::begin() (see WiFiTransport::WiFiTransport()).
+VibNetworkManager g_netmgr;
+WiFiTransport  g_wifiTransport;
+
 // Display and Modbus
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, I2C_SCL_PIN, I2C_SDA_PIN);
-ModbusMaster modbus;
+// [RX-Byte-Diag, BUILD-ONLY] Type changed from ModbusMaster to
+// ModbusMasterDiag (sketch-local diagnostic fork) -- every existing call
+// site below (modbus.readHoldingRegisters(), modbus.begin(),
+// modbus.getResponseBuffer(), modbus.ku8MBSuccess, etc.) is untouched and
+// compiles/behaves identically; only the additive
+// getLastResponseByteCount()/getLastResponseBytes() accessors are new.
+ModbusMasterDiag modbus;
 
 // [Task 4.1] FIFO transport binding -- global/static storage, matching
 // Uart485Transport_Init()'s own documented lifetime precondition ("must
@@ -1618,6 +1693,12 @@ FifoTransport g_fifoTransport;
 // documented auto-prototype hazard). Intended to be removed once Task 4.2A
 // concludes.
 enum class BusOwnerDiag : uint8_t { NONE, MODBUS, FIFO };
+
+// [RX-Byte-Diag] Same auto-prototype hazard as BusOwnerDiag above -- this
+// enum is used as a parameter type by RxDiagBump()/logModbusRxByteDiag()
+// (defined much later, near modbusRcName()), so it must live here, before
+// the file's first function definition.
+enum RxDiagTxnIndex { kRxDiagT1a = 0, kRxDiagT1b, kRxDiagT1c, kRxDiagT2a, kRxDiagT7, kRxDiagTxnCount };
 
 // RTC
 RTC_DS3231 rtc;
@@ -1943,6 +2024,29 @@ typedef struct {
   uint8_t             qos;
 } MqttOutboundMsg_t;
 
+// [PHASE1.5-MQTTWORKER] mqttClient ownership state. Single-word enum, one
+// writer at a time by construction (taskNetwork writes IDLE->REQUESTED and
+// consumes RESULT_READY->IDLE; the worker writes REQUESTED->CONNECTING and
+// CONNECTING->RESULT_READY) -- matches the file's existing cross-core rule
+// for enum/atomic state instead of a shared boolean flag with multiple
+// writers. See docs/engineering/PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md.
+typedef enum {
+  MQTT_OWNER_IDLE = 0,        // no attempt in flight; taskNetwork free to touch mqttClient
+  MQTT_OWNER_REQUESTED = 1,   // taskNetwork posted a request; worker has not dequeued yet
+  MQTT_OWNER_CONNECTING = 2,  // worker owns mqttClient exclusively (resetSecureSession+connect[+subscribe])
+  MQTT_OWNER_RESULT_READY = 3 // worker posted a result; taskNetwork has not consumed yet
+} MqttOwnerState_t;
+
+// Result payload posted by the worker back to taskNetwork -- mirrors exactly
+// the data the former inline connect block already inspected (lastError(),
+// returnCode(), and the subscribe() return value).
+typedef struct {
+  bool success;        // mqttClient.connect() outcome
+  int  lwmqttError;     // mqttClient.lastError() at the moment connect() returned
+  int  mqttReturnCode;  // mqttClient.returnCode() at the moment connect() returned
+  bool subscribeOk;     // mqttClient.subscribe() outcome (only meaningful if success)
+} MqttConnectResult_t;
+
 // [Broker, Commit 1] Cross-core/cross-task FIFO trigger intent -- the SDS
 // SS14.1-specified "xQueueSend/xQueueReceive, depth 1" request-submission
 // mechanism, hosted here in the .ino rather than in fifo_driver.cpp because
@@ -2127,6 +2231,7 @@ TaskHandle_t taskHandleNetwork   = NULL;
 TaskHandle_t taskHandleButton    = NULL;
 TaskHandle_t taskHandleBuzzer    = NULL;
 TaskHandle_t taskHandleAnalytics = NULL;  // Phase 2: analytics task
+TaskHandle_t taskHandleMqttWorker = NULL; // [PHASE1.5-MQTTWORKER] owns mqttClient.connect()
 
 // Queue Handles
 QueueHandle_t queueSensorData = NULL;
@@ -2138,6 +2243,16 @@ QueueHandle_t queueFifoTrigger = NULL;  // [Broker, Commit 1] FIFO trigger inten
 // [ARCH-INVARIANT] The Trigger Broker's single admission point. Every
 // producer sends here; taskModbusRead()'s drain block is the only reader.
 // See docs/FIFO_TRIGGER_BROKER_INVARIANTS.md.
+
+// [PHASE1.5-MQTTWORKER] Request/result hand-off between taskNetwork and the
+// MQTT connect worker. Depth 1 each -- at most one connect attempt is ever
+// in flight (taskNetwork only posts a request while g_mqttOwner==IDLE, see
+// PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §3). No mutex around mqttClient
+// itself: ownership is transferred by g_mqttOwner state, not by a lock held
+// across the blocking connect() call.
+QueueHandle_t queueMqttConnectRequest = NULL;  // taskNetwork -> worker, empty/token payload
+QueueHandle_t queueMqttConnectResult  = NULL;  // worker -> taskNetwork, MqttConnectResult_t
+static volatile MqttOwnerState_t g_mqttOwner = MQTT_OWNER_IDLE;
 
 // Mutex Handles
 SemaphoreHandle_t mutexVibData    = NULL;
@@ -2378,11 +2493,40 @@ static uint32_t g_rebootCount        = 0;           // สะสมข้าม�
 // Modbus offline detection
 static volatile uint8_t  g_modbusConsecErrors = 0;  // ??? error ?????????
 static volatile bool     g_sensorOffline      = false; // true = sensor ?????/??????????
-static volatile uint8_t  g_sensorWarmupReads  = 0;   // [v16.3b] suppress spike N reads หลัง sensor กลับ online
-// [vNext] TEMPORARY: reads remaining to suppress FAULT_LATCH after RUNNING transition
-// (settling transient, distinct from the sensor-reconfig warmup above) -- FAULT_LATCH
-// qualification only, nothing else reads this.
-static volatile uint8_t  g_motorRunFaultLatchHoldoff = 0;
+
+// [S1] WARMUP / HOLDOFF: READ COUNT -> millis() DEADLINE
+// ---------------------------------------------------------------------------
+// Both windows were "N reads" counters ticked down once per sensor-data queue
+// entry in taskStateMachine, so their real duration was N x the polling period
+// -- a coupling visible nowhere near the call sites that read them. They are
+// now absolute millis() deadlines: 0 means "not armed", any other value is the
+// instant the window expires.
+//
+// Durations are UNCHANGED at the current 250ms cadence:
+//   warmup recovery   8 reads x 250ms = 2000ms  -> SENSOR_WARMUP_MS
+//   warmup reconfig  16 reads x 250ms = 4000ms  -> SENSOR_WARMUP_RECONFIG_FAIL_MS
+//   FAULT_LATCH       4 reads x 250ms = 1000ms  -> MOTOR_RUN_FAULT_LATCH_HOLDOFF_MS
+//
+// Comparisons use the signed-difference form so they stay correct across the
+// millis() rollover at ~49.7 days, which the previous counters were immune to
+// by construction and which a naive `millis() < deadline` would reintroduce.
+#define SENSOR_WARMUP_MS                2000UL   // was 8 reads  @250ms [v16.3b/c]
+#define SENSOR_WARMUP_RECONFIG_FAIL_MS  4000UL   // was 16 reads @250ms [v16.3m]
+
+static volatile uint32_t g_sensorWarmupUntilMs = 0;  // [v16.3b] suppress spike after sensor comes back online
+// [vNext] TEMPORARY: deadline until which FAULT_LATCH is suppressed after the
+// RUNNING transition (settling transient, distinct from the sensor-reconfig
+// warmup above) -- FAULT_LATCH qualification only, nothing else reads this.
+static volatile uint32_t g_motorRunFaultLatchHoldoffUntilMs = 0;
+
+// The armed-and-not-yet-expired tests for these two deadlines are defined next
+// to anaSensorHealthy(), their first consumer -- NOT here. Reason: .ino
+// auto-prototype. arduino-cli inserts every generated prototype at the file's
+// FIRST function definition, and parseTrendPersistence() takes a
+// TrendPersistence_t* whose typedef closes further down; defining a function
+// here would move that insertion point above the typedef and break the build
+// with "'TrendPersistence_t' has not been declared". Same hazard the
+// BusOwnerDiag / RxDiagTxnIndex enums are placed early to avoid.
 
 // -- Velocity Peak Holding (Core 0 only -- taskModbusRead writes, taskNetwork reads+resets) --
 // v15.0: เก็บ vel_peak_overall (true peak mm/s = raw/100) แทน rms_overall (ที่แปลงแล้ว)
@@ -2433,24 +2577,18 @@ constexpr uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10
 #define CURRENT_EMA_ALPHA           0.25f
 
 // ============================================================================
-// TEMPERATURE HISTORY RING  [Phase2]
+// [Temperature-trend cleanup, Option 2] TEMPERATURE HISTORY RING removed.
+// g_trendBuf -> g_tempBuf/g_tempHead (temp_slope removal, Option 1) ->
+// g_tempCount/TEMP_BUF_SIZE/TEMP_WINDOW_SAMPLES/TEMP_MIN_SAMPLES (this
+// change): the whole lineage is gone. Its only remaining consumer,
+// window_samples/trend_window_s, was confirmed orphaned end-to-end by a
+// live VPS audit (parsed and written to InfluxDB, read by zero Grafana
+// dashboards/alerts/backend code -- same finding as temp_slope). TEMP 0x0040
+// polling itself, and the trend-persistence stop/resume policy
+// (g_trendPersistence and everything under it, including g_tempAtStop /
+// coldStart / g_lastResumeGapS -> /trend's trend_gap_s), are untouched --
+// see that policy's own block for what remains live.
 // ============================================================================
-// Replaces g_trendBuf, which mixed four unrelated concerns in one struct
-// (legacy VRMS rms, legacy VPEAK peak, temperature, freq_ratio_x/y/z). The
-// first, second and fourth are gone; temperature is the only survivor and it
-// gets a plain float ring -- 240 samples @ 4 Hz = 60 s of history, 960 B
-// (against 5.7 KB for the struct it replaces).
-// Written by Core 0 (taskStateMachine), read by Core 1 (calcTemperatureTrend).
-// Plain float array + volatile head/count -- same cross-core convention as the
-// current ring below; float and uint16 reads are atomic on Xtensa.
-// ============================================================================
-#define TEMP_BUF_SIZE        240    // samples (60 s @ 4 Hz)
-#define TEMP_WINDOW_SAMPLES  120    // samples in the slope window (30 s)
-#define TEMP_MIN_SAMPLES      20    // minimum before a slope is reported (5 s)
-
-static float             g_tempBuf[TEMP_BUF_SIZE];
-static volatile uint16_t g_tempHead  = 0;
-static volatile uint16_t g_tempCount = 0;
 
 // ── [v16.3v] NVS Provisioning (relocated after struct definitions) ──
 // ── [v16.3v] NVS Provisioning System ─────────────────────────────────────
@@ -2468,6 +2606,21 @@ static volatile uint16_t g_tempCount = 0;
 #define CFG_MAGIC_KEY   "cfg_magic"
 #define CFG_MAGIC_VAL   0xCF9A01UL   // ถ้า magic ตรง = config ถูก set แล้ว
 #define CFG_KEY_TREND   "cfg_trend"  // [v16.3ab] trend persistence policy (0-4)
+// [PHASE1.5-S7] Wi-Fi + network-mode configuration. Same namespace, same magic
+// gate, same load point as every key above. NVS key names are <=15 chars.
+// Credentials live ONLY in NVS -- never in source, never in a log line, never
+// in an MQTT payload.
+#define CFG_KEY_WIFI_SSID "cfg_wifi_ssid"
+#define CFG_KEY_WIFI_PASS "cfg_wifi_pass"
+#define CFG_KEY_NETMODE   "cfg_netmode"
+// [PHASE1.5-WIFIMGR] Boot-time Wi-Fi association failure counter. Same
+// namespace/magic/load point as every key above -- not a new store. Counts
+// only taskNetwork's own boot-time association wait (.ino ~7630-7652);
+// ordinary runtime reconnects never touch this key. NVS keys are capped at
+// 15 chars (see the note above) -- "cfg_wifi_fail_count" does not fit, so
+// the on-flash key is abbreviated; the in-RAM global keeps the full name.
+// See docs/engineering/PHASE1_5_WIFI_MANAGER_PROVISIONING_PLAN.md §7.2.
+#define CFG_KEY_WIFI_FAILCNT "cfg_wifi_fcnt"
 
 // [v16.3ab] Point 3: Trend persistence policy — ปรับได้ต่อชนิดเครื่องจักร (pump/conveyor/compressor/mixer)
 typedef enum {
@@ -2519,6 +2672,23 @@ static char g_cfgSensor[16]  = "vb01";
 static int  g_cfgRpm         = 1500;
 static char g_cfgApn[32]     = "internet";
 
+// [PHASE1.5-S7] Wi-Fi credentials + network mode, populated from NVS by
+// loadNvsConfig(). Deliberately EMPTY by default: there is no hard-coded SSID
+// or passphrase anywhere in this firmware. An empty SSID makes the Wi-Fi
+// transport refuse to start (and log why) -- it never falls back to cellular.
+static char g_cfgWifiSsid[33] = "";   // 32-char SSID + NUL
+static char g_cfgWifiPass[64] = "";   // 63-char WPA2 PSK + NUL
+// Runtime network mode. DEFAULT = NETWORK_WIFI_ONLY (Step 7): the damaged
+// A7670 must never be initialised, so Wi-Fi is the default even when NVS holds
+// no configuration at all.
+static int  g_cfgNetMode      = (int)NETWORK_WIFI_ONLY;
+// [PHASE1.5-WIFIMGR] Consecutive boot-time Wi-Fi association failures.
+// Incremented only by taskNetwork's boot-time association wait on timeout
+// (.ino ~7630-7652); reset to 0 on any boot-time success and whenever
+// Wi-Fi Manager mode is entered for any reason. Threshold checked in
+// setup() -- see WIFI_MGR_FAIL_THRESHOLD below.
+static int  g_cfgWifiFailCount = 0;
+
 // โหลด config จาก NVS ถ้ามี (เรียกใน setup() ก่อน task create)
 static void loadNvsConfig() {
   Preferences p;
@@ -2535,9 +2705,17 @@ static void loadNvsConfig() {
   g_cfgRpm = p.getInt(CFG_KEY_RPM, g_cfgRpm);
   strncpy(g_cfgApn,     p.getString(CFG_KEY_APN,     g_cfgApn).c_str(), sizeof(g_cfgApn)-1);
   g_trendPersistence = (TrendPersistence_t)p.getInt(CFG_KEY_TREND, (int)g_trendPersistence);  // [v16.3ab]
+  // [PHASE1.5-S7] Wi-Fi credentials + network mode.
+  strncpy(g_cfgWifiSsid, p.getString(CFG_KEY_WIFI_SSID, g_cfgWifiSsid).c_str(), sizeof(g_cfgWifiSsid)-1);
+  strncpy(g_cfgWifiPass, p.getString(CFG_KEY_WIFI_PASS, g_cfgWifiPass).c_str(), sizeof(g_cfgWifiPass)-1);
+  g_cfgNetMode = p.getInt(CFG_KEY_NETMODE, g_cfgNetMode);
+  g_cfgWifiFailCount = p.getInt(CFG_KEY_WIFI_FAILCNT, g_cfgWifiFailCount);  // [PHASE1.5-WIFIMGR]
   p.end();
-  Serial.printf("[CFG] NVS config loaded: plant=%s machine=%s rpm=%d apn=%s\n",
-                g_cfgPlant, g_cfgMachine, g_cfgRpm, g_cfgApn);
+  // The passphrase is NEVER printed -- only whether one is present.
+  Serial.printf("[CFG] NVS config loaded: plant=%s machine=%s rpm=%d apn=%s netmode=%d wifi_ssid=%s wifi_pass=%s\n",
+                g_cfgPlant, g_cfgMachine, g_cfgRpm, g_cfgApn, g_cfgNetMode,
+                (g_cfgWifiSsid[0] ? g_cfgWifiSsid : "<empty>"),
+                (g_cfgWifiPass[0] ? "<set>" : "<empty>"));
 }
 
 // บันทึก config ลง NVS
@@ -2557,10 +2735,28 @@ static bool saveNvsConfig(const char* plant, const char* machine,
   p.putInt   (CFG_KEY_RPM,     rpm);
   p.putString(CFG_KEY_APN,     apn);
   p.putInt   (CFG_KEY_TREND,   (int)g_trendPersistence);  // [v16.3ab] อ่าน global ตรง ไม่ต้องแก้ signature
+  // [PHASE1.5-S8] Wi-Fi provisioning. Same convention as CFG_KEY_TREND above:
+  // written straight from the globals, so saveNvsConfig()'s signature (and its
+  // single existing call site) stay unchanged. The passphrase is written to
+  // NVS but is never echoed back by any command -- see runConfigMode().
+  p.putString(CFG_KEY_WIFI_SSID, g_cfgWifiSsid);
+  p.putString(CFG_KEY_WIFI_PASS, g_cfgWifiPass);
+  p.putInt   (CFG_KEY_NETMODE,   g_cfgNetMode);
+  p.putInt   (CFG_KEY_WIFI_FAILCNT, g_cfgWifiFailCount);  // [PHASE1.5-WIFIMGR]
   p.putUInt  (CFG_MAGIC_KEY,   CFG_MAGIC_VAL);    // arm magic หลังเขียนครบ
   p.end();
   Serial.printf("[NVS_END]   %lu\n", (unsigned long)millis());
   return true;
+}
+
+// [PHASE1.5-S8] Human-readable name for the stored network mode.
+// Any value that is not exactly NETWORK_GPRS_ONLY is reported as WIFI_ONLY,
+// because that is exactly how taskNetwork() resolves it (fail-safe: an
+// unknown/corrupt NVS value must never select the damaged A7670).
+static const char* netModeName(int mode) {
+  if (mode == (int)NETWORK_GPRS_ONLY) return "GPRS_ONLY";
+  if (mode == (int)NETWORK_WIFI_ONLY) return "WIFI_ONLY";
+  return "WIFI_ONLY (fail-safe: unrecognised stored value)";
 }
 
 // Config Mode — รับคำสั่งผ่าน Serial
@@ -2584,12 +2780,21 @@ static void runConfigMode() {
   Serial.println("|   set sensor_id   <value>                              |");
   Serial.println("|   set rated_rpm   <value>                              |");
   Serial.println("|   set apn         <value>                              |");
+  Serial.println("|   set wifi_ssid   <value>   [PHASE1.5] Wi-Fi SSID      |");
+  Serial.println("|   set wifi_pass   <value>   [PHASE1.5] never displayed |");
+  Serial.println("|   set wifi_pass   --clear   [PHASE1.5] erase passphrase|");
+  Serial.println("|   set netmode     wifi_only | gprs_only                |");
   Serial.println("|   show     — แสดงค่าปัจจุบัน                           |");
   Serial.println("|   save     — บันทึกและ reboot                           |");
   Serial.println("|   cancel   — ออกโดยไม่บันทึก (reboot ปกติ)              |");
   Serial.println("+========================================================+");
-  Serial.printf("Current: plant=%s machine=%s sensor=%s rpm=%d apn=%s\n\n",
+  Serial.printf("Current: plant=%s machine=%s sensor=%s rpm=%d apn=%s\n",
                 tmpPlant, tmpMachine, tmpSensor, tmpRpm, tmpApn);
+  // The passphrase is NEVER printed -- only whether one is stored.
+  Serial.printf("Network: netmode=%s wifi_ssid=%s wifi_pass=%s\n\n",
+                netModeName(g_cfgNetMode),
+                (g_cfgWifiSsid[0] ? g_cfgWifiSsid : "<empty>"),
+                (g_cfgWifiPass[0] ? "<set>" : "<empty>"));
 
   String inputBuf = "";
   while (true) {
@@ -2631,6 +2836,11 @@ static void runConfigMode() {
       Serial.printf("  rated_rpm  = %d\n", tmpRpm);
       Serial.printf("  apn        = %s\n", tmpApn);
       Serial.printf("  trend_persistence = %s\n", trendPersistenceStr());
+      // [PHASE1.5-S8] Network provisioning. wifi_pass reports presence only --
+      // the stored passphrase is never rendered by any command.
+      Serial.printf("  netmode    = %s\n", netModeName(g_cfgNetMode));
+      Serial.printf("  wifi_ssid  = %s\n", (g_cfgWifiSsid[0] ? g_cfgWifiSsid : "<empty>"));
+      Serial.printf("  wifi_pass  = %s\n", (g_cfgWifiPass[0] ? "<set>" : "<empty>"));
     } else if (inputBuf.startsWith("set ")) {
       String rest = inputBuf.substring(4);
       rest.trim();
@@ -2651,6 +2861,43 @@ static void runConfigMode() {
         if (parseTrendPersistence(val, &tp)) { g_trendPersistence = tp; Serial.printf("  trend_persistence = %s\n", trendPersistenceStr()); }
         else Serial.println("  Error: trend_persistence = always_resume|clear_10m|clear_30m|clear_1h|always_clear");
       }
+      // ---------------- [PHASE1.5-S8] Wi-Fi provisioning ----------------
+      // Same "write the global directly" convention as trend_persistence
+      // above; saveNvsConfig() persists the globals. Config Mode always
+      // reboots (save or cancel), so no in-RAM rollback is needed.
+      else if (key == "wifi_ssid") {
+        val.toCharArray(g_cfgWifiSsid, sizeof(g_cfgWifiSsid));
+        Serial.printf("  wifi_ssid  = %s\n",
+                      (g_cfgWifiSsid[0] ? g_cfgWifiSsid : "<empty>"));
+      }
+      else if (key == "wifi_pass") {
+        if (val == "--clear") {
+          g_cfgWifiPass[0] = '\0';
+        } else {
+          val.toCharArray(g_cfgWifiPass, sizeof(g_cfgWifiPass));
+        }
+        // Echo presence ONLY -- never the value, and never its length.
+        Serial.printf("  wifi_pass  = %s\n", (g_cfgWifiPass[0] ? "<set>" : "<empty>"));
+      }
+      else if (key == "netmode") {
+        String m = val; m.toLowerCase();
+        if (m == "wifi_only") {
+          g_cfgNetMode = (int)NETWORK_WIFI_ONLY;
+          Serial.printf("  netmode    = %s\n", netModeName(g_cfgNetMode));
+        } else if (m == "gprs_only") {
+          g_cfgNetMode = (int)NETWORK_GPRS_ONLY;
+          Serial.printf("  netmode    = %s\n", netModeName(g_cfgNetMode));
+          Serial.println("  ! WARNING: GPRS_ONLY powers and initialises the A7670 modem.");
+          Serial.println("  ! The A7670 on this prototype is PHYSICALLY DAMAGED -- do not");
+          Serial.println("  ! select this mode until replacement hardware is fitted.");
+        } else if (m == "auto") {
+          // NETWORK_AUTO exists in the enum but is refused at runtime; do not
+          // let an operator store a value the firmware will not honour.
+          Serial.println("  Error: netmode auto is NOT implemented in this build (refused at runtime)");
+        } else {
+          Serial.println("  Error: netmode = wifi_only | gprs_only");
+        }
+      }
       else { Serial.printf("  Unknown key: %s\n", key.c_str()); }
 
     } else if (inputBuf == "save") {
@@ -2660,7 +2907,11 @@ static void runConfigMode() {
         Serial.printf("  machine_id = %s\n", tmpMachine);
         Serial.printf("  sensor_id  = %s\n", tmpSensor);
         Serial.printf("  rated_rpm  = %d\n", tmpRpm);
-        Serial.printf("  apn        = %s\n\n", tmpApn);
+        Serial.printf("  apn        = %s\n", tmpApn);
+        // [PHASE1.5-S8] Confirm what was stored WITHOUT revealing the secret.
+        Serial.printf("  netmode    = %s\n", netModeName(g_cfgNetMode));
+        Serial.printf("  wifi_ssid  = %s\n", (g_cfgWifiSsid[0] ? g_cfgWifiSsid : "<empty>"));
+        Serial.printf("  wifi_pass  = %s\n\n", (g_cfgWifiPass[0] ? "<set>" : "<empty>"));
         Serial.println("[CONFIG] Rebooting in 2 seconds...");
         delay(2000);
         ESP.restart();
@@ -2680,6 +2931,183 @@ static void runConfigMode() {
 }
 
 // ── END NVS Provisioning ───────────────────────────────────────────────────
+
+// ============================================================================
+// [PHASE1.5-WIFIMGR] Wi-Fi Manager / SoftAP provisioning
+// docs/engineering/PHASE1_5_WIFI_MANAGER_PROVISIONING_PLAN.md
+//
+// Runs entirely inside setup(), before any FreeRTOS task exists and before
+// esp_task_wdt_reconfigure() runs -- the same placement as runConfigMode()
+// above, and for the same reason: an unbounded human-interaction wait must
+// never happen on a task subscribed to the 30s TWDT. This function is never
+// called from taskNetwork or any other task. It never returns normally --
+// every path ends in ESP.restart().
+//
+// GPRS/A7670: this function references only WiFi (AP mode), WebServer,
+// DNSServer, and the existing g_cfg* NVS globals. It contains zero
+// references to modem, GsmTLSClient, SerialAT, or any AT-command path.
+// ============================================================================
+
+// [PHASE1.5-WIFIMGR] Reuses runConfigMode()'s own proven idle-timeout value
+// (.ino "[CONFIG] Timeout" 300000UL) rather than inventing a second timeout
+// concept in this firmware. See plan §4/§7.5-7.6.
+static const uint32_t WIFI_MGR_IDLE_TIMEOUT_MS = 300000UL;  // 5 minutes
+// [PHASE1.5-WIFIMGR] Bounded auto-re-entry threshold -- matches this
+// firmware's own existing "3 consecutive failures" convention (the MQTT
+// worker's mqttFailCount>=3 escalation). See plan §7.2.
+static const int WIFI_MGR_FAIL_THRESHOLD = 3;
+// [PHASE1.5-WIFIMGR][SECRET-POLICY] Fixed, documented default AP passphrase
+// (plan §4/§7.5): deliberately NOT derived from the MAC-based SSID (which is
+// broadcast in the clear -- a passphrase computable from a visible SSID is
+// not a passphrase). This is friction against casual/accidental association
+// during the provisioning window, not a cryptographic guarantee against a
+// targeted attacker; the real trust boundary is physical/site access, the
+// same one runConfigMode() already relies on. Printed to the boot serial log
+// only (readable only with physical/USB access to this same boundary) --
+// never sent over any network channel, never in the served HTML.
+static const char* WIFI_MGR_AP_PASSWORD = "PROMLOGIX-SETUP";
+
+static WebServer g_wifiMgrServer(80);
+static DNSServer g_wifiMgrDns;
+static volatile bool g_wifiMgrSaved = false;
+
+static String wifiMgrHtmlEscape(const String &s) {
+  String out;
+  out.reserve(s.length());
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if      (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '"') out += "&quot;";
+    else                out += c;
+  }
+  return out;
+}
+
+// GET / -- the configuration form. Never renders any password value.
+static void wifiMgrHandleRoot() {
+  String html;
+  html.reserve(900);
+  html += "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<title>PROMLOGIX Wi-Fi Setup</title></head><body>";
+  html += "<h2>PROMLOGIX Wi-Fi Setup</h2>";
+  html += "<p>Machine: " + wifiMgrHtmlEscape(String(g_cfgMachine)) + "</p>";
+  html += "<p>Current network mode: " + String(netModeName(g_cfgNetMode)) + "</p>";
+  html += "<form method='POST' action='/save'>";
+  html += "SSID:<br><input type='text' name='ssid' maxlength='32' required><br><br>";
+  html += "Password:<br><input type='password' name='pass' maxlength='63'><br><br>";
+  html += "<input type='submit' value='Save and Reboot'>";
+  html += "</form></body></html>";
+  g_wifiMgrServer.send(200, "text/html", html);
+}
+
+// POST /save -- basic validation, write the SAME globals runConfigMode()
+// writes, reuse the SAME saveNvsConfig(). No password value is ever placed
+// into a Serial.print(), the HTTP response, or any other output.
+static void wifiMgrHandleSave() {
+  String ssid = g_wifiMgrServer.arg("ssid");
+  String pass = g_wifiMgrServer.arg("pass");
+  ssid.trim();
+
+  if (ssid.length() == 0 || ssid.length() >= sizeof(g_cfgWifiSsid)) {
+    g_wifiMgrServer.send(400, "text/html",
+      "<html><body><h3>Invalid SSID</h3><a href='/'>Back</a></body></html>");
+    return;
+  }
+  if (pass.length() >= sizeof(g_cfgWifiPass)) {
+    g_wifiMgrServer.send(400, "text/html",
+      "<html><body><h3>Password too long</h3><a href='/'>Back</a></body></html>");
+    return;
+  }
+
+  ssid.toCharArray(g_cfgWifiSsid, sizeof(g_cfgWifiSsid));
+  pass.toCharArray(g_cfgWifiPass, sizeof(g_cfgWifiPass));
+  g_cfgNetMode       = (int)NETWORK_WIFI_ONLY;   // [Item 7] forced, never GPRS from this UI
+  g_cfgWifiFailCount = 0;                        // [Item 7 / §7.2] fresh allowance on new credentials
+
+  bool ok = saveNvsConfig(g_cfgPlant, g_cfgMachine, g_cfgSensor, g_cfgRpm, g_cfgApn);
+  if (!ok) {
+    g_wifiMgrServer.send(500, "text/html",
+      "<html><body><h3>Failed to write NVS</h3><a href='/'>Back</a></body></html>");
+    return;
+  }
+
+  // Same "presence only" convention as runConfigMode()'s own show/set output
+  // -- SSID is not a secret and is echoed; the password value never is.
+  Serial.printf("[WIFIMGR] wifi_ssid  = %s\n", g_cfgWifiSsid);
+  Serial.println("[WIFIMGR] wifi_pass  = <set>");
+  Serial.printf("[WIFIMGR] netmode    = %s\n", netModeName(g_cfgNetMode));
+
+  g_wifiMgrServer.send(200, "text/html",
+    "<html><body><h3>Saved. Rebooting...</h3>"
+    "<p>wifi_ssid = " + wifiMgrHtmlEscape(ssid) + "</p>"
+    "<p>wifi_pass = &lt;set&gt;</p>"
+    "<p>netmode = WIFI_ONLY</p></body></html>");
+  g_wifiMgrSaved = true;
+}
+
+// Captive-portal redirect: any unrecognised path bounces to the form, which
+// is what makes phones/laptops auto-pop a "sign in to network" prompt.
+static void wifiMgrHandleNotFound() {
+  g_wifiMgrServer.sendHeader("Location", "/", true);
+  g_wifiMgrServer.send(302, "text/plain", "");
+}
+
+static void runWifiManagerMode() {
+  char apSsid[40];
+  uint64_t mac = ESP.getEfuseMac();
+  // [Item 5] deterministic, device-specific, available before any cfg_* field
+  // is meaningful (eFuse MAC exists regardless of NVS state).
+  snprintf(apSsid, sizeof(apSsid), "PROMLOGIX-SETUP-%06X", (unsigned)(mac & 0xFFFFFFUL));
+
+  Serial.println("\n+========================================================+");
+  Serial.println("|         WI-FI MANAGER / SOFTAP PROVISIONING            |");
+  Serial.println("+========================================================+");
+  Serial.printf("[WIFIMGR] Starting SoftAP: %s\n", apSsid);
+  Serial.printf("[WIFIMGR] AP password: %s\n", WIFI_MGR_AP_PASSWORD);
+  Serial.println("[WIFIMGR] Connect, then browse to http://192.168.4.1/");
+  Serial.println("[WIFIMGR] 5-minute idle timeout reboots without changing stored credentials");
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(apSsid, WIFI_MGR_AP_PASSWORD);
+  IPAddress apIP = WiFi.softAPIP();
+
+  g_wifiMgrDns.start(53, "*", apIP);
+  g_wifiMgrServer.on("/", HTTP_GET, wifiMgrHandleRoot);
+  g_wifiMgrServer.on("/save", HTTP_POST, wifiMgrHandleSave);
+  g_wifiMgrServer.onNotFound(wifiMgrHandleNotFound);
+  g_wifiMgrServer.begin();
+
+  g_wifiMgrSaved = false;
+  uint32_t start = millis();
+  // [WATCHDOG SAFETY] No task/TWDT exists yet at this point in setup() (see
+  // header comment above) -- this loop is bounded by WIFI_MGR_IDLE_TIMEOUT_MS
+  // or by a successful save, and services both the DNS and HTTP servers on
+  // every iteration; it is not an unbounded/unserviced loop.
+  while (!g_wifiMgrSaved && (millis() - start) < WIFI_MGR_IDLE_TIMEOUT_MS) {
+    g_wifiMgrDns.processNextRequest();
+    g_wifiMgrServer.handleClient();
+    delay(2);
+  }
+
+  if (g_wifiMgrSaved) {
+    Serial.println("[WIFIMGR] Credentials saved -- rebooting into NETWORK_WIFI_ONLY");
+    delay(500);   // let the HTTP response finish flushing before teardown
+  } else {
+    // [Item 8] idle timeout: stop SoftAP, reboot, stored credentials
+    // untouched (g_cfgWifiFailCount was only reset if a save actually
+    // happened -- the failure counter that got the device here, if any,
+    // is left exactly as loadNvsConfig() found it).
+    Serial.println("[WIFIMGR] Idle timeout -- rebooting, no changes saved");
+  }
+
+  g_wifiMgrServer.stop();
+  g_wifiMgrDns.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  ESP.restart();   // ไม่ return
+}
 
 // --- Current Trend Buffer Globals (Core 0 writes / Core 1 reads) [v16.6a] ---
 // Same cross-core convention as g_trendBuf above: plain float array + volatile
@@ -2812,14 +3240,18 @@ static void mqttCommandCallback(String &topic, String &payload) {
 
 // -- TrendResult_t -- complete output struct -------------------------------
 typedef struct {
-  // [Phase2] Only the two slopes that still have a live source and a live
-  // consumer survive. Removed: rms_slope, trend_dir, spike_count, ttw_hours
-  // (legacy VRMS/VPEAK), freq_drift_x/y/z + freq_alert (freq_ratio pipeline),
+  // [Phase2] Removed: rms_slope, trend_dir, spike_count, ttw_hours (legacy
+  // VRMS/VPEAK), freq_drift_x/y/z + freq_alert (freq_ratio pipeline),
   // slope_1s/10s/60s + slope_ready_* + stddev_1min + max_rms_10min (slot
   // cascade) and ema_dir/ema_rms/ema_delta (legacy EMA).
-  float    temp_slope;      // degC per sample -- TEMPERATURE register 0x40
+  // [temp_slope removal, Option 1] temp_slope removed -- confirmed orphaned
+  // (VPS audit: parsed and written to InfluxDB's vibration_device_health
+  // measurement, but read by zero Grafana dashboards, zero alerts, zero
+  // backend/API code).
+  // [Temperature-trend cleanup, Option 2] window_samples removed too, by
+  // the same VPS-audit standard (trend_window_s, its sole publish, had the
+  // same zero-consumer finding).
   float    current_slope;   // [v16.6a] A per second (CTR4A01, 500ms samples)
-  uint16_t window_samples;  // samples in the temperature window (debug)
 } TrendResult_t;
 
 static TrendResult_t g_trendResult = { 0 };  // ?? trend ??????
@@ -2938,13 +3370,36 @@ static bool     g_diagSignalPresentInit = false;  // suppress the very first (bo
 // [v16.3ab/ac] Point 1: readiness เป็น derived state ที่ประกอบจาก predicate แยกโดเมน
 //   แต่ละโดเมนไม่รู้เรื่องกัน (RPM ไม่รู้เรื่อง sensor, sensor ไม่รู้เรื่อง vrms) — เพิ่มโดเมนใหม่
 //   (current/temp/power) = เพิ่ม predicate 1 ตัว + 1 บรรทัดใน analysisReason() ไม่ต้องแก้ที่อื่น
-static inline bool anaSensorHealthy() { return !g_sensorOffline && (g_sensorWarmupReads == 0); }
+// [S1] Armed-and-not-yet-expired tests for the two millis() deadlines declared
+// near g_sensorWarmupUntilMs. Deliberately the ONLY way those windows are read,
+// so no call site has to know they are time-based rather than counted. Defined
+// here rather than beside the variables because of the .ino auto-prototype
+// hazard documented at their declaration. Signed-difference comparison keeps
+// them correct across the millis() rollover.
+static inline bool sensorWarmupActive() {
+  return (g_sensorWarmupUntilMs != 0) &&
+         ((int32_t)(millis() - g_sensorWarmupUntilMs) < 0);
+}
+static inline bool motorRunFaultLatchHoldoffActive() {
+  return (g_motorRunFaultLatchHoldoffUntilMs != 0) &&
+         ((int32_t)(millis() - g_motorRunFaultLatchHoldoffUntilMs) < 0);
+}
+// Remaining window in ms, for diagnostics only (replaces printing a read count).
+static inline uint32_t sensorWarmupRemainingMs() {
+  return sensorWarmupActive() ? (uint32_t)(g_sensorWarmupUntilMs - millis()) : 0UL;
+}
+static inline uint32_t motorRunFaultLatchHoldoffRemainingMs() {
+  return motorRunFaultLatchHoldoffActive()
+           ? (uint32_t)(g_motorRunFaultLatchHoldoffUntilMs - millis()) : 0UL;
+}
+
+static inline bool anaSensorHealthy() { return !g_sensorOffline && !sensorWarmupActive(); }
 static inline bool anaMotorRunning()  { return g_motorRunState == MOTOR_RUNNING; }  // warmup baked-in (v16.3z)
 // future: static inline bool anaCurrentHealthy() {...}  anaTempHealthy() {...}
 
 static AnalysisReason_t analysisReason() {
   if (g_sensorOffline)            return ANA_FRZ_SENSOR_OFFLINE;
-  if (g_sensorWarmupReads > 0)    return ANA_FRZ_RECONFIG;
+  if (sensorWarmupActive())       return ANA_FRZ_RECONFIG;
   switch (g_motorRunState) {
     case MOTOR_STOPPED:  return ANA_FRZ_STOPPED;
     case MOTOR_STARTING: return ANA_FRZ_STARTING;
@@ -3410,7 +3865,16 @@ static void modemDiagPoll(bool mqttUp, bool gprsUp,
 // เรียก 1 ครั้งต่อ taskNetwork() loop iteration เมื่อ MQTT connected + backlog > 0
 // Returns: true = slot published + popped, false = publish failed หรือ buffer ว่าง
 // ============================================================================
+// [MQTTOWNER-GUARD] Explicit ownership precondition: this function touches the
+// shared mqttClient/TLS object directly (publish() below). It must not run
+// while taskMqttConnectWorker owns that object (g_mqttOwner != IDLE) --
+// confirmed by forensic audit as the root cause of a reproducible
+// LoadProhibited crash (taskNetwork racing the worker's resetSecureSession()/
+// connect()/subscribe() sequence). Checked here, not just at the call site, so
+// no future caller can accidentally reintroduce the race.
 static bool replayTelemBuf() {
+  if (g_mqttOwner != MQTT_OWNER_IDLE) return false;
+
   // --- ล็อค mutex สั้นๆ เพื่อ copy oldest slot ออกมา ---
   TelemetrySlot_t snap;
   {
@@ -4284,7 +4748,8 @@ static void updateMotorStateMachine(const MotorStateEvidence& evidence) {
                         (unsigned long)evidence.ageMs, (unsigned long)absentMs);
           // [vNext] arm once, only on the actual STARTING->RUNNING transition --
           // TEMPORARY startup-settling suppression for FAULT_LATCH only.
-          g_motorRunFaultLatchHoldoff = MOTOR_RUN_FAULT_LATCH_HOLDOFF_READS;
+          // [S1] Deadline instead of a read count -- same 1000ms window.
+          g_motorRunFaultLatchHoldoffUntilMs = millis() + MOTOR_RUN_FAULT_LATCH_HOLDOFF_MS;
         }
         g_motorRunState = MOTOR_RUNNING;
       } else {
@@ -4474,9 +4939,12 @@ static void processRPM(VibrationData_t* data) {
     else clearTrend = (stoppedMs > trendClearThresholdMs()) && coldStart;
 
     if (clearTrend) {
-      memset(g_tempBuf, 0, sizeof(g_tempBuf));
-      g_tempHead  = 0;
-      g_tempCount = 0;
+      // [Temperature-trend cleanup, Option 2] Used to also clear the
+      // temperature sample count (g_tempCount) -- removed with the rest of
+      // the temperature-window machinery (window_samples/trend_window_s had
+      // no independent consumer; confirmed via live VPS audit). This branch
+      // is now the CLEAR-side log only; the RESUME branch below still sets
+      // g_lastResumeGapS -> t["trend_gap_s"] on /trend, unchanged.
       Serial.printf("[MOTOR] RUNNING -- CLEAR trend (stop=%lus, tempDrop=%.1fC cold=%d, policy=%s)\n",
                     (unsigned long)(stoppedMs/1000), tempDrop, (int)coldStart, trendPersistenceStr());
     } else {
@@ -5090,6 +5558,18 @@ static bool reconfigSensorAfterRestart(bool sensorWasRestarted = true) {
  * @param axisLabel  แกนที่ trigger stuck ("Vx", "Vy", หรือ "Vz") สำหรับ log
  */
 static bool restartSensorViaModbus(const char* axisLabel) {
+  // [Sensor-Queue-Fix Stage 1] Ownership guard, defence-in-depth. The only
+  // call site (taskModbusRead()'s stuck-detection block) is already gated on
+  // pollPerformed, so this cannot be reached while FifoDriver owns the bus in
+  // practice -- this check makes that invariant true BY CONSTRUCTION at the
+  // function's own boundary too, independent of the caller, and protects any
+  // future caller that might not carry the same gate. Not a redesign: a
+  // single early-exit, same shape as the cooldown check immediately below.
+  if (FifoDriver_OwnsBus()) {
+    Serial.printf("[SENSOR] %s stuck -- restart deferred (FifoDriver owns bus)\n", axisLabel);
+    return false;
+  }
+
   uint32_t now = millis();
 
   // Cooldown check -- ป้องกัน restart loop วนซ้ำเร็วเกินไป (shared across all axes)
@@ -5520,10 +6000,15 @@ bool parseGSMDateTime(const String& gsmTime, DateTime& dt) {
 }
 
 /**
- * Sync RTC from 4G modem network time.
- * Returns true if RTC was synced (or already accurate).
+ * [PHASE1.5-S4] FETCH half of the former syncRTCFromModem().
+ *
+ * Transport-specific acquisition only: AT+CCLK? via TinyGSM plus the
+ * SIMCom-specific sanity checks. The body is unchanged from the original
+ * function; the trailing drift/RTC/g_timeSync logic moved out verbatim into
+ * applyNetworkTime() below. Called through INetTransport::fetchNetworkUTC()
+ * by GprsTransport.
  */
-bool syncRTCFromModem() {
+bool gprsFetchNetworkUTC(DateTime& out) {
   if (!g_network.modemReady) {
     Serial.println("[NTP] Modem not ready, skip sync");
     return false;
@@ -5554,7 +6039,22 @@ bool syncRTCFromModem() {
   }
 
   g_timeSync.ntpReachable = true;
+  out = networkUTC;
+  return true;
+}
 
+/**
+ * [PHASE1.5-S4] APPLY half of the former syncRTCFromModem().
+ *
+ * TRANSPORT-NEUTRAL. Drift calculation, the implausible-drift guard, the
+ * rtc.adjust() call and every g_timeSync field update below are byte-for-byte
+ * the original logic -- only the acquisition was lifted out. Keeping this in
+ * one place is what preserves time_synced / sync_age_s semantics identically
+ * across GPRS today and Wi-Fi/SNTP later.
+ *
+ * Returns true if RTC was synced (or already accurate).
+ */
+bool applyNetworkTime(const DateTime& networkUTC) {
   // Compare with current RTC
   if (g_rtcValid) {
     DateTime rtcNow; RTC_NOW_SAFE(rtcNow);  // [v16.3g]
@@ -5637,6 +6137,27 @@ bool syncRTCFromModem() {
 }
 
 /**
+ * [PHASE1.5-S4] Orchestrator: fetch network UTC from whichever transport is
+ * active, then apply it. Replaces the single former syncRTCFromModem() call
+ * inside checkAndSyncTime(); the scheduling logic there is unchanged.
+ *
+ * Failure paths are identical to before: the transport's fetch already updated
+ * syncFailures/ntpReachable, g_timeSync.synced stays false, and
+ * checkAndSyncTime()'s lastCheckMillis gate still advances on every attempt.
+ */
+bool syncNetworkTime() {
+  if (!g_netmgr.hasActive()) {
+    Serial.println("[NTP] No active transport, skip sync");
+    return false;
+  }
+  DateTime networkUTC;
+  if (!g_netmgr.active().fetchNetworkUTC(networkUTC)) {
+    return false;
+  }
+  return applyNetworkTime(networkUTC);
+}
+
+/**
  * Check if NTP sync is due and perform it if needed.
  * Call this periodically from the network task.
  */
@@ -5656,10 +6177,10 @@ void checkAndSyncTime() {
     g_timeSync.lastCheckMillis = now;
     Serial.printf("[NTP] Time sync check (interval=%lus, synced=%s)\n",
                   interval / 1000, g_timeSync.synced ? "yes" : "no");
-    if (!syncRTCFromModem()) {
+    if (!syncNetworkTime()) {
       // synced is still false at this point on every failure path, so the
       // next scheduled attempt will use NTP_RETRY_INTERVAL_MS regardless of
-      // which check inside syncRTCFromModem() rejected this attempt.
+      // which check inside the transport's fetch rejected this attempt.
       Serial.printf("[NTP] Next retry in %lus\n", NTP_RETRY_INTERVAL_MS / 1000);
     }
   }
@@ -5672,18 +6193,81 @@ void checkAndSyncTime() {
 // [v16.6c] Diagnostic-only: symbolic name for a ModbusMaster return code, for
 // Serial logging. Does not affect control flow -- string lookup only.
 static const char* modbusRcName(uint8_t rc) {
+  // [RX-Byte-Diag, BUILD-ONLY] Scope-resolution updated ModbusMaster:: ->
+  // ModbusMasterDiag:: to match the sketch-local diagnostic class this build
+  // uses (see the #include/object-declaration change near the top of this
+  // file) -- the 9 constant VALUES referenced here are byte-for-byte
+  // identical to stock (ModbusMasterDiag.h copies them unchanged), so this
+  // function's return values/behavior are unaffected.
   switch (rc) {
-    case ModbusMaster::ku8MBSuccess:          return "ku8MBSuccess";
-    case ModbusMaster::ku8MBInvalidSlaveID:   return "ku8MBInvalidSlaveID";
-    case ModbusMaster::ku8MBInvalidFunction:  return "ku8MBInvalidFunction";
-    case ModbusMaster::ku8MBResponseTimedOut: return "ku8MBResponseTimedOut";
-    case ModbusMaster::ku8MBInvalidCRC:       return "ku8MBInvalidCRC";
-    case ModbusMaster::ku8MBIllegalFunction:      return "ku8MBIllegalFunction";
-    case ModbusMaster::ku8MBIllegalDataAddress:   return "ku8MBIllegalDataAddress";
-    case ModbusMaster::ku8MBIllegalDataValue:     return "ku8MBIllegalDataValue";
-    case ModbusMaster::ku8MBSlaveDeviceFailure:   return "ku8MBSlaveDeviceFailure";
+    case ModbusMasterDiag::ku8MBSuccess:          return "ku8MBSuccess";
+    case ModbusMasterDiag::ku8MBInvalidSlaveID:   return "ku8MBInvalidSlaveID";
+    case ModbusMasterDiag::ku8MBInvalidFunction:  return "ku8MBInvalidFunction";
+    case ModbusMasterDiag::ku8MBResponseTimedOut: return "ku8MBResponseTimedOut";
+    case ModbusMasterDiag::ku8MBInvalidCRC:       return "ku8MBInvalidCRC";
+    case ModbusMasterDiag::ku8MBIllegalFunction:      return "ku8MBIllegalFunction";
+    case ModbusMasterDiag::ku8MBIllegalDataAddress:   return "ku8MBIllegalDataAddress";
+    case ModbusMasterDiag::ku8MBIllegalDataValue:     return "ku8MBIllegalDataValue";
+    case ModbusMasterDiag::ku8MBSlaveDeviceFailure:   return "ku8MBSlaveDeviceFailure";
     default:                                  return "?";
   }
+}
+
+// [RX-Byte-Diag, read-only investigation aid] File-scope (not function-
+// local) because it is populated from two different functions --
+// taskModbusRead() for T1a/T1b/T1c/T2a, and readCurrentSensor() (below) for
+// T7 -- and printed periodically by taskModbusRead(). Never read by any
+// control-flow decision anywhere in the firmware. RxDiagTxnIndex itself is
+// declared much earlier (near BusOwnerDiag) per the auto-prototype
+// constraint; only the arrays/functions below need to live here.
+static uint32_t   g_rxDiagCount[kRxDiagTxnCount][3] = { {0} };  // [txn][0=zero,1=1..4,2=>=5]
+static const char* const kRxDiagTxnNames[kRxDiagTxnCount] = {
+  "T1a-VRMSX", "T1b-VRMSY", "T1c-VRMSZ", "T2a-TEMP", "T7-CTR4A01"
+};
+
+// [RX-Byte-Diag] Classifies a byte count into one of the 3 categories and
+// bumps the matching cell. Pure bookkeeping -- no return value consumed by
+// any caller, no effect on the byte count or transaction it describes.
+static void RxDiagBump(RxDiagTxnIndex txn, uint8_t byteCount) {
+  uint8_t category = (byteCount == 0) ? 0 : (byteCount < 5 ? 1 : 2);
+  g_rxDiagCount[txn][category]++;
+}
+
+// [RX-Byte-Diag] Formats up to 8 raw bytes as "AA,BB,CC" hex pairs into buf
+// (caller-provided, must be >= 3*8=24 bytes to hold the worst case plus
+// nul). Returns buf, for inline use in a printf argument list. Read-only
+// formatting only -- does not touch the ModbusMasterDiag object.
+static const char* RxDiagFormatBytes(const uint8_t* bytes, uint8_t count, char* buf, size_t bufLen) {
+  if (count == 0) {
+    snprintf(buf, bufLen, "-");
+    return buf;
+  }
+  size_t pos = 0;
+  for (uint8_t i = 0; i < count && pos < bufLen; i++) {
+    int n = snprintf(buf + pos, bufLen - pos, "%s%02X", (i == 0 ? "" : ","), bytes[i]);
+    if (n <= 0) break;
+    pos += (size_t)n;
+  }
+  return buf;
+}
+
+// [RX-Byte-Diag] One rate-limit-free diagnostic line per failure (this
+// instrumentation phase's own line, distinct from and printed AFTER the
+// existing, unmodified logModbusTransactionFail() call at each call site).
+// Reads modbus.getLastResponseByteCount()/getLastResponseBytes() -- these
+// reflect only the transaction that JUST returned at the call site, since
+// nothing else touches the shared `modbus` object in between (single-
+// threaded, synchronous). Also bumps the aggregate counters above.
+static void logModbusRxByteDiag(RxDiagTxnIndex txnIdx, uint8_t rc, uint32_t durationMs) {
+  uint8_t byteCount = modbus.getLastResponseByteCount();
+  RxDiagBump(txnIdx, byteCount);
+  uint8_t firstBytes[8];
+  uint8_t gotBytes = modbus.getLastResponseBytes(firstBytes, sizeof(firstBytes));
+  char hexBuf[32];
+  Serial.printf("[MODBUS-RX-DIAG] txn=%s rc=0x%02X(%s) bytes=%u firstBytes=%s durationMs=%lu\r\n",
+                kRxDiagTxnNames[txnIdx], rc, modbusRcName(rc), (unsigned)byteCount,
+                RxDiagFormatBytes(firstBytes, gotBytes, hexBuf, sizeof(hexBuf)),
+                (unsigned long)durationMs);
 }
 
 // [v16.6a] CTR4A01 current sensor read -- reused verbatim (same signature/body)
@@ -5709,6 +6293,20 @@ static bool readCurrentSensor(uint16_t &milliAmps) {
     // success return value unchanged.
     // Serial.printf("[CURRENT] FAIL rc=0x%02X (%s) elapsed=%lu ms\n",
     //               r, modbusRcName(r), (unsigned long)elapsedMs);
+    // [Sensor-Failure-Instrumentation] T7 in the transaction sequence.
+    // [Diagnostic-Label-Cleanup] prev updated from "T5-CFZ" -- that
+    // transaction was removed by the FREQ/CF cleanup; T2a-TEMP is the actual
+    // predecessor in the current 5-transaction sequence (T1a/T1b/T1c/T2a/T7).
+    // next is still always T1a-VRMSX of the following cycle -- both fixed by
+    // the poll sequence, so hardcoded here rather than threaded through as
+    // parameters. firstAfterCT does not apply to T7 itself (it IS the CT
+    // slave-ID switch, not a transaction after one).
+    logModbusTransactionFail("T7-CTR4A01", CT_REG_AC_CURRENT, CURRENT_SENSOR_ID, 4, r,
+                              false, "T2a-TEMP", "T1a-VRMSX(next cycle)");
+    // [RX-Byte-Diag] Reuses the elapsedMs already computed above (read-only
+    // diagnostic timing, pre-existing from [v16.6c]) -- no new bracketing
+    // needed for T7.
+    logModbusRxByteDiag(kRxDiagT7, r, elapsedMs);
   }
   return success;
 }
@@ -6065,13 +6663,68 @@ static void handleFifoCaptureCompletion() {
   FifoDriver_ReleaseResult();
 }
 
+// [Sensor-Queue-Fix Stage 1] Rate-limited "Sensor queue full!" diagnostic --
+// preserves observability (still prints, still counts every occurrence)
+// without flooding Core 0/Serial if xQueueSend ever fails repeatedly, for
+// this or any future reason. Prints immediately the first time, then at
+// most once per second, folding the suppressed-since-last-print count into
+// each line. Internal statics are scoped to this function only -- the two
+// call sites (taskModbusRead()'s normal-poll and FIFO-window-marker enqueue
+// attempts) share one counter/timer, which is the correct behaviour: both
+// report the same underlying condition (consumer falling behind).
+static void logSensorQueueFull() {
+  static uint32_t s_lastLogMs           = 0;
+  static uint32_t s_suppressedCount     = 0;
+  uint32_t        now                   = millis();
+  s_suppressedCount++;
+  if (s_lastLogMs == 0 || (now - s_lastLogMs) >= 1000) {
+    Serial.printf("[CORE 0] Sensor queue full! (x%lu in last %lums)\n",
+                  (unsigned long)s_suppressedCount,
+                  (unsigned long)(s_lastLogMs == 0 ? 0 : (now - s_lastLogMs)));
+    s_lastLogMs       = now;
+    s_suppressedCount = 0;
+  }
+}
+
+// [Sensor-Failure-Instrumentation, read-only investigation aid] Rate-limited,
+// per-transaction Modbus failure diagnostic -- identifies exactly which
+// register/transaction failed (previously indistinguishable: all four
+// candidate sites collapsed into one generic "[MODBUS] x Read failed"
+// message). Fires ONLY inside an already-existing failure (else) branch;
+// never reads or writes success/retryCount/g_modbusConsecErrors or any other
+// existing state, and never alters control flow, timing, or retry behavior.
+// Rate-limited the same way logSensorQueueFull() is (max 1 print/second,
+// suppressed-count folded into the next line) purely as insurance against a
+// pathological failure burst -- under the observed historical rate
+// (~1/minute) this limit is never actually hit.
+static void logModbusTransactionFail(const char* txn, uint16_t reg, uint8_t slaveId,
+                                      uint8_t funcCode, uint8_t rc, bool firstAfterCT,
+                                      const char* prevTxn, const char* nextTxn) {
+  static uint32_t s_lastLogMs       = 0;
+  static uint32_t s_suppressedCount = 0;
+  uint32_t        now                = millis();
+  s_suppressedCount++;
+  if (s_lastLogMs == 0 || (now - s_lastLogMs) >= 1000) {
+    Serial.printf("[MODBUS-FAIL] txn=%s reg=0x%02X slave=0x%02X func=%02u rc=0x%02X(%s) "
+                  "t=%lums fifoOwnsBus=%d rs485EN=%d firstAfterCT=%d prev=%s next=%s "
+                  "(x%lu in last %lums)\n",
+                  txn, reg, slaveId, funcCode, rc, modbusRcName(rc),
+                  (unsigned long)now, (int)FifoDriver_OwnsBus(),
+                  (int)digitalRead(RS485_EN_PIN), (int)firstAfterCT, prevTxn, nextTxn,
+                  (unsigned long)s_suppressedCount,
+                  (unsigned long)(s_lastLogMs == 0 ? 0 : (now - s_lastLogMs)));
+    s_lastLogMs       = now;
+    s_suppressedCount = 0;
+  }
+}
+
 void taskModbusRead(void* parameter) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(250);  // 250ms = 4Hz
-  // [v16.6h] Dual service cadence -- 250ms for normal sensor polling, 10ms
-  // while FifoDriver owns the RS485 bus. The faster FIFO cadence is a
-  // correctness requirement of the RAWFIFO capture, not a performance tuning
-  // choice, for the reason below.
+  const TickType_t xFrequency = pdMS_TO_TICKS(MODBUS_POLL_PERIOD_MS);  // [S3] 500ms = 2Hz (was 250ms/4Hz)
+  // [v16.6h] Dual service cadence -- normal-poll period (MODBUS_POLL_PERIOD_MS)
+  // for normal sensor polling, 10ms while FifoDriver owns the RS485 bus. The
+  // faster FIFO cadence is a correctness requirement of the RAWFIFO capture,
+  // not a performance tuning choice, for the reason below.
   //
   // FrameCodec_Step() performs exactly ONE bounded sub-action per call
   // (fifo_codec.cpp: ScanAnchor() stops the instant the `50 03` anchor is
@@ -6088,39 +6741,94 @@ void taskModbusRead(void* parameter) {
   // bytes are discarded by the peripheral before the parser can ever read them
   // -- yielding either a truncated frame (ERR_INTER_BYTE_TIMEOUT) or a
   // byte-shifted frame that fails CRC. At 10ms the driver drains the ring
-  // buffer every cycle and its occupancy stays under ~40 of 2048 bytes.
+  // buffer every cycle and its occupancy stays under ~40 of 2048 bytes. This
+  // paragraph describes why xFrequencyFifo itself must stay fast; it does not
+  // depend on the normal-poll period and is unaffected by [S3] below.
   //
-  // [DESIGN-0005] INVARIANT: normal Modbus polling remains at 250ms. Two
-  // independent, load-bearing reasons:
-  //   1. STUCK_THRESHOLD is a READ COUNT, not a duration -- the stuck-axis
-  //      detection it drives is calibrated to this cadence ("5 reads x 250ms
-  //      = 1.25s"). A faster poll rate would trip it on the sensor's own
-  //      not-yet-updated registers, causing spurious restartSensorViaModbus()
-  //      calls, which set g_modbusConsecErrors != 0 and in turn block FIFO
-  //      admission (see the request gate's sensorHealthy term).
-  //   2. The normal-poll body cannot fit a shorter period: ~9 Modbus
-  //      transactions at 9600 baud plus 10x vTaskDelay(5ms) is ~230ms.
+  // [DESIGN-0005, amended by S3] Was: "INVARIANT: normal Modbus polling
+  // remains at 250ms." [S3] changed MODBUS_POLL_PERIOD_MS to 500ms as a
+  // deliberate, documented experiment (see the macro's own definition) after
+  // the MODBUS-ROOT-CAUSE FORENSIC AUDIT concluded root cause was not yet
+  // proven. The two original reasons, re-evaluated for THIS direction of
+  // change (slower, not faster):
+  //   1. STUCK_THRESHOLD is a READ COUNT, not a duration -- calibrated
+  //      assuming 250ms ("5 reads x 250ms = 1.25s"). The failure mode this
+  //      guarded against (a FASTER poll tripping the watchdog on the
+  //      sensor's own not-yet-updated registers) does not apply when slowing
+  //      down; going slower only widens the watchdog's effective window
+  //      (5 reads x 500ms = 2.5s), a timing side effect, not a redesign --
+  //      STUCK_THRESHOLD's value and all watchdog logic are unchanged.
+  //   2. The normal-poll body needing ~230ms only bounded how much SHORTER
+  //      the period could go; 500ms has strictly more headroom, so this
+  //      reason does not block lengthening it.
   // Scoping the faster cadence to the FifoDriver_OwnsBus() window -- where
-  // normal polling is already skipped entirely -- keeps both reasons intact.
+  // normal polling is already skipped entirely -- still keeps FIFO capture
+  // itself completely unaffected by MODBUS_POLL_PERIOD_MS's value.
   const TickType_t xFrequencyFifo = pdMS_TO_TICKS(10);
 
   VibrationData_t localData;
   int16_t raw_x, raw_y, raw_z, raw_temp;
-  // [v16.3p] FIX: raw_fx/fy/fz ต้องเป็น uint16_t ไม่ใช่ int16_t
-  // Frequency register เป็น unsigned เหมือน CF และ Kurtosis (ดู datasheet §6.4.13)
-  // int16_t ทำให้ค่าสูง เช่น 0xFFB2 = 65458 กลายเป็น -78 → freq_z = -7.8 Hz
-  uint16_t raw_fx = 0, raw_fy = 0, raw_fz = 0;
-  // [Phase 1] raw_kx/ky/kz REMOVED. The CF registers are still read -- KX/KY/KZ
-  // simply sit in word 2 of the same 2-register transaction and are no longer
-  // taken off the wire. The reads themselves are unchanged (see below).
-  uint16_t raw_cfx = 0;  // v15.0: CFX (0x47) -- unsigned per datasheet §6.4.14
-  uint16_t raw_cfy = 0;  // v15.1: CFY (0x53) -- unsigned per datasheet §6.4.15
-  uint16_t raw_cfz = 0;  // v15.1: CFZ (0x5F) -- unsigned per datasheet §6.4.16
+  // [FREQ/CF-Cleanup] raw_fx/fy/fz and raw_cfx/cfy/cfz REMOVED along with the
+  // FREQ X/Y/Z and CFX/CFY/CFZ register reads below -- they had no consumer
+  // besides the removed [FREQ-SRC]/[CF-SRC] reference-only diagnostic logs.
 
   Serial.println("[CORE 0] Modbus task started");
 
   static uint32_t s_lastPollStart = 0;  // [v16.3y] วัด poll interval จริง
   static uint32_t s_lastCurrentSampleMs = 0;  // [v16.6a] CTR4A01 500ms cadence gate
+  // [Sensor-Queue-Fix Stage 1] Rate-limits the FIFO-owned-window motor-state
+  // evidence marker to a real Modbus poll's own ~250ms semantic cadence
+  // (not the 10ms FIFO-service cadence) -- see the pollPerformed==false
+  // branch below.
+  static uint32_t s_lastFifoMarkerEnqueueMs = 0;
+  // [Sensor-Failure-Instrumentation] Set whenever readCTR4A01Current() is
+  // actually called (i.e. the slave-ID switch to CURRENT_SENSOR_ID and back
+  // happened, regardless of read outcome); consumed and cleared once, at the
+  // very next cycle's first WTVB02 transaction (T1a), to tag whether that
+  // transaction was the first one issued after returning from the CT
+  // sensor's address. Read-only investigation aid -- does not affect any
+  // Modbus addressing, timing, or retry behavior itself.
+  static bool s_ctSlaveSwitchLastCycle = false;
+
+  // [Sensor-Failure-Instrumentation, Base-Rate] Read-only base-rate counters.
+  // Track EVERY T1a attempt (success + failure) so a true failure RATE can
+  // be computed per firstAfterCT category, not just a failure COUNT. Never
+  // read by any control-flow decision.
+  static uint32_t s_t1aTotal               = 0;
+  static uint32_t s_t1aTotalFirstAfterCT   = 0;
+  static uint32_t s_t1aFailFirstAfterCT    = 0;
+  static uint32_t s_t1aFailNotFirstAfterCT = 0;
+  // [Sensor-Failure-Instrumentation, Base-Rate] Timestamp CT slave-ID
+  // restoration completed (readCTR4A01Current() has already switched back to
+  // MODBUS_SLAVE_ID and returned) -- used to measure elapsed time to the
+  // next cycle's T1a transaction start, only when firstAfterCT is true.
+  static uint32_t s_ctRestoreMs            = 0;
+  static uint32_t s_ctToT1aGapSumMs        = 0;
+  static uint32_t s_ctToT1aGapCount        = 0;
+  static uint32_t s_ctToT1aGapMaxMs        = 0;
+  // [Sensor-Failure-Instrumentation, Base-Rate] Periodic (time-gated, NOT
+  // per-cycle) summary print -- satisfies "do not print every successful
+  // cycle" while still surfacing the running counters.
+  static uint32_t s_lastT1aStatsLogMs      = 0;
+
+  // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Read-only per-transaction
+  // timing diagnostics for T1a specifically -- finer-grained than the
+  // Base-Rate gap measurement above. Never read by any control-flow
+  // decision.
+  static uint32_t s_t1aSuccessDurSumMs   = 0;
+  static uint32_t s_t1aSuccessDurCount   = 0;
+  static uint32_t s_t1aSuccessDurMaxMs   = 0;
+  static uint32_t s_t1aFailDurSumMs      = 0;
+  static uint32_t s_t1aFailDurCount      = 0;
+  static uint32_t s_t1aFailDurMaxMs      = 0;
+  // ctToEndMs is only physically meaningful when firstAfterCT is true (else
+  // s_ctRestoreMs is stale from an earlier CT cycle) -- accumulated only for
+  // failed AND firstAfterCT T1a attempts.
+  static uint32_t s_t1aFailCtToEndSumMs  = 0;
+  static uint32_t s_t1aFailCtToEndCount  = 0;
+  static uint32_t s_t1aFailCtToEndMaxMs  = 0;
+  static uint32_t s_lastT1aTimingStatsLogMs = 0;
+  static uint32_t s_lastRxDiagStatsLogMs = 0;
 
   while (1) {
     g_sensorReads++;
@@ -6235,7 +6943,18 @@ void taskModbusRead(void* parameter) {
         fifoReq.maxRetries = 2;
         fifoReq.admissionContext.motorStable      = (g_motorRunState == MOTOR_RUNNING);
         fifoReq.admissionContext.sensorHealthy    = (g_modbusConsecErrors == 0);
-        fifoReq.admissionContext.mqttReconnecting = !mqttClient.connected();
+        // [PHASE1.5-MQTTWORKER] Was a direct, unsynchronized cross-core
+        // mqttClient.connected() call (Core 0 touching a Core 1-owned
+        // mbedTLS session with no barrier -- NetworkClientSecure::connected()
+        // internally calls read(), not a passive check, per
+        // PHASE1_5_WIFI_TLS_WATCHDOG_IMPLEMENTATION_DECISION.md §3.2).
+        // Replaced with the file's own already-established safe-read
+        // mechanism (getMqttConnectedCached(), mutex-guarded), plus the
+        // ownership state so "reconnecting" is reported as soon as an
+        // attempt begins, not only once it has already failed. See
+        // PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §6.1.
+        fifoReq.admissionContext.mqttReconnecting =
+            (g_mqttOwner != MQTT_OWNER_IDLE) || !getMqttConnectedCached();
         // [Phase 3A] Bind sample-rate provenance to THIS capture, read here --
         // the same place, and for the same reason, as the admission context:
         // this is the one point that sees the freshest verified state, and the
@@ -6379,6 +7098,14 @@ void taskModbusRead(void* parameter) {
     uint8_t  retryCount     = 0;
 
     bool success = true;
+    // [Sensor-Queue-Fix Stage 1] Explicit "a real Modbus acquisition
+    // happened this cycle" flag -- deliberately NOT overloaded onto
+    // `success`, which only ever means "no transaction failed" and stays
+    // true (its initialized value) on a cycle where polling was skipped
+    // entirely. pollPerformed is false for the whole cycle unless the poll
+    // block below actually runs. See docs/engineering/ (Sensor Queue Full
+    // audit series) for the full root-cause trace this closes.
+    bool pollPerformed = false;
 
     // [Task 4.2] RS485 bus arbitration (A-5) -- the normal Modbus/CTR4A01
     // polling below is skipped entirely while FifoDriver owns the bus
@@ -6388,6 +7115,12 @@ void taskModbusRead(void* parameter) {
     // itself, and all downstream success/stuck-detection/telemetry logic,
     // are unchanged.
     if (!FifoDriver_OwnsBus()) {
+      // [Sensor-Queue-Fix Stage 1] Set unconditionally on entry: a real
+      // acquisition attempt is happening this cycle regardless of whether
+      // individual transactions below succeed -- this is the same scope
+      // `success` itself is evaluated over, just not conflated with it.
+      pollPerformed = true;
+
       // [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY] Requirement 3: whenever a
       // normal Modbus poll begins, log whether FifoDriver currently owns the
       // bus, BEFORE this task issues any modbus.* call. Now nested inside
@@ -6405,78 +7138,230 @@ void taskModbusRead(void* parameter) {
       rs485Enable("NORMAL-POLL");
       vTaskDelay(pdMS_TO_TICKS(5));  // 5ms stabilization
 
+      // [Sensor-Failure-Instrumentation] Consume-and-clear (read once, then
+      // reset) so only THIS cycle's T1a is ever tagged as "first after CT
+      // switch" -- read-only, no effect on any transaction below.
+      bool firstAfterCT = s_ctSlaveSwitchLastCycle;
+      s_ctSlaveSwitchLastCycle = false;
+      // [Sensor-Failure-Instrumentation, Base-Rate] Elapsed time from CT
+      // slave-ID restoration to this cycle's T1a start -- only meaningful
+      // (and only measured) when this cycle is actually firstAfterCT.
+      if (firstAfterCT) {
+        uint32_t ctToT1aGapMs = millis() - s_ctRestoreMs;
+        s_ctToT1aGapSumMs += ctToT1aGapMs;
+        s_ctToT1aGapCount++;
+        if (ctToT1aGapMs > s_ctToT1aGapMaxMs) s_ctToT1aGapMaxMs = ctToT1aGapMs;
+      }
+      const char* prevTxnName = "CYCLE-START";
+
       // Transaction 1: Velocity RMS X, Y, Z (§6.4.14-16)
       // VRMSX=0x50, VRMSY=0x5C, VRMSZ=0x68 (ไม่ consecutive -- อ่านแยก 3 ครั้ง)
       // Scaling: raw / 1000.0f → mm/s (True RMS, ไม่ต้อง × 0.7071)
-      if (modbus.readHoldingRegisters(REG_VRMS_X, 1) == modbus.ku8MBSuccess) {
+      // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Bracket the T1a call
+      // itself with timestamps -- read-only, no effect on the call, its
+      // return value, or the 5ms delay that follows it.
+      uint32_t t1aStartMs = millis();
+      uint8_t rcVrmsX = modbus.readHoldingRegisters(REG_VRMS_X, 1);
+      uint32_t t1aEndMs = millis();
+      // [Sensor-Failure-Instrumentation, Base-Rate] Count EVERY T1a attempt
+      // (success + failure), split by firstAfterCT -- unconditional, before
+      // the outcome branch below, so the base rate reflects all executions.
+      s_t1aTotal++;
+      if (firstAfterCT) s_t1aTotalFirstAfterCT++;
+      if (rcVrmsX == modbus.ku8MBSuccess) {
         raw_x = (int16_t)modbus.getResponseBuffer(0);
+        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Successful-call
+        // duration, read-only.
+        uint32_t t1aDurMs = t1aEndMs - t1aStartMs;
+        s_t1aSuccessDurSumMs += t1aDurMs;
+        s_t1aSuccessDurCount++;
+        if (t1aDurMs > s_t1aSuccessDurMaxMs) s_t1aSuccessDurMaxMs = t1aDurMs;
       } else {
         success = false; retryCount++;
+        if (firstAfterCT) s_t1aFailFirstAfterCT++; else s_t1aFailNotFirstAfterCT++;
+        logModbusTransactionFail("T1a-VRMSX", REG_VRMS_X, MODBUS_SLAVE_ID, 3, rcVrmsX,
+                                  firstAfterCT, prevTxnName, "T1b-VRMSY");
+        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Failed-call timing
+        // diagnostic -- printed AFTER the existing MODBUS-FAIL line above,
+        // does not replace or alter it. Read-only; no effect on retry/
+        // reconfig logic. ctToStartMs/ctToEndMs are only physically
+        // meaningful when firstAfterCT=1 (see firstAfterCT field itself).
+        uint32_t t1aDurMs    = t1aEndMs - t1aStartMs;
+        uint32_t ctToStartMs = t1aStartMs - s_ctRestoreMs;
+        uint32_t ctToEndMs   = t1aEndMs - s_ctRestoreMs;
+        s_t1aFailDurSumMs += t1aDurMs;
+        s_t1aFailDurCount++;
+        if (t1aDurMs > s_t1aFailDurMaxMs) s_t1aFailDurMaxMs = t1aDurMs;
+        if (firstAfterCT) {
+          s_t1aFailCtToEndSumMs += ctToEndMs;
+          s_t1aFailCtToEndCount++;
+          if (ctToEndMs > s_t1aFailCtToEndMaxMs) s_t1aFailCtToEndMaxMs = ctToEndMs;
+        }
+        Serial.printf("[T1A-TIMING] firstAfterCT=%d ctToStartMs=%lu transactionDurationMs=%lu "
+                      "ctToEndMs=%lu rc=0x%02X(%s) fifoOwnsBus=%d rs485EN=%d prev=%s slave=0x%02X\r\n",
+                      (int)firstAfterCT, (unsigned long)ctToStartMs, (unsigned long)t1aDurMs,
+                      (unsigned long)ctToEndMs, rcVrmsX, modbusRcName(rcVrmsX),
+                      (int)FifoDriver_OwnsBus(), (int)digitalRead(RS485_EN_PIN),
+                      prevTxnName, (unsigned)MODBUS_SLAVE_ID);
+        // [RX-Byte-Diag] Printed AFTER the existing [T1A-TIMING] line above;
+        // does not replace or alter it.
+        logModbusRxByteDiag(kRxDiagT1a, rcVrmsX, t1aDurMs);
       }
+      prevTxnName = "T1a-VRMSX";
       vTaskDelay(pdMS_TO_TICKS(5));
 
-      if (modbus.readHoldingRegisters(REG_VRMS_Y, 1) == modbus.ku8MBSuccess) {
+      // [Sensor-Failure-Instrumentation, Base-Rate] Periodic summary only --
+      // never fires more than once per 30s, regardless of poll cadence.
+      // Read-only reporting; does not affect success, retryCount, or any
+      // other control-flow state.
+      {
+        uint32_t nowStats = millis();
+        if (nowStats - s_lastT1aStatsLogMs >= 30000) {
+          s_lastT1aStatsLogMs = nowStats;
+          uint32_t t1aNotFirstAfterCT = s_t1aTotal - s_t1aTotalFirstAfterCT;
+          float rateFirstAfterCT = s_t1aTotalFirstAfterCT
+              ? (100.0f * (float)s_t1aFailFirstAfterCT / (float)s_t1aTotalFirstAfterCT)
+              : 0.0f;
+          float rateNotFirstAfterCT = t1aNotFirstAfterCT
+              ? (100.0f * (float)s_t1aFailNotFirstAfterCT / (float)t1aNotFirstAfterCT)
+              : 0.0f;
+          float avgGapAfterCTms = s_ctToT1aGapCount
+              ? ((float)s_ctToT1aGapSumMs / (float)s_ctToT1aGapCount)
+              : 0.0f;
+          Serial.printf("[T1A-STATS] total=%lu firstAfterCT1=%lu firstAfterCT0=%lu "
+                        "fail1=%lu fail0=%lu rate1=%.2f%% rate0=%.2f%% "
+                        "avgGapAfterCTms=%.1f maxGapAfterCTms=%lu t=%lums\r\n",
+                        (unsigned long)s_t1aTotal, (unsigned long)s_t1aTotalFirstAfterCT,
+                        (unsigned long)t1aNotFirstAfterCT, (unsigned long)s_t1aFailFirstAfterCT,
+                        (unsigned long)s_t1aFailNotFirstAfterCT, rateFirstAfterCT, rateNotFirstAfterCT,
+                        avgGapAfterCTms, (unsigned long)s_ctToT1aGapMaxMs, (unsigned long)nowStats);
+        }
+      }
+
+      // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Periodic aggregate
+      // summary only -- independent 30s gate, never fires per-cycle. Purely
+      // derived/accumulated read-only diagnostics; does not affect success,
+      // retryCount, or any other control-flow state. success/failure counts
+      // are derived from the existing Base-Rate counters above rather than
+      // duplicated in new state.
+      {
+        uint32_t nowTimingStats = millis();
+        if (nowTimingStats - s_lastT1aTimingStatsLogMs >= 30000) {
+          s_lastT1aTimingStatsLogMs = nowTimingStats;
+          uint32_t firstAfterCTFailCount    = s_t1aFailFirstAfterCT;
+          uint32_t firstAfterCTSuccessCount = s_t1aTotalFirstAfterCT - s_t1aFailFirstAfterCT;
+          uint32_t notFirstTotal            = s_t1aTotal - s_t1aTotalFirstAfterCT;
+          uint32_t notFirstFailCount        = s_t1aFailNotFirstAfterCT;
+          uint32_t notFirstSuccessCount     = notFirstTotal - notFirstFailCount;
+          float avgCtToStartMs = s_ctToT1aGapCount
+              ? ((float)s_ctToT1aGapSumMs / (float)s_ctToT1aGapCount) : 0.0f;
+          float avgSuccessDurMs = s_t1aSuccessDurCount
+              ? ((float)s_t1aSuccessDurSumMs / (float)s_t1aSuccessDurCount) : 0.0f;
+          float avgFailDurMs = s_t1aFailDurCount
+              ? ((float)s_t1aFailDurSumMs / (float)s_t1aFailDurCount) : 0.0f;
+          float avgFailCtToEndMs = s_t1aFailCtToEndCount
+              ? ((float)s_t1aFailCtToEndSumMs / (float)s_t1aFailCtToEndCount) : 0.0f;
+          Serial.printf("[T1A-TIMING-STATS] firstAfterCT_ok=%lu firstAfterCT_fail=%lu "
+                        "notFirst_ok=%lu notFirst_fail=%lu "
+                        "avgCtToStartMs=%.1f maxCtToStartMs=%lu "
+                        "avgSuccessDurMs=%.1f maxSuccessDurMs=%lu "
+                        "avgFailDurMs=%.1f maxFailDurMs=%lu "
+                        "avgFailCtToEndMs=%.1f maxFailCtToEndMs=%lu t=%lums\r\n",
+                        (unsigned long)firstAfterCTSuccessCount, (unsigned long)firstAfterCTFailCount,
+                        (unsigned long)notFirstSuccessCount, (unsigned long)notFirstFailCount,
+                        avgCtToStartMs, (unsigned long)s_ctToT1aGapMaxMs,
+                        avgSuccessDurMs, (unsigned long)s_t1aSuccessDurMaxMs,
+                        avgFailDurMs, (unsigned long)s_t1aFailDurMaxMs,
+                        avgFailCtToEndMs, (unsigned long)s_t1aFailCtToEndMaxMs,
+                        (unsigned long)nowTimingStats);
+        }
+      }
+
+      // [RX-Byte-Diag] Bracketing timestamp only -- read-only, no effect on
+      // the call itself.
+      uint32_t t1bStartMs = millis();
+      uint8_t rcVrmsY = modbus.readHoldingRegisters(REG_VRMS_Y, 1);
+      uint32_t t1bEndMs = millis();
+      if (rcVrmsY == modbus.ku8MBSuccess) {
         raw_y = (int16_t)modbus.getResponseBuffer(0);
       } else {
         success = false; retryCount++;
+        logModbusTransactionFail("T1b-VRMSY", REG_VRMS_Y, MODBUS_SLAVE_ID, 3, rcVrmsY,
+                                  false, prevTxnName, "T1c-VRMSZ");
+        logModbusRxByteDiag(kRxDiagT1b, rcVrmsY, t1bEndMs - t1bStartMs);
       }
+      prevTxnName = "T1b-VRMSY";
       vTaskDelay(pdMS_TO_TICKS(5));
 
-      if (modbus.readHoldingRegisters(REG_VRMS_Z, 1) == modbus.ku8MBSuccess) {
+      uint32_t t1cStartMs = millis();
+      uint8_t rcVrmsZ = modbus.readHoldingRegisters(REG_VRMS_Z, 1);
+      uint32_t t1cEndMs = millis();
+      if (rcVrmsZ == modbus.ku8MBSuccess) {
         raw_z = (int16_t)modbus.getResponseBuffer(0);
       } else {
         success = false; retryCount++;
+        logModbusTransactionFail("T1c-VRMSZ", REG_VRMS_Z, MODBUS_SLAVE_ID, 3, rcVrmsZ,
+                                  false, prevTxnName, "T2a-TEMP");
+        logModbusRxByteDiag(kRxDiagT1c, rcVrmsZ, t1cEndMs - t1cStartMs);
       }
+      prevTxnName = "T1c-VRMSZ";
       vTaskDelay(pdMS_TO_TICKS(5));
 
       // Transaction 2a: Temperature (0x40)
-      if (modbus.readHoldingRegisters(REG_TEMPERATURE, 1) == modbus.ku8MBSuccess) {
+      uint32_t t2aStartMs = millis();
+      uint8_t rcTemp = modbus.readHoldingRegisters(REG_TEMPERATURE, 1);
+      uint32_t t2aEndMs = millis();
+      if (rcTemp == modbus.ku8MBSuccess) {
         raw_temp = (int16_t)modbus.getResponseBuffer(0);
       } else {
         success = false;
+        // [FREQ/CF-Cleanup] "next" label updated from "T2b-FREQ" -- that
+        // transaction no longer exists; T7-CTR4A01 is the next transaction
+        // actually attempted this cycle (cosmetic string only, no control-flow
+        // effect -- see logModbusTransactionFail()'s own signature above).
+        logModbusTransactionFail("T2a-TEMP", REG_TEMPERATURE, MODBUS_SLAVE_ID, 3, rcTemp,
+                                  false, prevTxnName, "T7-CTR4A01");
+        logModbusRxByteDiag(kRxDiagT2a, rcTemp, t2aEndMs - t2aStartMs);
       }
+      prevTxnName = "T2a-TEMP";
       vTaskDelay(pdMS_TO_TICKS(5));
 
-      // Transaction 2b: Frequency X, Y, Z (3 consecutive registers 0x44~0x46)
-      if (modbus.readHoldingRegisters(REG_FREQ_X, 3) == modbus.ku8MBSuccess) {
-        raw_fx = (uint16_t)modbus.getResponseBuffer(0);
-        raw_fy = (uint16_t)modbus.getResponseBuffer(1);
-        raw_fz = (uint16_t)modbus.getResponseBuffer(2);
-      } else {
-        raw_fx = 0;
-        raw_fy = 0;
-        raw_fz = 0;
+      // [RX-Byte-Diag] Periodic aggregate summary only -- independent 30s
+      // gate, never fires per-cycle, no per-success logging. Purely reads
+      // the file-scope g_rxDiagCount[][] counters populated by
+      // logModbusRxByteDiag() above (T1a/T1b/T1c/T2a) and by
+      // readCurrentSensor() (T7) -- does not affect success, retryCount, or
+      // any other control-flow state.
+      {
+        uint32_t nowRxDiagStats = millis();
+        if (nowRxDiagStats - s_lastRxDiagStatsLogMs >= 30000) {
+          s_lastRxDiagStatsLogMs = nowRxDiagStats;
+          Serial.printf("[MODBUS-RX-DIAG-STATS] t=%lums\r\n", (unsigned long)nowRxDiagStats);
+          for (uint8_t i = 0; i < kRxDiagTxnCount; i++) {
+            Serial.printf("  txn=%s bytes0=%lu bytes1to4=%lu bytes5plus=%lu\r\n",
+                          kRxDiagTxnNames[i],
+                          (unsigned long)g_rxDiagCount[i][0],
+                          (unsigned long)g_rxDiagCount[i][1],
+                          (unsigned long)g_rxDiagCount[i][2]);
+          }
+        }
       }
-      vTaskDelay(pdMS_TO_TICKS(5));
 
-      // Transaction 3: CFX (0x47) + KX (0x48) -- Accel Crest Factor [v15.0]
-      // Optional -- ถ้า fail ปล่อยค่าเดิม (0) ไม่กระทบ success หลัก
-      // [Phase 1] Still a 2-register read: the register map puts CFX and KX
-      // adjacent, so the transaction width is fixed by the device, not by us.
-      // Word 2 (KX) is simply no longer read out -- no bus traffic changes.
-      if (modbus.readHoldingRegisters(REG_CFX, 2) == modbus.ku8MBSuccess) {
-        raw_cfx = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.14
-      }
-      vTaskDelay(pdMS_TO_TICKS(5));
-
-      // Transaction 4: CFY (0x53) + KY (0x54) -- Y-axis [v15.1]
-      if (modbus.readHoldingRegisters(REG_CFY, 2) == modbus.ku8MBSuccess) {
-        raw_cfy = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.15
-      }
-      vTaskDelay(pdMS_TO_TICKS(5));
-
-      // Transaction 5: CFZ (0x5F) + KZ (0x60) -- Z-axis [v15.1]
-      if (modbus.readHoldingRegisters(REG_CFZ, 2) == modbus.ku8MBSuccess) {
-        raw_cfz = (uint16_t)modbus.getResponseBuffer(0); // v15.6 fix: unsigned per datasheet §6.4.16
-      }
-      vTaskDelay(pdMS_TO_TICKS(5));
-
-      // [Phase2] Transaction 6 (Peak Velocity 0x3A~0x3C) REMOVED. Its only
-      // consumer was peak_velocity_x/y/z on /sensor, dropped in Phase 1, so the
-      // read had become pure bus traffic. This is the ONLY Modbus register read
-      // removed by Phase 2: VRMS 0x50/0x5C/0x68 stay (stuck detection) and FREQ
-      // 0x44-0x46 stay (raw Hz still shown on the OLED and /sensor).
-      // ทั้ง T3/T4/T5 เป็น optional -- ไม่ set success = false ถ้า fail
+      // [FREQ/CF-Cleanup] Transaction 2b (FREQ X/Y/Z, reg 0x44~0x46) and
+      // Transactions 3/4/5 (CFX/CFY/CFZ, reg 0x47/0x53/0x5F) REMOVED. Final
+      // dependency check (VRMS_FREQ_CF_DEPENDENCY_AUDIT, confirmed again
+      // immediately before this edit) found their only consumers were the
+      // [FREQ-SRC]/[CF-SRC] reference-only diagnostic comparison logs
+      // (also removed) -- no product/MQTT/OLED path ever read the
+      // register-derived freq_x/y/z or cf_x/y/z/cf_max. The canonical
+      // dominant-frequency and crest-factor values (dspDominantFreq(),
+      // dspCrestFactor(), published as freq_x/y/z and crest_factor) are
+      // computed from FIFO RAW -> DSP and are entirely unaffected.
+      //
+      // [Phase2] Transaction 6 (Peak Velocity 0x3A~0x3C) REMOVED earlier. Its
+      // only consumer was peak_velocity_x/y/z on /sensor, dropped in Phase 1,
+      // so the read had become pure bus traffic. VRMS 0x50/0x5C/0x68 stay
+      // (stuck-axis watchdog, unaffected by this cleanup).
 
       // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
       // Cadence gating + result storage only -- readCTR4A01Current() owns the
@@ -6493,6 +7378,16 @@ void taskModbusRead(void* parameter) {
         // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
         vTaskDelay(pdMS_TO_TICKS(5));
         localData.current_valid = readCTR4A01Current(localData.current_a);
+        // [Sensor-Failure-Instrumentation] The CT slave-ID switch (to
+        // CURRENT_SENSOR_ID and back to MODBUS_SLAVE_ID) happened above
+        // regardless of current_valid's outcome -- set unconditionally so
+        // next cycle's T1a is correctly tagged firstAfterCT, whether this
+        // CT read itself succeeded or failed.
+        s_ctSlaveSwitchLastCycle = true;
+        // [Sensor-Failure-Instrumentation, Base-Rate] Timestamp the instant
+        // CT slave-ID restoration completed -- consumed by the next cycle's
+        // firstAfterCT gap measurement above.
+        s_ctRestoreMs = millis();
       }
 
       rs485Disable("NORMAL-POLL");
@@ -6515,6 +7410,19 @@ void taskModbusRead(void* parameter) {
     }
 
     if (success) {
+      // [Sensor-Queue-Fix Stage 1] Everything from here through the normal
+      // enqueue below -- quick-reconfig, stuck-axis detection/restart, and
+      // the data-processing/enqueue block -- requires a real acquisition
+      // this cycle. success alone cannot tell the two cases apart (it stays
+      // true on a skipped cycle); pollPerformed can. Gating the whole
+      // branch here (rather than threading a check through each sub-path)
+      // is what stops quick-reconfig Modbus writes and stuck-axis
+      // evaluation from ever running against stale retained raw_x/y/z
+      // during a FIFO-owned cycle -- see restartSensorViaModbus()'s own
+      // ownership guard for the matching defence-in-depth on the restart
+      // side. The pollPerformed==false branch (FIFO owns the bus) is at
+      // the bottom of this if/else, right before the queue-full helper.
+      if (pollPerformed) {
       // -- + ??????????: Reset consecutive error counter --
       if (g_modbusConsecErrors > 0) {
         bool wasOffline = g_sensorOffline;
@@ -6526,7 +7434,7 @@ void taskModbusRead(void* parameter) {
         // [PATCHED v16.3c] gate warmup ทุกครั้งที่ sensor กลับมา (consec >= 1)
         // เดิม: gate เฉพาะ wasOffline (consec >= 3) → spike ผ่านตอน consec=1
         // ใหม่: gate ทุกครั้ง เพราะ spike เกิดหลัง consec=1 เสมอ
-        g_sensorWarmupReads  = 8;  // 8 reads x 250ms = 2s suppress window
+        g_sensorWarmupUntilMs = millis() + SENSOR_WARMUP_MS;  // 2s suppress window (was 8 reads x 250ms)
 
         // [PATCHED v16.3d] Re-configure sensor ทุกครั้งที่กลับมา online
         // sensor WTVB02 รีบูตตัวเองจาก RS485 noise แม้ consec=1 read fail
@@ -6563,8 +7471,8 @@ void taskModbusRead(void* parameter) {
           // [v16.3m] reconfig fail → extend warmup suppress window
           // sensor อาจส่งค่า garbage สูงผิดปกติ เช่น rms=19.5 mm/s
           // เพิ่ม warmup reads เป็น 16 (4 วินาที) เพื่อ suppress garbage values
-          g_sensorWarmupReads = 16;
-          Serial.println("[MODBUS] ! Extending warmup suppress to 16 reads (4s) after reconfig fail");
+          g_sensorWarmupUntilMs = millis() + SENSOR_WARMUP_RECONFIG_FAIL_MS;
+          Serial.println("[MODBUS] ! Extending warmup suppress to 4s after reconfig fail");
         }
       }
 
@@ -6735,26 +7643,19 @@ void taskModbusRead(void* parameter) {
       // authoritative vibration measurement is FIFO RAW -> DSP velocity
       // (VibVelocity_ComputeRms -> g_velCarrier -> velocity_rms_*).
 
-      // Step 3: Sensor-computed CF & Kurtosis -- ครบ 3 แกน [v15.1]
-      // คำนวณจาก 16KHz raw FIFO ภายใน chip
-      // raw = 0 ถ้า transaction fail (ปลอดภัย -- guard > 0)
-      localData.cf_x       = (raw_cfx > 0) ? raw_cfx / 1000.0f : 0.0f;
-      localData.cf_y       = (raw_cfy > 0) ? raw_cfy / 1000.0f : 0.0f;
-      localData.cf_z       = (raw_cfz > 0) ? raw_cfz / 1000.0f : 0.0f;
-
-      // [Phase 1] kurtosis_x/y/z scaling REMOVED with the bearing pipeline.
-
-      // Derived: max CF [v15.1]. cf_x/y/z remain a validation REFERENCE for the
-      // canonical FIFO/DSP crest factor -- see the [CF-SRC] log. No product
-      // consumer reads them.
-      // [Phase 1] kurtosis_max / kurtosis_dominant_axis derivation REMOVED.
-      localData.cf_max = max(localData.cf_x, max(localData.cf_y, localData.cf_z));
+      // [FREQ/CF-Cleanup] Step 3 (cf_x/y/z/cf_max assignment from raw_cfx/y/z)
+      // and the freq_x/y/z assignment below (from raw_fx/y/z) REMOVED along
+      // with the register reads that fed them -- see the [FREQ/CF-Cleanup]
+      // note at the removed Transaction 2b/3/4/5 site above. localData's
+      // cf_x/cf_y/cf_z/cf_max/freq_x/freq_y/freq_z fields are left declared
+      // (VibrationData_t, unchanged) but are no longer written anywhere;
+      // nothing reads them (confirmed by the same dependency check), so this
+      // is inert unused storage, not a dangling reference.
+      // [Phase 1] kurtosis_x/y/z scaling and kurtosis_max/dominant_axis
+      // derivation REMOVED earlier with the bearing pipeline.
 
       // Step 4: Misc
       localData.temperature = raw_temp / 100.0f;
-      localData.freq_x = raw_fx / 10.0f;
-      localData.freq_y = raw_fy / 10.0f;
-      localData.freq_z = raw_fz / 10.0f;
 
       // Step 4c: Peak Velocity X/Y/Z (signed, raw/100) [DESIGN-0004]
       // เก็บค่า signed ตรงจาก register -- ไม่ทำ abs() (Decision 4, ยืนยันจาก datasheet §6.4.6)
@@ -6771,16 +7672,20 @@ void taskModbusRead(void* parameter) {
 
       // ถ้าค่าใดค่าหนึ่งเป็น NaN/Inf → skip cycle นี้ทั้งหมด (ไม่เข้า State Machine)
       // [Phase2] legacy rms_overall / vel_peak_* dropped from this guard along
-      // with the fields themselves; temperature / CF still checked.
+      // with the fields themselves; temperature still checked.
       // [Phase 1] the kurtosis_max term is gone with the field. It was already
       // unreachable -- kurtosis_max derived from uint16/1000.0f, which can be
       // neither NaN nor Inf -- so removing it cannot change which cycles pass.
-      if (!isFloatSafe(localData.temperature)   ||
-          !isFloatSafe(localData.cf_max)) {
+      // [FREQ/CF-Cleanup] the cf_max term is removed for the identical reason
+      // and by the identical precedent as kurtosis_max immediately above: it
+      // was always uint16_t/1000.0f or 0.0f, never NaN/Inf/negative, so this
+      // check never actually failed on it -- removing it cannot change which
+      // cycles pass. localData.cf_max itself is no longer assigned (see Step
+      // 3 above), so keeping this check would read a permanently-unset value.
+      if (!isFloatSafe(localData.temperature)) {
         Serial.printf("[SENSOR] ! NaN/Inf detected in derived values -- skipping cycle "
-                      "(temp=%.2f cf=%.2f) [v16.3u]\n",
-                      localData.temperature,
-                      localData.cf_max);
+                      "(temp=%.2f) [v16.3u]\n",
+                      localData.temperature);
         // ไม่ set localData.valid = true → State Machine ไม่รับค่านี้
         rs485Disable("NAN-GUARD");
         xLastWakeTime = xTaskGetTickCount();
@@ -6805,7 +7710,35 @@ void taskModbusRead(void* parameter) {
 
       // Send to queue (non-blocking)
       if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
-        Serial.println("[CORE 0] Sensor queue full!");
+        logSensorQueueFull();
+      }
+      } else {
+        // [Sensor-Queue-Fix Stage 1] pollPerformed == false: FifoDriver
+        // owns the bus this cycle, so none of quick-reconfig, stuck-axis
+        // detection, or a fresh Modbus-derived localData exist for this
+        // tick -- see the pollPerformed==true branch above for all of
+        // that. localData.current_availability is already
+        // UNAVAILABLE_EXPECTED (set in the FifoDriver_OwnsBus() branch
+        // earlier in this same loop iteration). buildMotorStateEvidence()'s
+        // live MOTOR_SRC_CURRENT path reads that flag to correctly freeze
+        // its ageMs evaluation rather than manufacture a false fault (see
+        // the Sensor-Queue-Fix Stage 0 evidence review) -- it needs that
+        // delivered at roughly the same ~250ms semantic rate a real poll
+        // would have produced, not the 10ms FIFO-service cadence this
+        // branch itself runs at, hence the rate limit below.
+        uint32_t nowFifoMarker = millis();
+        // [S1] Was a hard-coded 250. Derived from the polling period so the
+        // "roughly the same semantic rate a real poll would have produced"
+        // guarantee above holds by construction if that period ever changes.
+        if (s_lastFifoMarkerEnqueueMs == 0 ||
+            (nowFifoMarker - s_lastFifoMarkerEnqueueMs) >= MODBUS_POLL_PERIOD_MS) {
+          s_lastFifoMarkerEnqueueMs = nowFifoMarker;
+          localData.timestamp = nowFifoMarker;
+          localData.valid     = true;
+          if (xQueueSend(queueSensorData, &localData, 0) != pdPASS) {
+            logSensorQueueFull();
+          }
+        }
       }
     } else {
       // -- x Modbus ?????????? (timeout / no response) --
@@ -6915,14 +7848,11 @@ void taskStateMachine(void* parameter) {
       // reaches consumers via captureTelemetrySnapshot() at the end of this
       // block instead of a separate g_vibData memcpy here.
 
-      // [Phase2] Temperature history ring (Core 0 only, no mutex needed).
-      // Replaces the former g_trendBuf, which mixed four unrelated concerns
-      // (legacy VRMS rms, legacy VPEAK peak, temperature, freq_ratio) in one
-      // struct. rms/peak/freq_ratio are gone; temperature is the only survivor
-      // and it gets a plain float ring of its own.
-      g_tempBuf[g_tempHead] = sensorData.temperature;
-      g_tempHead  = (g_tempHead + 1) % TEMP_BUF_SIZE;
-      if (g_tempCount < TEMP_BUF_SIZE) g_tempCount++;
+      // [Temperature-trend cleanup, Option 2] g_tempCount removed -- its
+      // only remaining readers (window_samples/trend_window_s) are gone too;
+      // confirmed via live VPS audit that trend_window_s had no downstream
+      // consumer. Temperature itself (TEMP 0x0040 polling, sensorData.temperature)
+      // is untouched -- only this now-orphaned counter is gone.
 
       // -- Push current sample into circular buffer (Core 0 only, no mutex) [v16.6a] --
       // sensorData.current_valid is only true on cycles where taskModbusRead actually
@@ -6961,14 +7891,10 @@ void taskStateMachine(void* parameter) {
 
       // [PATCHED v16.3b] Suppress transient spike หลัง sensor กลับ online
       // sensor ให้ค่า spike สูงใน 1-2 reads แรกหลัง power cycle (เห็น RMS=22mm/s)
-      if (g_sensorWarmupReads > 0) {
-        g_sensorWarmupReads--;
-      }
-      // [vNext] TEMPORARY: tick down the FAULT_LATCH startup-settling holdoff, same
-      // cadence as g_sensorWarmupReads above. FAULT_LATCH qualification only.
-      if (g_motorRunFaultLatchHoldoff > 0) {
-        g_motorRunFaultLatchHoldoff--;
-      }
+      // [S1] The two per-queue-entry tick-downs that lived here (warmup and the
+      // FAULT_LATCH startup holdoff) are gone: both windows are now millis()
+      // deadlines that expire on their own, read through sensorWarmupActive() /
+      // motorRunFaultLatchHoldoffActive(). Nothing else ran in this block.
 
       // [M1A] Vibration alarm decision tree. Reads vibMmS (FIFO RAW -> DSP
       // velocity_rms_overall). Does NOT read rms/sensorData.rms_overall.
@@ -6976,7 +7902,7 @@ void taskStateMachine(void* parameter) {
       // must also drop a part-accumulated escalation. Requirement: an
       // observation with velocity_data_valid == 0 is NOT an alarm
       // observation, so it can neither count toward nor bridge a run of two.
-      if (g_motorRunState != MOTOR_RUNNING || g_sensorWarmupReads > 0 ||
+      if (g_motorRunState != MOTOR_RUNNING || sensorWarmupActive() ||
           !vibOk || !vibThresholdsConfigured()) {
         s_vibPendCount     = 0;
         s_vibPendState     = STATE_NORMAL;
@@ -6987,8 +7913,8 @@ void taskStateMachine(void* parameter) {
         newState = STATE_NORMAL;  // STOPPED/STARTING/STOPPING → ไม่ประเมิน alarm
         // Legitimate NORMAL: the machine genuinely is not running. This is a
         // real decision, not an absence of one, so it may clear an alarm.
-      } else if (g_sensorWarmupReads > 0) {
-        newState = STATE_NORMAL;  // warmup reads หลัง sensor online → suppress spike
+      } else if (sensorWarmupActive()) {
+        newState = STATE_NORMAL;  // warmup window หลัง sensor online → suppress spike
       } else if (!vibOk) {
         // ── VIBRATION_UNAVAILABLE ────────────────────────────────────────────
         // Velocity invalid or stale (FIFO suspended, DSP gate failed, or no
@@ -7126,7 +8052,7 @@ void taskStateMachine(void* parameter) {
           latchHealth = (int)max(0.0f, min(100.0f, roundf(100.0f - norm)));
         }
         // [v16.3m] suppress latch ถ้า rms garbage หรืออยู่ใน warmup suppress
-        // [vNext] TEMPORARY: added g_motorRunFaultLatchHoldoff term -- suppresses
+        // [vNext] TEMPORARY: added motorRunFaultLatchHoldoffActive() term -- suppresses
         // FAULT_LATCH only, for a short window right after STARTING->RUNNING, so the
         // mechanical/vibration settling transient at motor start-up cannot create a
         // latch. Does not alter newState (STATE_WARNING/CRITICAL, buzzer, live
@@ -7140,7 +8066,7 @@ void taskStateMachine(void* parameter) {
         // is the structural guarantee behind M1A requirement 7's "do not clear
         // an existing vibration alarm latch".
         const bool suppressLatch = (!healthUsable || !vibDecisionValid ||
-                                    g_sensorWarmupReads > 0 || g_motorRunFaultLatchHoldoff > 0);
+                                    sensorWarmupActive() || motorRunFaultLatchHoldoffActive());
         // [M1A] EDGE-TRIGGERED, not per-tick. With thresholds deliberately
         // unset, suppressLatch is true on EVERY 4 Hz cycle -- the original
         // unconditional printf would have become a 4 lines/second flood, which
@@ -7148,11 +8074,15 @@ void taskStateMachine(void* parameter) {
         // diagnostic value at zero steady-state cost.
         static bool s_prevSuppressLatch = false;
         if (suppressLatch != s_prevSuppressLatch) {
-          Serial.printf("[LATCH] Suppress %s -- vibOk=%d thrCfg=%d decisionValid=%d warmup=%u runHoldoff=%u\n",
+          // [S1] warmup/runHoldoff now report REMAINING MILLISECONDS (were read
+          // counts). Field names keep their spelling so existing log greps and
+          // saved captures still match; the unit suffix makes the change explicit.
+          Serial.printf("[LATCH] Suppress %s -- vibOk=%d thrCfg=%d decisionValid=%d warmup=%ums runHoldoff=%ums\n",
                         suppressLatch ? "ON" : "OFF",
                         (int)latchVibOk, (int)vibThresholdsConfigured(),
-                        (int)vibDecisionValid, (unsigned)g_sensorWarmupReads,
-                        (unsigned)g_motorRunFaultLatchHoldoff);
+                        (int)vibDecisionValid,
+                        (unsigned)sensorWarmupRemainingMs(),
+                        (unsigned)motorRunFaultLatchHoldoffRemainingMs());
           s_prevSuppressLatch = suppressLatch;
         }
         const bool latchBearing = false;  // [v16.3l] ปิดถาวร
@@ -7252,6 +8182,77 @@ void taskDisplayUpdate(void* parameter) {
   }
 }
 
+// ============================================================================
+// [PHASE1.5-S2] GprsTransport -- existing A7670/TinyGSM path behind INetTransport
+// ----------------------------------------------------------------------------
+// Spec: docs/engineering/PHASE1_5_DUAL_NETWORK_CHANGE_SPEC.md §4
+//
+// WHY THIS CLASS LIVES IN THE .ino AND NOT IN net_transport_gprs.cpp:
+// every object it wraps -- modem, gsmClient, modemInit(), modemConnectGPRS(),
+// modemEnableNetworkTime(), gprsFetchNetworkUTC(), root_ca/client_crt/
+// client_key -- is defined in this sketch. Moving the class to its own
+// translation unit would require relocating the 700-line GsmTLSClient and the
+// whole modem stack with it, which is exactly the "rewrite rather than move"
+// the spec rejects (§4.2). This adapter is a thin pass-through: it adds no
+// modem behaviour and changes none.
+//
+// It is defined HERE, after all the modem functions it calls, so no reliance
+// is placed on .ino auto-prototype ordering for member-function bodies.
+//
+// DORMANCY CONTRACT (§4.1): every A7670 entry point -- modemInit(),
+// modemPowerOn(), SerialAT.begin(), pinMode(IO4/IO9), GPRS attach, AT time
+// query, gsmClient TLS -- is reachable ONLY through the methods below, which
+// in turn are reachable only while this transport is the manager's active one.
+// ============================================================================
+class GprsTransport : public INetTransport {
+public:
+  bool begin() override {
+    // Mirrors the original boot sequence exactly: modemInit(), and
+    // modemEnableNetworkTime() only on success.
+    if (!modemInit()) return false;
+    modemEnableNetworkTime();
+    return true;
+  }
+
+  bool connect() override {
+    modemConnectGPRS();
+    return g_network.gprsConnected;
+  }
+
+  void disconnect() override {
+    // Not exercised in this phase: the existing GPRS path has no teardown
+    // call site. Left unimplemented rather than inventing modem behaviour.
+  }
+
+  // LIVE query -- identical call to the one it replaces, so the modem is
+  // polled exactly as often as before.
+  bool linkUp() override { return modem.isGprsConnected(); }
+
+  Client& client() override { return gsmClient; }
+
+  bool applyCredentials() override {
+    // Delegates to the existing setupTLS() rather than copying its body, so
+    // the cert-loading sequence has exactly ONE definition in the firmware.
+    // setupTLS() returns void and logs its own failure; the original caller
+    // ignored failure too, so returning true unconditionally here preserves
+    // the previous behaviour exactly.
+    setupTLS();
+    return true;
+  }
+
+  void resetSecureSession() override { gsmClient.resetTLS(); }
+
+  bool fetchNetworkUTC(DateTime& out) override { return gprsFetchNetworkUTC(out); }
+
+  int signalPercent() override { return g_network.signalPercent; }
+
+  const char* name() const override { return "GPRS"; }
+
+  const char* localIP() override { return ""; }   // not tracked on this transport
+};
+
+GprsTransport g_gprsTransport;
+
 /**
  * Task 4: 4G Modem & MQTT Network (CORE 1, Priority 2)
  * Handles 4G connectivity and telemetry publishing
@@ -7271,39 +8272,119 @@ void taskNetwork(void* parameter) {
 
   vTaskDelay(pdMS_TO_TICKS(5000));  // Wait for system to stabilize
 
-  // Initialize modem
-  // [v16.6d] FIX-WDT: modemInit() may block up to ~85s across its internal retries.
+  // [PHASE1.5-S3/S5] Register the available transports with the manager.
+  // Registration performs NO hardware activity -- it only stores pointers.
+  g_netmgr.registerTransport(NETWORK_GPRS_ONLY, &g_gprsTransport);
+  g_netmgr.registerTransport(NETWORK_WIFI_ONLY, &g_wifiTransport);
+
+  // [PHASE1.5-S5/S6] Inject the Wi-Fi transport's dependencies.
+  // Configuration only -- no radio activity happens here.
+  // [PHASE1.5-S7] SSID/passphrase come from NVS (loadNvsConfig), never from
+  // source. mTLS material and the time-validity bounds are the SAME constants
+  // the GPRS path uses -- no duplicate definition is introduced.
+  g_wifiTransport.setCredentials(root_ca, client_crt, client_key);
+  g_wifiTransport.setTimeBounds(FL_TS_MIN_VALID, MAX_VALID_YEAR);
+  g_wifiTransport.setWifiCredentials(g_cfgWifiSsid, g_cfgWifiPass);
+
+  // [PHASE1.5-S7] Runtime transport selection.
+  // DEFAULT = NETWORK_WIFI_ONLY (see g_cfgNetMode). The A7670 on this unit is
+  // physically failed, so the GPRS branch below is entered ONLY if NVS
+  // explicitly selects NETWORK_GPRS_ONLY. With no NVS config at all the device
+  // runs Wi-Fi-only and never touches the modem.
+  NetworkMode_t netMode = (g_cfgNetMode == (int)NETWORK_GPRS_ONLY)
+                            ? NETWORK_GPRS_ONLY
+                            : NETWORK_WIFI_ONLY;   // any other value -> Wi-Fi
+  Serial.printf("[CORE 1] Network mode: %s\n",
+                (netMode == NETWORK_GPRS_ONLY) ? "GPRS_ONLY" : "WIFI_ONLY");
+
+  // [v16.6d] FIX-WDT: on the GPRS path modemInit() may block up to ~85s across
+  // its internal retries. The Wi-Fi path does not block here at all.
   esp_task_wdt_reset();
-  if (!modemInit()) {
-    Serial.println("[CORE 1] Modem init failed!");
+  bool netBegun = g_netmgr.begin(netMode);
+  if (!netBegun) {
+    Serial.println("[CORE 1] Network transport init failed!");
     // Continue running but in error state
-  } else {
-    // Enable automatic network time update on the modem
-    modemEnableNetworkTime();
   }
-  esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemInit() returned
+  esp_task_wdt_reset();
 
-  // Connect to GPRS if modem is ready
-  if (g_network.modemReady) {
-    // [v16.6d] FIX-WDT: modemConnectGPRS() -> waitForNetwork(30000L) may block up to 30s.
+  if (netMode == NETWORK_GPRS_ONLY) {
+    // ---------------- GPRS boot path (UNCHANGED) ----------------
+    // Reachable only when NVS explicitly selects GPRS. Not taken on this unit.
+    // Connect to GPRS if modem is ready
+    if (g_network.modemReady) {
+      // [v16.6d] FIX-WDT: modemConnectGPRS() -> waitForNetwork(30000L) may block up to 30s.
+      esp_task_wdt_reset();
+      g_netmgr.connect();     // [PHASE1.5-S3] == modemConnectGPRS()
+      esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemConnectGPRS() returned
+
+      // Perform initial time sync after GPRS connects
+      if (g_network.gprsConnected) {
+        Serial.println("[CORE 1] Performing initial NTP time sync...");
+        // Wait a moment for modem to receive network time
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        // [v16.5j] Routed through checkAndSyncTime() instead of calling
+        // syncRTCFromModem() directly -- this was the second, independent
+        // runtime call site, and it never touched lastCheckMillis, so it sat
+        // outside the fixed scheduler entirely. g_timeSync.lastCheckMillis is
+        // still 0 at this point (nothing has run yet), so checkAndSyncTime()'s
+        // own "lastCheckMillis == 0" first-run gate performs the check
+        // immediately here -- identical timing to the direct call it replaces
+        // -- while now going through the single scheduling/logging path.
+        checkAndSyncTime();
+      }
+    }
+  } else if (netBegun) {
+    // ---------------- Wi-Fi boot path [PHASE1.5-S7] ----------------
+    // No modem call of any kind occurs on this path: modemInit(),
+    // modemPowerOn(), SerialAT.begin() and pinMode(IO4/IO9) are reachable ONLY
+    // through GprsTransport, which is not the active transport here.
+    g_netmgr.connect();   // WiFi.begin() -- returns immediately, does not block
+
+    // Bounded, watchdog-safe wait for association + DHCP. The WDT is fed every
+    // 250 ms, so the 30 s task WDT can never expire inside this loop.
+    const uint32_t WIFI_BOOT_ASSOC_WAIT_MS = 15000UL;
+    uint32_t assocT0 = millis();
+    while (!g_netmgr.isConnected() &&
+           (millis() - assocT0) < WIFI_BOOT_ASSOC_WAIT_MS) {
+      esp_task_wdt_reset();
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
     esp_task_wdt_reset();
-    modemConnectGPRS();
-    esp_task_wdt_reset();   // [v16.6d] FIX-WDT: modemConnectGPRS() returned
 
-    // Perform initial time sync after GPRS connects
-    if (g_network.gprsConnected) {
+    if (g_netmgr.isConnected()) {
+      Serial.printf("[CORE 1] Wi-Fi connected, IP=%s, signal=%d%%\n",
+                    g_netmgr.active().localIP(), g_netmgr.active().signalPercent());
+      // Initial time sync over SNTP. Same scheduler entry point the GPRS path
+      // uses, so time_synced / sync_age_s semantics are identical.
       Serial.println("[CORE 1] Performing initial NTP time sync...");
-      // Wait a moment for modem to receive network time
-      vTaskDelay(pdMS_TO_TICKS(3000));
-      // [v16.5j] Routed through checkAndSyncTime() instead of calling
-      // syncRTCFromModem() directly -- this was the second, independent
-      // runtime call site, and it never touched lastCheckMillis, so it sat
-      // outside the fixed scheduler entirely. g_timeSync.lastCheckMillis is
-      // still 0 at this point (nothing has run yet), so checkAndSyncTime()'s
-      // own "lastCheckMillis == 0" first-run gate performs the check
-      // immediately here -- identical timing to the direct call it replaces
-      // -- while now going through the single scheduling/logging path.
+      esp_task_wdt_reset();
       checkAndSyncTime();
+      esp_task_wdt_reset();
+      // [PHASE1.5-WIFIMGR][Item 10] Boot-time association succeeded --
+      // clear the failure counter. Bounded, one-time NVS write, only when
+      // the stored value actually needs to change.
+      if (g_cfgWifiFailCount != 0) {
+        g_cfgWifiFailCount = 0;
+        esp_task_wdt_reset();
+        saveNvsConfig(g_cfgPlant, g_cfgMachine, g_cfgSensor, g_cfgRpm, g_cfgApn);
+        esp_task_wdt_reset();
+      }
+    } else {
+      // Association failed. Retry is handled by the main loop below.
+      // There is deliberately NO cellular fallback here.
+      Serial.println("[CORE 1] Wi-Fi not connected at boot -- will retry in main loop");
+      // [PHASE1.5-WIFIMGR][Item 9] Counts ONLY this boot-time association
+      // wait, never the separate steady-state reconnect ladder in the main
+      // loop below (.ino ~7900+) -- ordinary runtime drops are not
+      // "repeated failure" in the sense this counter exists to detect.
+      // Persisted so it survives to the next boot, where setup() checks it
+      // against WIFI_MGR_FAIL_THRESHOLD.
+      g_cfgWifiFailCount++;
+      esp_task_wdt_reset();
+      saveNvsConfig(g_cfgPlant, g_cfgMachine, g_cfgSensor, g_cfgRpm, g_cfgApn);
+      esp_task_wdt_reset();
+      Serial.printf("[CORE 1] Boot Wi-Fi fail count = %d/%d\n",
+                    g_cfgWifiFailCount, WIFI_MGR_FAIL_THRESHOLD);
     }
   }
 
@@ -7317,11 +8398,21 @@ void taskNetwork(void* parameter) {
 
 
   // -- Load mTLS certs into ESP32 mbedTLS (same as aws_test.ino setupTLS) --
-  setupTLS();
-
-  // -- MQTT over mTLS (arduino-mqtt + GsmTLSClient + ESP32 mbedTLS) --
-  mqttClient.begin(MQTT_SERVER, MQTT_PORT, gsmClient);
-  mqttClient.setKeepAlive(60);
+  // [PHASE1.5-S3] Routed through the active transport. Same three PEM
+  // constants, same three setter calls, same call ordering as setupTLS().
+  // -- MQTT over mTLS (arduino-mqtt + transport TLS client + ESP32 mbedTLS) --
+  // [PHASE1.5-S5] THE SEAM. This was the single place the MQTT layer was bound
+  // to gsmClient; it now takes whichever Client the active transport provides.
+  // Host, port, client-id, QoS, keep-alive, topics and payloads are unchanged.
+  // [PHASE1.5-S7] Guarded: with no active transport a field unit logs the fault
+  // instead of dereferencing a null transport.
+  if (g_netmgr.hasActive()) {
+    g_netmgr.active().applyCredentials();
+    mqttClient.begin(MQTT_SERVER, MQTT_PORT, g_netmgr.client());
+    mqttClient.setKeepAlive(60);
+  } else {
+    Serial.println("[CORE 1] No active network transport -- MQTT not bound");
+  }
 
   // Connection state tracking
   bool lastGprsState = false;
@@ -7355,9 +8446,22 @@ void taskNetwork(void* parameter) {
     if (now - lastStatusCheck > 10000) {
       lastStatusCheck = now;
 
-      if (g_network.modemReady) {
-        bool gprs = modem.isGprsConnected();
-        bool network = modem.isNetworkConnected();
+      // [PHASE1.5-S7] Transport-aware link health.
+      // EVERY modem call in this block (isNetworkConnected / waitForNetwork /
+      // gprsConnect / getSignalQuality) lives inside the `gprsMode` branch
+      // below, so under NETWORK_WIFI_ONLY the damaged A7670 is never addressed.
+      // Defence in depth: g_network.modemReady is also false in Wi-Fi mode
+      // because modemInit() never ran.
+      const bool gprsMode = (g_netmgr.mode() == NETWORK_GPRS_ONLY);
+      if (gprsMode ? g_network.modemReady : g_netmgr.hasActive()) {
+        // Link state of the ACTIVE transport. On GPRS this resolves to exactly
+        // the former modem.isGprsConnected() -- one poll per cycle, as before.
+        bool linkUp = g_netmgr.isConnected();
+        bool network = false;   // GPRS registration state; stays false on Wi-Fi
+
+        // ---------------- GPRS-only link maintenance (unchanged) ----------------
+        if (gprsMode) {
+        network = modem.isNetworkConnected();
 
         // Try to reconnect network if lost
         if (!network) {
@@ -7372,11 +8476,15 @@ void taskNetwork(void* parameter) {
           // Safe unconditionally -- MQTTClient::loop() no-ops when not
           // connected (MQTTClient.cpp:507-511). Does not touch mqttConnSnap
           // or any existing cache-write; purely additive.
-          mqttClient.loop();
+          // [MQTTOWNER-GUARD] ...unconditionally safe w.r.t. connection state,
+          // but NOT w.r.t. the worker's ownership window -- loop() still
+          // touches the shared TLS object. Skipped while the worker owns it;
+          // resumes next iteration.
+          if (g_mqttOwner == MQTT_OWNER_IDLE) mqttClient.loop();
         }
 
         // Try to reconnect GPRS if network is up but GPRS is down
-        if (network && !gprs) {
+        if (network && !linkUp) {
           Serial.println("[CORE 1] Reconnecting GPRS...");
           // [v16.5d] Graceful MQTT close before the PDP context churns --
           // gprsConnectImpl() internally issues AT+NETCLOSE (closes all
@@ -7384,7 +8492,10 @@ void taskNetwork(void* parameter) {
           // local MQTT/TLS state without the broker ever seeing a clean
           // disconnect (session-takeover root cause). Bounded via
           // BOUNDED_STOP_MS above -- see GsmTLSClient::stop()/resetTLS().
-          if (mqttClient.connected()) {
+          // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns
+          // it. If the worker owns it, there is nothing to gracefully
+          // disconnect here -- the worker's own connect() will supersede it.
+          if (g_mqttOwner == MQTT_OWNER_IDLE && mqttClient.connected()) {
             Serial.println("[MQTT] Graceful disconnect before GPRS reconnect");
             mqttClient.disconnect();
           }
@@ -7392,16 +8503,17 @@ void taskNetwork(void* parameter) {
           modem.gprsConnect(g_cfgApn, GPRS_USER, GPRS_PASS);
           vTaskDelay(pdMS_TO_TICKS(5000));
           esp_task_wdt_reset();
-          gprs = modem.isGprsConnected();
+          linkUp = modem.isGprsConnected();
           // [minimal-fix, keepalive-starvation] same rationale as above --
           // services keepalive after this 5s blocking call too.
-          mqttClient.loop();
+          // [MQTTOWNER-GUARD] same reasoning as the loop() call above.
+          if (g_mqttOwner == MQTT_OWNER_IDLE) mqttClient.loop();
         }
 
-        g_network.gprsConnected = gprs;
+        g_network.gprsConnected = linkUp;
 
         // Update signal quality
-        if (gprs) {
+        if (linkUp) {
           g_network.signalQuality = modem.getSignalQuality();
           if (g_network.signalQuality != 99) {
             g_network.signalPercent = map(g_network.signalQuality, 0, 31, 0, 100);
@@ -7409,113 +8521,190 @@ void taskNetwork(void* parameter) {
             g_network.signalPercent = 0;
           }
         }
-
-        // Try to connect MQTT if GPRS is up but MQTT is down
-        bool mqttConnSnap9 = mqttClient.connected();
-        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #9)
-        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-          g_systemState.mqttConnected = mqttConnSnap9;
-          xSemaphoreGive(mutexSystemState);
+        // -------------- end GPRS-only link maintenance --------------
+        } else {
+          // ---------------- Wi-Fi link maintenance [PHASE1.5-S7] ----------------
+          // No blocking calls here: the ESP32 core's auto-reconnect handles
+          // transient drops. We only re-arm the association once its window has
+          // expired, so WiFi.begin() is never spammed while a join is still in
+          // progress. There is deliberately NO cellular fallback on this path.
+          if (!linkUp && g_wifiTransport.associationTimedOut()) {
+            Serial.println("[CORE 1] Wi-Fi link down -- re-arming association");
+            g_netmgr.active().connect();
+          }
+          // Same field the OLED/LED status paths already read. It is still
+          // named gprsConnected (the rename is Step 8, cosmetic); here it
+          // carries "active transport link is up" for whichever transport runs.
+          g_network.gprsConnected = linkUp;
+          if (linkUp) {
+            g_network.signalPercent = g_netmgr.active().signalPercent();
+          }
         }
-        if (gprs && !mqttConnSnap9 &&
+
+        // [PHASE1.5-MQTTWORKER] Steady-state connected() read + cache write:
+        // only while taskNetwork actually owns mqttClient (no attempt in
+        // flight). While the worker owns it (CONNECTING) this is skipped --
+        // touching mqttClient here would race the worker's own connect().
+        // See PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §3.3, §6.
+        bool mqttConnSnap9 = false;
+        if (g_mqttOwner == MQTT_OWNER_IDLE) {
+          mqttConnSnap9 = mqttClient.connected();
+          // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #9)
+          if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+            g_systemState.mqttConnected = mqttConnSnap9;
+            xSemaphoreGive(mutexSystemState);
+          }
+        }
+
+        // [PHASE1.5-MQTTWORKER] Consume a completed worker result, if any
+        // (non-blocking poll -- taskNetwork never blocks on the worker).
+        if (g_mqttOwner == MQTT_OWNER_RESULT_READY) {
+          MqttConnectResult_t result;
+          if (xQueueReceive(queueMqttConnectResult, &result, 0) == pdTRUE) {
+            esp_task_wdt_reset();
+
+            if (result.success) {
+              Serial.println("[CORE 1] MQTT Connected (mTLS) +");
+              // Fix C: reset backoff เมื่อ connect สำเร็จ
+              mqttBackoffMs = BACKOFF_MIN;
+              mqttFailCount = 0;
+
+              // [Commit 7A] Re-subscribe every successful (re)connect --
+              // subscriptions do not survive a reconnect in this library.
+              // Infrastructure only: mqttCommandCallback() above still only
+              // logs; nothing is enqueued or acted on as a result of this
+              // subscription in this commit. subscribe() itself ran inside
+              // the worker's ownership window (§2-3 of the implementation
+              // plan) -- only the outcome is inspected here.
+              if (result.subscribeOk) {
+                Serial.printf("[CORE 1] MQTT subscribed -> %s\n", g_mqttTopicCommand);
+              } else {
+                Serial.printf("[CORE 1] MQTT subscribe FAILED -> %s\n", g_mqttTopicCommand);
+              }
+            } else {
+              int mqttErr = result.lwmqttError;
+              int mqttRc  = result.mqttReturnCode;
+              mqttFailCount++;
+
+              // Fix C: exponential backoff -- 30s → 60s → 120s → 300s (max)
+              mqttBackoffMs = min(mqttBackoffMs * 2, (uint32_t)BACKOFF_MAX);
+
+              Serial.printf("[CORE 1] MQTT connect failed | err=%d rc=%d fail#%u next_retry=%lus\n",
+                            mqttErr, mqttRc,
+                            (unsigned)mqttFailCount,
+                            (unsigned long)(mqttBackoffMs / 1000));
+
+              if (mqttErr == LWMQTT_NETWORK_FAILED_CONNECT)
+                Serial.println("[CORE 1]   -> Layer: TCP connect failed (modem/network issue)");
+              else if (mqttErr == LWMQTT_NETWORK_TIMEOUT)
+                Serial.println("[CORE 1]   -> Layer: TLS handshake timed out");
+              else if (mqttRc == 5)
+                Serial.println("[CORE 1]   -> Layer: MQTT AUTH refused (check CN=client ID)");
+              else if (mqttRc == 4)
+                Serial.println("[CORE 1]   -> Layer: MQTT bad credentials");
+              else
+                Serial.println("[CORE 1]   -> Layer: TLS handshake failed (see [TLS] lines above)");
+
+              // Fix A: ถ้า fail มากกว่า 3 ครั้งต่อเนื่อง ให้ reset modem ด้วย
+              //
+              // [PHASE1.5-S7] SAFETY-CRITICAL GATE. This is an A7670 recovery
+              // path: modem.restart() issues AT commands and modemConnectGPRS()
+              // re-attaches GPRS. On this unit the A7670 is physically failed, so
+              // it must never be reached. It is now gated on gprsMode; the Wi-Fi
+              // branch performs the equivalent recovery without touching any
+              // modem, UART or GPIO. Runs here, after the worker has already
+              // relinquished ownership (result already consumed), so it
+              // cannot race the worker's own resetSecureSession()/connect().
+              if (mqttFailCount >= 3) {
+                if (gprsMode) {
+                  Serial.printf("[CORE 1] %u consecutive MQTT failures -- reinit modem\n",
+                                (unsigned)mqttFailCount);
+                  esp_task_wdt_reset();
+                  modem.restart();
+                  esp_task_wdt_reset();
+                  modemConnectGPRS();
+                  esp_task_wdt_reset();
+                } else {
+                  // Wi-Fi equivalent: drop the stale TLS session and re-arm the
+                  // association. Non-blocking, no cellular call of any kind.
+                  Serial.printf("[CORE 1] %u consecutive MQTT failures -- re-arming Wi-Fi\n",
+                                (unsigned)mqttFailCount);
+                  esp_task_wdt_reset();
+                  g_netmgr.active().resetSecureSession();
+                  g_netmgr.active().connect();
+                  esp_task_wdt_reset();
+                }
+                mqttFailCount = 0;
+                mqttBackoffMs = BACKOFF_MIN;
+              }
+            }
+
+            g_mqttOwner = MQTT_OWNER_IDLE;
+          }
+        }
+
+        // [PHASE1.5-MQTTWORKER] Request a new connect attempt: only while
+        // taskNetwork owns mqttClient (IDLE), link is up, MQTT is down, and
+        // backoff has elapsed -- same gate the former inline call used.
+        // taskNetwork never calls mqttClient.connect() itself; it only ever
+        // posts a request and later polls the result above.
+        if (g_mqttOwner == MQTT_OWNER_IDLE && linkUp && !mqttConnSnap9 &&
             (now - lastConnectionAttempt > mqttBackoffMs)) {
 
           lastConnectionAttempt = now;
 
-          // v15.4 Fix B: Full TLS reset ก่อน attempt ทุกครั้ง
-          // ล้าง stale cipher state จาก session เดิม (IP เปลี่ยน → old context)
-          esp_task_wdt_reset();   // Fix A: reset WDT ก่อน TLS operation
-          gsmClient.resetTLS();
-          esp_task_wdt_reset();   // Fix A: reset WDT หลัง TLS reset
-
-          Serial.printf("[CORE 1] Connecting MQTT (mTLS, ID=%s) backoff=%lus attempt#%u...\n",
-                        MQTT_CLIENT_ID,
-                        (unsigned long)(mqttBackoffMs / 1000),
-                        (unsigned)mqttFailCount + 1);
-
-          esp_task_wdt_reset();   // Fix A: reset WDT ก่อน TLS handshake (อาจใช้เวลา ~2s)
-          bool connected = mqttClient.connect(MQTT_CLIENT_ID);
-          esp_task_wdt_reset();   // Fix A: reset WDT หลัง TLS handshake
-
-          if (connected) {
-            Serial.println("[CORE 1] MQTT Connected (mTLS) +");
-            // Fix C: reset backoff เมื่อ connect สำเร็จ
-            mqttBackoffMs = BACKOFF_MIN;
-            mqttFailCount = 0;
-
-            // [Commit 7A] Re-subscribe every successful (re)connect --
-            // subscriptions do not survive a reconnect in this library.
-            // Infrastructure only: mqttCommandCallback() above still only
-            // logs; nothing is enqueued or acted on as a result of this
-            // subscription in this commit.
-            if (mqttClient.subscribe(g_mqttTopicCommand)) {
-              Serial.printf("[CORE 1] MQTT subscribed -> %s\n", g_mqttTopicCommand);
-            } else {
-              Serial.printf("[CORE 1] MQTT subscribe FAILED -> %s\n", g_mqttTopicCommand);
-            }
-          } else {
-            int mqttErr = mqttClient.lastError();
-            int mqttRc  = mqttClient.returnCode();
-            mqttFailCount++;
-
-            // Fix C: exponential backoff -- 30s → 60s → 120s → 300s (max)
-            mqttBackoffMs = min(mqttBackoffMs * 2, (uint32_t)BACKOFF_MAX);
-
-            Serial.printf("[CORE 1] MQTT connect failed | err=%d rc=%d fail#%u next_retry=%lus\n",
-                          mqttErr, mqttRc,
-                          (unsigned)mqttFailCount,
-                          (unsigned long)(mqttBackoffMs / 1000));
-
-            if (mqttErr == LWMQTT_NETWORK_FAILED_CONNECT)
-              Serial.println("[CORE 1]   -> Layer: TCP connect failed (modem/network issue)");
-            else if (mqttErr == LWMQTT_NETWORK_TIMEOUT)
-              Serial.println("[CORE 1]   -> Layer: TLS handshake timed out");
-            else if (mqttRc == 5)
-              Serial.println("[CORE 1]   -> Layer: MQTT AUTH refused (check CN=client ID)");
-            else if (mqttRc == 4)
-              Serial.println("[CORE 1]   -> Layer: MQTT bad credentials");
-            else
-              Serial.println("[CORE 1]   -> Layer: TLS handshake failed (see [TLS] lines above)");
-
-            // Fix A: ถ้า fail มากกว่า 3 ครั้งต่อเนื่อง ให้ reset modem ด้วย
-            if (mqttFailCount >= 3) {
-              Serial.printf("[CORE 1] %u consecutive MQTT failures -- reinit modem\n",
-                            (unsigned)mqttFailCount);
-              esp_task_wdt_reset();
-              modem.restart();
-              esp_task_wdt_reset();
-              modemConnectGPRS();
-              esp_task_wdt_reset();
-              mqttFailCount = 0;
-              mqttBackoffMs = BACKOFF_MIN;
-            }
+          uint8_t requestToken = 1;
+          if (xQueueSend(queueMqttConnectRequest, &requestToken, 0) == pdTRUE) {
+            g_mqttOwner = MQTT_OWNER_REQUESTED;
+            Serial.printf("[CORE 1] MQTT connect requested (mTLS, ID=%s) backoff=%lus attempt#%u...\n",
+                          MQTT_CLIENT_ID,
+                          (unsigned long)(mqttBackoffMs / 1000),
+                          (unsigned)mqttFailCount + 1);
           }
         }
 
 
         // Update modem state
-        bool mqttConnSnap14 = mqttClient.connected();
-        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #14)
-        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-          g_systemState.mqttConnected = mqttConnSnap14;
-          xSemaphoreGive(mutexSystemState);
+        // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns it;
+        // defaults to false while the worker owns it (no mqttClient touch).
+        // Downstream use (modemState below) is unaffected: both the
+        // "connected" and "not connected" branches of that gprsMode check
+        // already resolve to the same MODEM_STATE_GPRS_CONNECTED value.
+        bool mqttConnSnap14 = false;
+        if (g_mqttOwner == MQTT_OWNER_IDLE) {
+          mqttConnSnap14 = mqttClient.connected();
+          // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #14)
+          if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+            g_systemState.mqttConnected = mqttConnSnap14;
+            xSemaphoreGive(mutexSystemState);
+          }
         }
-        if (gprs && mqttConnSnap14) {
-          g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
-        } else if (gprs) {
-          g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
-        } else if (network) {
-          g_network.modemState = MODEM_STATE_REGISTERED;
-        } else {
-          g_network.modemState = MODEM_STATE_SEARCHING;
+        // [PHASE1.5-S7] MODEM_STATE_* is cellular vocabulary and is meaningful
+        // only on the GPRS transport. In Wi-Fi mode it is left untouched
+        // (MODEM_STATE_OFF), which is the truthful value: there is no modem.
+        if (gprsMode) {
+          if (linkUp && mqttConnSnap14) {
+            g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
+          } else if (linkUp) {
+            g_network.modemState = MODEM_STATE_GPRS_CONNECTED;
+          } else if (network) {
+            g_network.modemState = MODEM_STATE_REGISTERED;
+          } else {
+            g_network.modemState = MODEM_STATE_SEARCHING;
+          }
         }
 
         // Log state changes
-        if (gprs != lastGprsState) {
-          Serial.printf("[CORE 1] GPRS: %s\n", gprs ? "CONNECTED" : "DISCONNECTED");
-          // Trigger time sync when GPRS comes back up
-          if (gprs && !lastGprsState) {
-            Serial.println("[CORE 1] GPRS reconnected -- scheduling NTP sync");
+        if (linkUp != lastGprsState) {
+          // [PHASE1.5-S7] Transport-neutral wording: printing "GPRS" on a
+          // Wi-Fi unit would actively mislead during hardware validation.
+          Serial.printf("[CORE 1] %s link: %s\n",
+                        g_netmgr.active().name(),
+                        linkUp ? "CONNECTED" : "DISCONNECTED");
+          // Trigger time sync when the link comes back up
+          if (linkUp && !lastGprsState) {
+            Serial.printf("[CORE 1] %s reconnected -- scheduling NTP sync\n",
+                          g_netmgr.active().name());
             // [v16.5j] Forces checkAndSyncTime()'s NEXT call to fire
             // immediately, bypassing whatever interval wait was in
             // progress. Was "lastSyncMillis = 0" -- that field no longer
@@ -7528,10 +8717,16 @@ void taskNetwork(void* parameter) {
             // next check's timing is affected, exactly as intended.
             g_timeSync.lastCheckMillis = 0;
           }
-          lastGprsState = gprs;
+          lastGprsState = linkUp;
         }
 
-        if (mqttClient.connected() != lastMqttState) {
+        // [MQTTOWNER-GUARD] Only evaluate this state-change check while
+        // taskNetwork owns mqttClient. If the worker owns it, skip -- the
+        // transition will be observed and logged on a later iteration (via
+        // this same block once IDLE returns, or via the RESULT_READY
+        // consumption above, whichever runs first). No information is lost,
+        // only the log timing shifts by at most one loop iteration (~100ms).
+        if (g_mqttOwner == MQTT_OWNER_IDLE && mqttClient.connected() != lastMqttState) {
           bool nowConnected = mqttClient.connected();
           // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #15/16)
           if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
@@ -7556,17 +8751,28 @@ void taskNetwork(void* parameter) {
 
     // -- mqttClient.loop() ??? iteration = ??? 100ms --
     // ????????????? publish ????? process ACK/PINGREQ ??????
-    bool mqttConnSnap17 = mqttClient.connected();
-    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #17)
-    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-      g_systemState.mqttConnected = mqttConnSnap17;
-      xSemaphoreGive(mutexSystemState);
-    }
-    if (mqttConnSnap17) {
-      mqttClient.loop();
+    // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns it.
+    // loop() processes ACK/PINGREQ on the same shared TLS object the worker
+    // may be mid-teardown/mid-handshake on; skipped this iteration, resumes
+    // next iteration once IDLE.
+    bool mqttConnSnap17 = false;
+    if (g_mqttOwner == MQTT_OWNER_IDLE) {
+      mqttConnSnap17 = mqttClient.connected();
+      // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #17)
+      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+        g_systemState.mqttConnected = mqttConnSnap17;
+        xSemaphoreGive(mutexSystemState);
+      }
+      if (mqttConnSnap17) {
+        mqttClient.loop();
+      }
     }
 
     // Periodic NTP time sync check
+    // [PHASE1.5-S7] g_network.gprsConnected now carries "active transport link
+    // is up" for both transports (set in the link-health block above), so this
+    // gate is transport-neutral. On Wi-Fi it drives the SNTP path; on GPRS it
+    // drives AT+CCLK? exactly as before. Scheduling/interval logic unchanged.
     if (g_network.gprsConnected) {
       checkAndSyncTime();
     }
@@ -7592,11 +8798,19 @@ void taskNetwork(void* parameter) {
     // หยุดทันทีถ้า MQTT หลุด กลาง burst (replayTelemBuf() returns false)
     // ล็อก mutex เฉพาะ peek + pop (ดู replayTelemBuf()) — ไม่บล็อก loop นาน
     // ────────────────────────────────────────────────────────────────────────
-    bool mqttConnSnap19 = mqttClient.connected();
-    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #19)
-    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-      g_systemState.mqttConnected = mqttConnSnap19;
-      xSemaphoreGive(mutexSystemState);
+    // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns it.
+    // While busy, mqttConnSnap19 stays false: replay below is skipped (buffer
+    // is NOT drained/discarded -- g_telemBufCount is untouched, replay simply
+    // resumes on a later IDLE iteration) and the outbound-queue drain below
+    // (which reuses this same snapshot) is skipped for the same reason.
+    bool mqttConnSnap19 = false;
+    if (g_mqttOwner == MQTT_OWNER_IDLE) {
+      mqttConnSnap19 = mqttClient.connected();
+      // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #19)
+      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+        g_systemState.mqttConnected = mqttConnSnap19;
+        xSemaphoreGive(mutexSystemState);
+      }
     }
     if (mqttConnSnap19 && g_telemBufCount > 0) {
       replayTelemBuf();
@@ -7643,12 +8857,21 @@ void taskNetwork(void* parameter) {
     }
 
     // -- Publish telemetry (?? FreeRTOS task ???????? ???????? ISR) --
-    bool mqttConnSnap20 = mqttClient.connected();
-    // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #20/#22 — same
-    // if/else-if evaluation, no intervening mqttClient call, so one write covers both)
-    if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-      g_systemState.mqttConnected = mqttConnSnap20;
-      xSemaphoreGive(mutexSystemState);
+    // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns it.
+    // While busy, mqttConnSnap20 stays false: publishTelemetry()/offline-alert
+    // publish below are skipped, and the existing !mqttConnSnap20 fallback
+    // (pushTelemBuf() further below) buffers the telemetry exactly as it
+    // already does for a genuine MQTT-down condition -- no data is discarded,
+    // only deferred to a later IDLE iteration.
+    bool mqttConnSnap20 = false;
+    if (g_mqttOwner == MQTT_OWNER_IDLE) {
+      mqttConnSnap20 = mqttClient.connected();
+      // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, rows #20/#22 — same
+      // if/else-if evaluation, no intervening mqttClient call, so one write covers both)
+      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+        g_systemState.mqttConnected = mqttConnSnap20;
+        xSemaphoreGive(mutexSystemState);
+      }
     }
     if (mqttConnSnap20 && (now - lastPublish >= publishInterval)) {
       if (localSnap.vib.valid) {
@@ -7721,7 +8944,15 @@ void taskNetwork(void* parameter) {
     {
       MaintenanceEvent_t mEvt;
       while (xQueueReceive(queueMaintEvent, &mEvt, 0) == pdPASS) {
-        bool mqttConnSnap23 = mqttClient.connected();
+        // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns it.
+        // While busy, mqttConnSnap23 stays false and this event takes the
+        // existing "not connected -- dropped" path below, same as any other
+        // MQTT-down condition -- pre-existing, documented-acceptable
+        // semantics for this manual-operator-action event, not a new drop.
+        bool mqttConnSnap23 = false;
+        if (g_mqttOwner == MQTT_OWNER_IDLE) {
+          mqttConnSnap23 = mqttClient.connected();
+        }
         // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #23)
         if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
           g_systemState.mqttConnected = mqttConnSnap23;
@@ -7805,11 +9036,19 @@ void taskNetwork(void* parameter) {
         Serial.println("[LATCH] replay snapshot mutex timeout — retry next loop");
       }
 
-      bool mqttConnSnap25 = mqttClient.connected();
-      // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #25)
-      if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
-        g_systemState.mqttConnected = mqttConnSnap25;
-        xSemaphoreGive(mutexSystemState);
+      // [MQTTOWNER-GUARD] Only touch mqttClient while taskNetwork owns it.
+      // While busy, mqttConnSnap25 stays false: the publish below is
+      // skipped, g_fl.pending / the NVS record are untouched (clearFaultLatchNVS()
+      // only runs on a successful publish), so this retries on a later IDLE
+      // iteration exactly like the existing mutex-timeout retry path above.
+      bool mqttConnSnap25 = false;
+      if (g_mqttOwner == MQTT_OWNER_IDLE) {
+        mqttConnSnap25 = mqttClient.connected();
+        // [v16.5] Section 7 Item 4 — cache write (design v16.5 §4.2, row #25)
+        if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(5)) == pdTRUE) {
+          g_systemState.mqttConnected = mqttConnSnap25;
+          xSemaphoreGive(mutexSystemState);
+        }
       }
       if (mqttConnSnap25 && snapPending) {
 
@@ -7952,6 +9191,90 @@ void taskNetwork(void* parameter) {
   }
 }
 
+// ============================================================================
+// [PHASE1.5-MQTTWORKER] MQTT Connect Worker (CORE 1, Priority PRIORITY_MQTT_WORKER)
+//
+// Owns exactly one thing: the mqttClient.connect() call (and, on success, the
+// immediate post-connect subscribe() that must run in the same session) --
+// nothing else. taskNetwork keeps loop()/publish()/steady-state connected()
+// as it already did before this task existed.
+//
+// NOT subscribed to the Task Watchdog Timer. This is deliberate, not an
+// oversight: this task's own blocking connect() attempt can legitimately take
+// up to the TCP-phase default (~30s, unbounded by any clean API per
+// PHASE1_5_WIFI_TLS_WATCHDOG_FIX_PLAN.md §2.2) plus the TLS-phase timeout
+// applied below. Because esp_task_wdt_add() is never called for this task's
+// handle, it has nothing to feed and nothing to violate -- it cannot cause
+// taskNetwork's or the idle tasks' TWDT (.ino ~10620, unchanged by this
+// task) to trip, because the global 30s config and taskNetwork's own
+// subscription (esp_task_wdt_add(NULL) inside taskNetwork) are never touched
+// here. See PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §5.
+//
+// Ownership is enforced by state (g_mqttOwner), not by a mutex held across
+// the blocking call -- a mutex spanning up to ~150s would stall
+// taskModbusRead (Core 0, PRIORITY_MODBUS, time-critical), which is exactly
+// the sub-variant the approved implementation decision rejected (see
+// PHASE1_5_WIFI_TLS_WATCHDOG_IMPLEMENTATION_DECISION.md §3.3).
+// ============================================================================
+void taskMqttConnectWorker(void* parameter) {
+  Serial.println("[MQTTWORKER] Task started (not TWDT-subscribed by design)");
+
+  // [PHASE1.5-MQTTWORKER][DEFENSE-IN-DEPTH] TLS handshake bound.
+  // *** VALUE IS PROVISIONAL -- UNKNOWN, REQUIRES HARDWARE VALIDATION. ***
+  // Applied ONCE, at setup, inside WiFiTransport::applyCredentials()
+  // (net_transport_wifi.cpp) -- not here, and not per-attempt. It is durable
+  // across every future _client.stop()/reconnect (confirmed:
+  // stop_ssl_socket() explicitly preserves handshake_timeout across its
+  // teardown -- ssl_client.cpp:402-414), so a single setup-time call is
+  // sufficient for the process lifetime. See
+  // PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §4 and
+  // WIFI_TLS_HANDSHAKE_TIMEOUT_S_PROVISIONAL in net_transport_wifi.cpp for
+  // the actual value and its justification.
+  //
+  // This bounds ONLY the TLS handshake phase. The separate TCP/socket-connect
+  // phase (NetworkClientSecure's socket_timeout, default 30000ms) has NO
+  // clean public setter reachable without an unwanted side-effecting real
+  // connection attempt (proven by exhaustive inspection of
+  // NetworkClientSecure.h/.cpp -- the only reachable overload,
+  // connect(host,port,timeout), performs a full connect+handshake as a side
+  // effect of setting the field). That TCP-phase exposure is therefore left
+  // at its unmodified default; it is not bounded by this worker, and is not
+  // otherwise fixable from application code. See
+  // PHASE1_5_WIFI_TLS_WATCHDOG_IMPLEMENTATION_DECISION.md §2.2.
+
+  for (;;) {
+    uint8_t requestToken = 0;
+    if (xQueueReceive(queueMqttConnectRequest, &requestToken, portMAX_DELAY) != pdTRUE) {
+      continue;  // spurious wake; nothing to do
+    }
+
+    g_mqttOwner = MQTT_OWNER_CONNECTING;
+
+    // v15.4 Fix B (unchanged behaviour, now executed here instead of
+    // taskNetwork): full TLS reset before every attempt, clears stale cipher
+    // state from a prior session.
+    g_netmgr.active().resetSecureSession();
+
+    MqttConnectResult_t result = { false, 0, 0, false };
+    result.success = mqttClient.connect(MQTT_CLIENT_ID);
+
+    if (result.success) {
+      // [Commit 7A] Re-subscribe every successful (re)connect -- subscriptions
+      // do not survive a reconnect in this library. Kept in the same
+      // ownership window as connect() itself (it also mutates mqttClient
+      // state, so it must not run from taskNetwork after ownership is handed
+      // back -- see implementation plan §2-3).
+      result.subscribeOk = mqttClient.subscribe(g_mqttTopicCommand);
+    } else {
+      result.lwmqttError    = mqttClient.lastError();
+      result.mqttReturnCode = mqttClient.returnCode();
+    }
+
+    xQueueOverwrite(queueMqttConnectResult, &result);
+    g_mqttOwner = MQTT_OWNER_RESULT_READY;
+  }
+}
+
 /**
  * Task 5: Button Input Handling (CORE 1, Priority 2)
  * Non-blocking button debounce and event detection
@@ -8015,11 +9338,10 @@ void taskButtonHandler(void* parameter) {
 
             // --- Reset Trend Buffers [Phase2] ---
             // g_trendBuf / g_buf1s / g_buf10s / g_buf60s / g_slopeVar_* /
-            // g_velPeakHold / legacy EMA / slot accumulators are all gone; the
-            // temperature ring is the only raw trend storage left here.
-            memset(g_tempBuf, 0, sizeof(g_tempBuf));
-            g_tempHead  = 0;
-            g_tempCount = 0;
+            // g_velPeakHold / legacy EMA / slot accumulators are all gone.
+            // [Temperature-trend cleanup, Option 2] g_tempCount (and the
+            // window_samples it fed) is gone too -- the memset below already
+            // zeroes whatever remains of TrendResult_t (current_slope).
 
             memset(&g_trendResult, 0, sizeof(g_trendResult));
 
@@ -8258,6 +9580,14 @@ void drawSensorOfflineScreen() {
   u8g2.drawStr(0, 63, "Check power / RS485 wiring");
 }
 
+// [OLED-UI-v2] Machine overview page. motor_state drives the status line and
+// is checked BEFORE vibration availability, so STARTING/STOPPING/STOPPED can
+// never be presented as a vibration/sensor fault -- see
+// docs/engineering/OLED_DISPLAY_SEMANTICS_CONTRACT.md §1 (state-resolution
+// table) and docs/engineering/OLED_NEW_UI_MOCKUP.md §1. Velocity is still the
+// canonical FIFO/DSP velocity_rms_overall via displayVelocity() -- unchanged
+// source, unchanged freshness gate (VIB_VELOCITY_MAX_AGE_MS_TBD); a stale
+// carrier still renders "--", never a leftover number.
 void drawMachineScreen(VibrationData_t* data) {
   char buf[32];
 
@@ -8266,48 +9596,96 @@ void drawMachineScreen(VibrationData_t* data) {
   u8g2.drawStr(0, 10, MACHINE_NAME);
   u8g2.drawStr(100, 10, "[1/3]");
 
-  // Line 2: STATUS (y=22)
+  // Line 2: motor-state status text (y=24). Replaces the previous
+  // hardcoded "STATUS: NORMAL" literal, which gave no indication of
+  // STARTING/STOPPING/STOPPED and was indistinguishable from a genuine
+  // vibration-unavailable fault.
   u8g2.setFont(u8g2_font_ncenB08_tr);
-  u8g2.drawStr(15, 24, "STATUS: NORMAL");
-
-  // Line 3: velocity RMS (y=38) - LARGE
-  // [Phase2] FIFO/DSP velocity_rms_overall. "--" when no valid, fresh capture --
-  // never a zero standing in for an unavailable measurement.
-  u8g2.setFont(u8g2_font_ncenB10_tr);
-  {
-    float vAll = 0.0f;
-    if (displayVelocity(&vAll, NULL, NULL, NULL)) snprintf(buf, sizeof(buf), "%.2f", vAll);
-    else                                          snprintf(buf, sizeof(buf), "--");
+  float vAll = 0.0f;
+  const bool vOk = (data->motor_state == MOTOR_RUNNING) &&
+                   displayVelocity(&vAll, NULL, NULL, NULL);
+  bool unavailable = false;
+  switch (data->motor_state) {
+    case MOTOR_STARTING:
+      u8g2.drawStr(15, 24, "STARTING...");
+      break;
+    case MOTOR_STOPPING:
+      u8g2.drawStr(15, 24, "STOPPING...");
+      break;
+    case MOTOR_STOPPED:
+      u8g2.drawStr(35, 24, "STOPPED");
+      break;
+    default:  // MOTOR_RUNNING
+      u8g2.drawStr(40, 24, "RUNNING");
+      unavailable = !vOk;
+      break;
   }
-  uint8_t w = u8g2.getStrWidth(buf);
-  u8g2.drawStr((128 - w) / 2, 40, buf);
 
-  // Unit
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr((128 - w) / 2 + w + 2, 40, "mm/s");
-
-  // Line 4-5: Thresholds (y=50)
-  u8g2.setFont(u8g2_font_6x10_tr);
-  // [Phase2] show the thresholds the alarm actually uses (FIFO/DSP velocity),
-  // not the retired legacy VRMS numbers.
-  snprintf(buf, sizeof(buf), "WARN %.1f", VIB_WARNING_MMS);
-  u8g2.drawStr(0, 52, buf);
-
-  snprintf(buf, sizeof(buf), "CRIT %.1f", VIB_CRITICAL_MMS);
-  u8g2.drawStr(80, 52, buf);
-
-  // Line 6: Footer (y=64)
-  u8g2.setFont(u8g2_font_5x7_tr);
-  snprintf(buf, sizeof(buf), "T:%.1fC", data->temperature);
-  u8g2.drawStr(0, 64, buf);
-
-  // Show 4G status instead of MQTT
-  if (g_network.gprsConnected) {
-    snprintf(buf, sizeof(buf), "4G:%d%%", g_network.signalPercent);
+  // Line 3: primary metric (y=40) -- ONE row, shared by every outcome, so
+  // nothing below it ever has to move. [OLED-UI-v2 fix] RUNNING+unavailable
+  // now renders as a SINGLE centered line ("VIBRATION UNAVAILABLE") in this
+  // same slot instead of the previous two-line (y=34/46) banner, which
+  // overlapped the RPM/CUR row at y=52 -- confirmed on hardware. Width is
+  // measured via getStrWidth(), same pattern already used for the number,
+  // so it is never a hardcoded guess.
+  if (unavailable) {
+    u8g2.setFont(u8g2_font_ncenB08_tr);
+    const char* msg = "VIBRATION UNAVAILABLE";
+    uint8_t uw = u8g2.getStrWidth(msg);
+    u8g2.drawStr((128 - uw) / 2, 40, msg);
   } else {
-    snprintf(buf, sizeof(buf), "4G:--");
+    u8g2.setFont(u8g2_font_ncenB10_tr);
+    if (vOk) snprintf(buf, sizeof(buf), "%.2f", vAll);
+    else     snprintf(buf, sizeof(buf), "--");
+    uint8_t w = u8g2.getStrWidth(buf);
+    u8g2.drawStr((128 - w) / 2, 40, buf);
+    if (vOk) {
+      u8g2.setFont(u8g2_font_5x7_tr);
+      u8g2.drawStr((128 - w) / 2 + w + 2, 40, "mm/s");
+    }
   }
-  u8g2.drawStr(80, 64, buf);
+
+  // Line 4: RPM / Current (y=52).
+  // [OLED-UI-v2 fix] CUR now gated on displayCurrentFresh() (age-based,
+  // g_lastCurrentSampleMs + CURRENT_EVIDENCE_MAX_AGE_MS -- same window
+  // publishTelemetry() already uses for its own currentFresh export)
+  // instead of data->current_valid directly. current_valid is a raw
+  // per-~250ms-tick flag (true only on the exact CTR4A01 sample tick, false
+  // every other tick even though current_a is still fresh) -- using it here
+  // produced the ~0.5Hz CUR flicker observed on hardware. taskModbusRead()
+  // and current_valid's own semantics are unchanged; only this read site
+  // moved to the already-existing, already-correct freshness window.
+  u8g2.setFont(u8g2_font_6x10_tr);
+  snprintf(buf, sizeof(buf), "RPM %.0f", data->rpm);
+  u8g2.drawStr(0, 52, buf);
+  if (displayCurrentFresh()) snprintf(buf, sizeof(buf), "CUR %.2fA", data->current_a);
+  else                       snprintf(buf, sizeof(buf), "CUR --");
+  u8g2.drawStr(68, 52, buf);
+
+  // Line 5: WTVB02 sensor temperature (y=63). Labeled S-T (not bare "Temp")
+  // to disambiguate from the ESP32 controller temperature, which is NOT
+  // implemented in this change (docs/engineering/OLED_NEW_UI_MOCKUP.md §4).
+  if (!unavailable) {
+    u8g2.setFont(u8g2_font_5x7_tr);
+    snprintf(buf, sizeof(buf), "S-T %.1fC", data->temperature);
+    u8g2.drawStr(0, 63, buf);
+  }
+}
+
+// [OLED-UI-v2 fix] Age-based CUR freshness for display, mirroring
+// publishTelemetry()'s own currentFresh export (search
+// g_lastCurrentSampleMs/CURRENT_EVIDENCE_MAX_AGE_MS in this file) instead of
+// reading VibrationData_t.current_valid directly. That field is documented
+// (see publishTelemetry()'s own comment) as a raw per-~250ms-tick flag: true
+// only on the exact CTR4A01 sample tick (~500ms cadence), false every other
+// tick even though current_a is still a perfectly fresh measurement -- using
+// it directly for display is exactly what caused the ~0.5Hz CUR flicker
+// observed on hardware. This reuses the existing globals verbatim: no new
+// state, no change to current_valid's own semantics, no change to
+// taskModbusRead() or the trend-buffer append gate that field still serves.
+static bool displayCurrentFresh() {
+  return (g_lastCurrentSampleMs != 0) &&
+         ((uint32_t)(millis() - g_lastCurrentSampleMs) < CURRENT_EVIDENCE_MAX_AGE_MS);
 }
 
 // [Phase2] The one display-side read of the FIFO/DSP velocity carrier.
@@ -8397,65 +9775,115 @@ static bool dspCrestFactor(float* outCf) {
   return true;
 }
 
+// [OLED-UI-v2] Unified with RUNNING's geometry (header y=10, alarm/status
+// y=24, metric y=40, RPM/CUR y=52) per docs/engineering/OLED_NEW_UI_MOCKUP.md
+// follow-up: RUNNING/WARNING/CRITICAL now share the same row structure.
+// Telemetry/alarm semantics (CRIT threshold value, blink timing) unchanged.
 void drawWarningScreen(VibrationData_t* data, bool blink) {
   char buf[32];
 
+  // Line 1: Header (y=10) -- same position/font as RUNNING.
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.drawStr(0, 10, MACHINE_NAME);
   u8g2.drawStr(100, 10, "[1/3]");
 
+  // Line 2: alarm text (y=24, blinks) -- same row/font as RUNNING's status
+  // line. Blink timing (1000ms interval) is set in taskDisplayUpdate(),
+  // unchanged.
   if (blink) {
     u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.drawStr(30, 26, "! WARNING !");
+    u8g2.drawStr(30, 24, "! WARNING !");
   }
 
-  float wAll = 0.0f, wX = 0.0f, wY = 0.0f, wZ = 0.0f;
-  const bool wOk = displayVelocity(&wAll, &wX, &wY, &wZ);
-
+  // Line 3: primary metric (y=40) -- same slot/centering as RUNNING.
+  float wAll = 0.0f;
+  const bool wOk = displayVelocity(&wAll, NULL, NULL, NULL);
   u8g2.setFont(u8g2_font_ncenB10_tr);
   if (wOk) snprintf(buf, sizeof(buf), "%.2f", wAll);
   else     snprintf(buf, sizeof(buf), "--");
-  u8g2.drawStr(40, 40, buf);
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(90, 40, "mm/s");
+  uint8_t w = u8g2.getStrWidth(buf);
+  u8g2.drawStr((128 - w) / 2, 40, buf);
+  if (wOk) {
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr((128 - w) / 2 + w + 2, 40, "mm/s");
+  }
 
+  // Line 4: RPM / Current (y=52) -- same row and same
+  // displayCurrentFresh()-based fix as RUNNING (see its definition for why
+  // data->current_valid is not used here).
   u8g2.setFont(u8g2_font_6x10_tr);
-  snprintf(buf, sizeof(buf), "CRIT: %.1f", VIB_CRITICAL_MMS);
-  u8g2.drawStr(20, 54, buf);
+  snprintf(buf, sizeof(buf), "RPM %.0f", data->rpm);
+  u8g2.drawStr(0, 52, buf);
+  if (displayCurrentFresh()) snprintf(buf, sizeof(buf), "CUR %.2fA", data->current_a);
+  else                       snprintf(buf, sizeof(buf), "CUR --");
+  u8g2.drawStr(68, 52, buf);
 
+  // Line 5: existing CRIT-threshold value/semantics, unchanged -- only its
+  // position moved, to y=63 (RUNNING's S-T slot), to match the shared grid.
   u8g2.setFont(u8g2_font_5x7_tr);
-  if (wOk) snprintf(buf, sizeof(buf), "X:%.1f Y:%.1f Z:%.1f", wX, wY, wZ);
-  else     snprintf(buf, sizeof(buf), "X:-- Y:-- Z:--");
-  u8g2.drawStr(0, 64, buf);
+  snprintf(buf, sizeof(buf), "CRIT: %.1f mm/s", VIB_CRITICAL_MMS);
+  u8g2.drawStr(0, 63, buf);
 }
 
+// [OLED-UI-v2] Unified with RUNNING/WARNING's geometry: header (y=10) and
+// alarm/status (y=24) are at the EXACT same position as RUNNING/WARNING.
+// CRITICAL needs two more rows than they do (LIMIT and ACTION as separate
+// lines, not compressed into one -- explicit requirement), and 128x64 has
+// no room left below y=52 for two more full-size rows, so the metric and
+// RPM/CUR rows are compressed slightly (36/46 instead of 40/52) to make
+// room for LIMIT (55) and ACTION (63) as genuinely separate lines. This is
+// the one deliberate deviation from byte-identical y-coordinates across all
+// three screens; header/status match exactly, and the alarm text remains
+// the most prominent element (top of screen, largest font, blinks).
+// Telemetry/alarm semantics (LIMIT value, ACTION wording, blink timing)
+// unchanged.
 void drawCriticalScreen(VibrationData_t* data, bool blink) {
   char buf[32];
 
+  // Line 1: Header (y=10) -- same position/font as RUNNING/WARNING (was
+  // previously absent from this screen entirely).
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.drawStr(0, 10, MACHINE_NAME);
+  u8g2.drawStr(100, 10, "[1/3]");
+
+  // Line 2: alarm text (y=24, blinks) -- same row/font as RUNNING/WARNING.
+  // Blink timing (300ms interval, faster than WARNING's 1000ms) is set in
+  // taskDisplayUpdate(), unchanged.
   if (blink) {
     u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.drawStr(30, 16, "! CRITICAL !");
+    u8g2.drawStr(28, 24, "! CRITICAL !");
   }
 
+  // Line 3: primary metric (y=36) -- centered like RUNNING/WARNING;
+  // y-position compressed from 40 to 36, see function-level comment above.
+  float cAll = 0.0f;
+  const bool cOk = displayVelocity(&cAll, NULL, NULL, NULL);
   u8g2.setFont(u8g2_font_ncenB10_tr);
-  {
-    float cAll = 0.0f;
-    if (displayVelocity(&cAll, NULL, NULL, NULL)) snprintf(buf, sizeof(buf), "%.2f", cAll);
-    else                                          snprintf(buf, sizeof(buf), "--");
+  if (cOk) snprintf(buf, sizeof(buf), "%.2f", cAll);
+  else     snprintf(buf, sizeof(buf), "--");
+  uint8_t w = u8g2.getStrWidth(buf);
+  u8g2.drawStr((128 - w) / 2, 36, buf);
+  if (cOk) {
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr((128 - w) / 2 + w + 2, 36, "mm/s");
   }
-  u8g2.drawStr(40, 30, buf);
 
+  // Line 4: RPM / Current (y=46) -- same displayCurrentFresh()-based fix as
+  // RUNNING/WARNING; y-position compressed from 52 to 46, see above.
+  u8g2.setFont(u8g2_font_6x10_tr);
+  snprintf(buf, sizeof(buf), "RPM %.0f", data->rpm);
+  u8g2.drawStr(0, 46, buf);
+  if (displayCurrentFresh()) snprintf(buf, sizeof(buf), "CUR %.2fA", data->current_a);
+  else                       snprintf(buf, sizeof(buf), "CUR --");
+  u8g2.drawStr(68, 46, buf);
+
+  // Line 5: LIMIT (y=55) and Line 6: ACTION (y=63) -- kept as two separate,
+  // readable lines, not compressed into one. Values/wording unchanged from
+  // before this patch.
   u8g2.setFont(u8g2_font_5x7_tr);
   snprintf(buf, sizeof(buf), "LIMIT: %.1f mm/s", VIB_CRITICAL_MMS);
-  u8g2.drawStr(20, 40, buf);
-
-  u8g2.setFont(u8g2_font_ncenB08_tr);
-  u8g2.drawStr(20, 52, "ACTION: STOP");
-
-  u8g2.setFont(u8g2_font_5x7_tr);
-  snprintf(buf, sizeof(buf), "T:%.1fC", data->temperature);
-  u8g2.drawStr(0, 64, buf);
-  u8g2.drawStr(100, 64, "[1/3]");
+  u8g2.drawStr(0, 55, buf);
+  u8g2.drawStr(0, 63, "ACTION: STOP");
 }
 
 void drawAxisScreen(VibrationData_t* data) {
@@ -8517,58 +9945,84 @@ void drawAxisScreen(VibrationData_t* data) {
   else      snprintf(buf, sizeof(buf), "FZ = --");
   u8g2.drawStr(70, 48, buf);
 
-  // Row 4: MAX / [2/3]  (y=60)
-  if (dOk) snprintf(buf, sizeof(buf), "MAX= %03.2f", dAll);
-  else     snprintf(buf, sizeof(buf), "MAX= --");
+  // Row 4: OVR (velocity_rms_overall) / [2/3]  (y=60)
+  // [OLED-UI-v2] Relabeled from "MAX=" -- this has always been
+  // velocity_rms_overall (the same canonical value shown on PAGE_MACHINE),
+  // never a true peak-hold. The struct field that once held a real peak
+  // (VibrationData_t.peak) had its computation removed in Phase 2 and is not
+  // read here or anywhere else. Label-only fix, same source, same value,
+  // same algorithm -- see docs/engineering/OLED_NEW_UI_MOCKUP.md §2.1.
+  if (dOk) snprintf(buf, sizeof(buf), "OVR= %03.2f", dAll);
+  else     snprintf(buf, sizeof(buf), "OVR= --");
   u8g2.drawStr(5, 60, buf);
   u8g2.drawStr(98, 60, "[2/3]");
 }
 
+// [OLED-UI-v2] Network/device status page. Header and rows 1-2 now name the
+// transport actually active (g_cfgNetMode), instead of an unconditional
+// "4G NETWORK" literal that misdescribed a Wi-Fi-only build. Fail-safe
+// interpretation mirrors the existing netModeName() helper: anything other
+// than NETWORK_GPRS_ONLY is treated as Wi-Fi. MQTT/NTP/publish-count rows
+// are the existing fields, unchanged, only relabeled/repositioned. No
+// transport-manager/GPRS/A7670 logic is touched -- this function only reads
+// already-existing state for display.
 void drawNetworkScreen() {
   char buf[32];
 
+  const bool wifiActive = (g_cfgNetMode != (int)NETWORK_GPRS_ONLY);
+
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 10, "4G NETWORK");
+  u8g2.drawStr(0, 10, wifiActive ? "NETWORK  WIFI" : "NETWORK  4G");
   u8g2.drawStr(100, 10, "[3/3]");
 
-  // Modem status
-  const char* modemStatus = "UNKNOWN";
-  switch (g_network.modemState) {
-    case MODEM_STATE_OFF: modemStatus = "OFF"; break;
-    case MODEM_STATE_INITIALIZING: modemStatus = "INIT..."; break;
-    case MODEM_STATE_SEARCHING: modemStatus = "SEARCH"; break;
-    case MODEM_STATE_REGISTERED: modemStatus = "REG OK"; break;
-    case MODEM_STATE_GPRS_CONNECTING: modemStatus = "GPRS..."; break;
-    case MODEM_STATE_GPRS_CONNECTED: modemStatus = "ONLINE"; break;
-    case MODEM_STATE_ERROR: modemStatus = "ERROR"; break;
-  }
-  snprintf(buf, sizeof(buf), "Status: %s", modemStatus);
-  u8g2.drawStr(5, 22, buf);
+  if (wifiActive) {
+    // Wi-Fi status: new reads (WiFi.status()/WiFi.RSSI(), standard ESP32
+    // Arduino API) -- display-only, no change to g_wifiTransport/g_netmgr.
+    const bool wifiUp = (WiFi.status() == WL_CONNECTED);
+    snprintf(buf, sizeof(buf), "WIFI  %s", wifiUp ? "CONNECTED" : "DISC");
+    u8g2.drawStr(5, 22, buf);
 
-  // Operator and Signal
-  if (g_network.gprsConnected) {
-    snprintf(buf, sizeof(buf), "Op: %.10s", g_network.operatorName);
+    if (wifiUp) snprintf(buf, sizeof(buf), "RSSI  %d dBm", (int)WiFi.RSSI());
+    else        snprintf(buf, sizeof(buf), "RSSI  --");
     u8g2.drawStr(5, 32, buf);
-
-    snprintf(buf, sizeof(buf), "Signal: %d%% (CSQ:%d)",
-             g_network.signalPercent, g_network.signalQuality);
-    u8g2.drawStr(5, 42, buf);
   } else {
-    u8g2.drawStr(5, 32, "Op: ---");
-    u8g2.drawStr(5, 42, "Signal: ---");
+    // [E] Existing GPRS/4G fields, unchanged -- only shown when the 4G
+    // transport is actually the configured/active one.
+    const char* modemStatus = "UNKNOWN";
+    switch (g_network.modemState) {
+      case MODEM_STATE_OFF: modemStatus = "OFF"; break;
+      case MODEM_STATE_INITIALIZING: modemStatus = "INIT..."; break;
+      case MODEM_STATE_SEARCHING: modemStatus = "SEARCH"; break;
+      case MODEM_STATE_REGISTERED: modemStatus = "REG OK"; break;
+      case MODEM_STATE_GPRS_CONNECTING: modemStatus = "GPRS..."; break;
+      case MODEM_STATE_GPRS_CONNECTED: modemStatus = "ONLINE"; break;
+      case MODEM_STATE_ERROR: modemStatus = "ERROR"; break;
+    }
+    snprintf(buf, sizeof(buf), "Status: %s", modemStatus);
+    u8g2.drawStr(5, 22, buf);
+
+    if (g_network.gprsConnected) {
+      snprintf(buf, sizeof(buf), "Signal: %d%% (CSQ:%d)",
+               g_network.signalPercent, g_network.signalQuality);
+    } else {
+      snprintf(buf, sizeof(buf), "Signal: ---");
+    }
+    u8g2.drawStr(5, 32, buf);
   }
 
-  // MQTT status
+  // MQTT status [E]
   // [v16.5] Section 7 Item 7 (design v16.5 §3.3, §4.2) — read via cache instead
   // of touching mqttClient directly; DisplayUpdate is not the owner task.
-  snprintf(buf, sizeof(buf), "MQTT: %s",
+  snprintf(buf, sizeof(buf), "MQTT  %s",
            getMqttConnectedCached() ? "CONN" : "DISC");
+  u8g2.drawStr(5, 42, buf);
+
+  // NTP status [E]
+  snprintf(buf, sizeof(buf), "NTP   %s", g_timeSync.synced ? "SYNC" : "--");
   u8g2.drawStr(5, 52, buf);
 
-  // Publish stats + NTP status
-  snprintf(buf, sizeof(buf), "Tx:%d %s",
-           g_network.publishCount,
-           g_timeSync.synced ? "NTP:OK" : "NTP:--");
+  // Publish count [E, relabeled from "Tx:"]
+  snprintf(buf, sizeof(buf), "PUB   %d", g_network.publishCount);
   u8g2.drawStr(5, 62, buf);
 }
 
@@ -8588,10 +10042,9 @@ void drawNetworkScreen() {
 // 0..n-1, Y = getValue(idx)) instead of a flat float array -- lets callers
 // read directly out of whatever storage they already have (a struct array's
 // field, a plain float array, ...) with no intermediate copy.
-// Generalizes the regression math that was previously inlined in calcTrend()
-// for temp_slope. Reused for:
-//   - temp_slope:    intervalSec=1.0f -- no time-scaling, preserves the
-//                    original "degC per sample" output exactly.
+// Generalizes the regression math that was previously inlined in calcTrend().
+// [temp_slope removal, Option 1] Its temp_slope caller (intervalSec=1.0f,
+// "degC per sample") is gone; the sole remaining caller is:
 //   - current_slope: intervalSec=CURRENT_SAMPLE_INTERVAL_S -- normalizes to
 //                    "per second" since current is sampled at a different,
 //                    fixed 500ms cadence.
@@ -8619,42 +10072,26 @@ static float linRegSlope(uint16_t bufHead, uint16_t bufCount, uint16_t bufSize,
   return (intervalSec > 0.0f) ? (slopePerSample / intervalSec) : slopePerSample;
 }
 
-// Accessors for linRegSlope() -- trivial index->value lookups into the two
-// buffers it's used against. [v16.6a]
-static float tempBufAccessor(uint16_t idx)      { return g_tempBuf[idx]; }
+// Accessor for linRegSlope() -- trivial index->value lookup into the current
+// buffer it's used against. [v16.6a]
+// [temp_slope removal, Option 1] tempBufAccessor() removed with the
+// temperature ring it read -- linRegSlope() is no longer called for
+// temperature, only for current_slope below.
 static float currentBufAccessor(uint16_t idx)   { return g_currentBuf[idx]; }
 
 // ============================================================================
-// TEMPERATURE TREND -- calcTemperatureTrend()   [Phase2]
+// [Temperature-trend cleanup, Option 2] calcTemperatureTrend() removed in
+// full -- its entire remaining body (window_samples) had no independent
+// consumer once trend_window_s was confirmed orphaned by the same live VPS
+// audit already applied to temp_slope. Call site removed from the analytics
+// step below as well. TEMP 0x0040 polling itself is untouched.
 // ============================================================================
-// Least-squares slope of the temperature history ring. Split out of the former
-// monolithic calcTrend(), which also produced the legacy VRMS rms_slope /
-// trend_dir / spike_count / ttw_hours and the freq_ratio drift/alert -- all
-// removed. What is left has one input (TEMPERATURE register 0x40) and one
-// consumer (/device-health temp_slope), so it gets its own function.
-// Reads g_tempBuf, written by Core 0; float reads are atomic on Xtensa.
-// ============================================================================
-static void calcTemperatureTrend() {
-  const uint16_t snapHead  = g_tempHead;
-  const uint16_t snapCount = g_tempCount;
-
-  if (snapCount >= TEMP_MIN_SAMPLES) {
-    const uint16_t n = (snapCount < TEMP_WINDOW_SAMPLES) ? snapCount : TEMP_WINDOW_SAMPLES;
-    const float tempSlope = linRegSlope(snapHead, snapCount, TEMP_BUF_SIZE,
-                                        TEMP_WINDOW_SAMPLES, 1.0f, tempBufAccessor);
-    g_trendResult.temp_slope     = roundf(tempSlope * 100000.0f) / 100000.0f;
-    g_trendResult.window_samples = n;
-  } else {
-    g_trendResult.temp_slope     = 0.0f;
-    g_trendResult.window_samples = snapCount;
-  }
-}
 
 // ============================================================================
 // CURRENT TREND -- calcCurrentTrend()   [Phase2, was inline in calcTrend()]
 // ============================================================================
-// CTR4A01 current slope, 500 ms cadence. Independent buffer and readiness from
-// the temperature ring above (different source, different sample rate); shares
+// CTR4A01 current slope, 500 ms cadence. Independent buffer and readiness
+// (different source, different sample rate); shares
 // only the generic linRegSlope() utility. No thresholds, no direction
 // classification -- Motor State logic is untouched.
 // ============================================================================
@@ -8677,6 +10114,14 @@ static void calcCurrentTrend() {
 // fields now belong to one capture. data/state below alias the snapshot's
 // members so the rest of this function is textually unchanged.
 bool publishTelemetry(const TelemetrySnapshot* snap) {
+  // [MQTTOWNER-GUARD] Explicit ownership precondition, same rationale as
+  // replayTelemBuf(): this function makes several direct mqttClient.publish()
+  // calls internally. Entering only while IDLE is sufficient for the whole
+  // call -- g_mqttOwner can only leave IDLE via taskNetwork's own request-post
+  // (a single-threaded call site earlier in the same loop iteration), so a
+  // pending request cannot appear mid-call, and the worker (lower priority,
+  // same core) cannot advance to CONNECTING without one. See forensic audit.
+  if (g_mqttOwner != MQTT_OWNER_IDLE) return false;
   if (!mqttClient.connected()) return false;
 
   const VibrationData_t* data  = &snap->vib;
@@ -8737,8 +10182,10 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
   // ที่ไม่ผ่าน deglitch (deglitch ทำงานเฉพาะ motor_state==2) -> ต้อง gate เป็น 0
   // [Phase 3G] crest_factor is now vector_peak / acceleration_rms_overall,
   // computed from the RAW FIFO waveform -- not the sensor's own CF registers.
-  // Registers 0x47/0x53/0x5F are still read and still live in data->cf_x/y/z,
-  // kept deliberately as a REFERENCE ONLY for the comparison log below.
+  // [FREQ/CF-Cleanup] The CFX/CFY/CFZ registers this comment previously
+  // described as "still read, kept as REFERENCE ONLY" are removed -- the
+  // [CF-SRC] comparison log they fed is removed with them. crestFactor below
+  // is unaffected: it was already computed from the FIFO/DSP path only.
   //
   // No motor_state gate is needed or wanted here: FIFO capture is admitted only
   // while the motor is RUNNING, so a fresh carrier entry already implies it.
@@ -8747,16 +10194,6 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
   if (crestFactorOk) {
     crestFactor = roundf(crestFactor * 100.0f) / 100.0f;
   }
-
-  // [Phase 3G] Migration comparison, reference vs canonical. The two are NOT
-  // expected to agree and are never forced toward each other: the sensor
-  // derives its CF from an internal 16 kHz stream while this one sees 2 kHz, so
-  // impulse energy above 1 kHz is invisible here and the canonical figure reads
-  // systematically lower.
-  Serial.printf("[CF-SRC] canonical(dsp) %s | reference(reg 0x47/53/5F) "
-                "cf_max=%.2f x=%.2f y=%.2f z=%.2f\n",
-                crestFactorOk ? String(crestFactor, 2).c_str() : "--",
-                data->cf_max, data->cf_x, data->cf_y, data->cf_z);
 
   // [Phase 1] BEARING ALERT REMOVED AT ORIGIN.
   //
@@ -8806,10 +10243,12 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
   // from the RAW waveform through the same FFT that produces velocity RMS, not
   // from the sensor's frequency registers.
   //
-  // The registers 0x44-0x46 are still read every poll and still live in
-  // data->freq_x/y/z. They are kept deliberately, as a REFERENCE ONLY, so the
-  // two sources can be compared on real hardware; nothing downstream treats
-  // them as Fx/Fy/Fz any more.
+  // [FREQ/CF-Cleanup] The FREQ X/Y/Z register (0x44-0x46) this comment
+  // previously described as "still read, kept as REFERENCE ONLY" is removed
+  // -- the [FREQ-SRC] comparison log it fed is removed with it. freqX/Y/Z
+  // below are unaffected: they were already computed from the FIFO/DSP path
+  // only (dspDominantFreq()), and are still consumed by doc["freq_x"/"freq_y"/
+  // "freq_z"] further down -- do not remove this computation.
   float freqX = 0.0f, freqY = 0.0f, freqZ = 0.0f;
   bool  freqXok = false, freqYok = false, freqZok = false;
   {
@@ -8821,21 +10260,10 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     }
   }
 
-  // [Phase 3F] Migration comparison, reference vs canonical. Logged at the
-  // /sensor cadence rather than per FIFO capture because the register values
-  // only exist on the Core 0 sensor path -- reaching them from the capture
-  // consumer would mean new cross-core plumbing for a diagnostic, which is not
-  // worth the coupling. The values are never forced toward each other.
-  Serial.printf("[FREQ-SRC] canonical(dsp) x=%s y=%s z=%s | "
-                "reference(reg 0x44-46) x=%.1f y=%.1f z=%.1f\n",
-                freqXok ? String(freqX, 1).c_str() : "--",
-                freqYok ? String(freqY, 1).c_str() : "--",
-                freqZok ? String(freqZ, 1).c_str() : "--",
-                data->freq_x, data->freq_y, data->freq_z);
-
   // [Phase2] calcTrend() split into two dedicated functions; trendDirStr removed
   // with the legacy trend_dir it formatted.
-  calcTemperatureTrend();
+  // [Temperature-trend cleanup, Option 2] calcTemperatureTrend() call removed
+  // with the function itself.
   calcCurrentTrend();
 
   // Shared timestamp (built once, used in all three payloads)
@@ -8920,9 +10348,9 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // sensor's own per-axis crest factors (registers 0x47/0x53/0x5F), and
     // Phase 1 exports one crest factor only -- the FIFO/DSP
     // vector_peak / acceleration_rms_overall published as crest_factor
-    // above. The registers are still read and still reach data->cf_x/y/z,
-    // but now solely as a validation reference in the [CF-SRC] log; no
-    // product consumer reads them any more.
+    // above. [FREQ/CF-Cleanup] The CFX/CFY/CFZ registers themselves, and the
+    // [CF-SRC] validation-reference log that was their last reader, are now
+    // removed entirely -- data->cf_x/y/z is no longer assigned anywhere.
 
     // [Phase 1] kurtosis_x/y/z/max/axis/valid REMOVED from /sensor.
     // [Phase 3H] dominant_vibration_axis MOVED to /vibration -- it is derived
@@ -9272,6 +10700,14 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // belong on the Product-1 contract. They now ship on /device-health
     // (PUBLISH 4 of 4, below) at a fixed 60 s cadence -- same values, same
     // expressions, moved off the customer topic rather than recomputed.
+    // [temp_slope removal, Option 1] temp_slope, of the nine above, was
+    // subsequently removed from /device-health entirely -- confirmed
+    // orphaned end-to-end by a live VPS audit (parsed and written to
+    // InfluxDB, read by zero Grafana dashboards/alerts/backend code).
+    // [Temperature-trend cleanup, Option 2] trend_window_s, also of the nine
+    // above, was removed by the same standard. This historical list is left
+    // as-is otherwise, as a record of the P1-S3 migration; only these two
+    // fields' later removal is noted here.
 
     // ── [P1-S2] TRANSPORT BUDGET: /vibration JSON <= 1320 B ──────────────────
     // Unchanged ceiling, same reason as M1B-7.1: the A7670 accepts one
@@ -9392,7 +10828,8 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       h["analysis_ready"]     = (anaR == ANA_READY);
       h["freeze_reason"]      = analysisReasonStr(anaR);
 
-      h["temp_slope"]         = g_trendResult.temp_slope;
+      // [temp_slope removal, Option 1] temp_slope field removed -- confirmed
+      // orphaned by live VPS audit (written to InfluxDB, read by nothing).
       h["current_slope"]      = g_trendResult.current_slope;   // [v16.6a] CTR4A01, A/s
       // [v16.6b] CTR4A01 remote-diagnosis pair for the current_slope=0 ambiguity:
       // buf_count stuck at 0 while read_errors climbs => Modbus reads are failing
@@ -9402,8 +10839,9 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       // [P4-02] pure copy, no computation -- see P4_02_DESIGN_CONTRACT.md
       h["current_evidence_valid"] = snap->currentEvidenceValid;
 
-      h["trend_window_s"]     = (g_trendResult.window_samples * 250) / 1000;
-
+      // [Temperature-trend cleanup, Option 2] trend_window_s field removed --
+      // confirmed orphaned by live VPS audit (written to InfluxDB, read by
+      // nothing), same standard already applied to temp_slope.
       h["timestamp"]          = tsBuf;
       h["time_synced"]        = g_timeSync.synced;
       if (g_timeSync.synced)
@@ -10190,6 +11628,30 @@ void setup() {
   // [v16.3v] โหลด NVS Config ก่อนสิ่งอื่น
   loadNvsConfig();
 
+  // [PHASE1.5-WIFIMGR][Item 3/4] PIN_BUTTON must be readable before the boot
+  // gate below for the "held during boot" entry condition. Moved earlier
+  // than its other pinMode() call further down in setup() (still present
+  // there, harmless/redundant) -- see
+  // docs/engineering/PHASE1_5_WIFI_MANAGER_PROVISIONING_PLAN.md §2.7, §7.7.
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
+
+  // [PHASE1.5-WIFIMGR][Item 3] Wi-Fi Manager entry conditions -- three OR'd
+  // triggers, each independently sufficient. Runs before the serial Config
+  // Mode gate and before esp_task_wdt_reconfigure()/task creation, exactly
+  // like runConfigMode() below -- see plan §3 for the watchdog-safety
+  // rationale (an unbounded human-interaction wait must never happen on a
+  // TWDT-subscribed task).
+  {
+    bool noCreds      = (g_cfgWifiSsid[0] == '\0');
+    bool tooManyFails  = (g_cfgWifiFailCount >= WIFI_MGR_FAIL_THRESHOLD);
+    bool buttonHeld    = (digitalRead(PIN_BUTTON) == LOW);   // active LOW, INPUT_PULLUP
+    if (noCreds || tooManyFails || buttonHeld) {
+      Serial.printf("[WIFIMGR] Entry: no_creds=%d fail_count=%d/%d button_held=%d\n",
+                    (int)noCreds, g_cfgWifiFailCount, WIFI_MGR_FAIL_THRESHOLD, (int)buttonHeld);
+      runWifiManagerMode();   // ไม่ return — จบด้วย ESP.restart()
+    }
+  }
+
   // [v16.3v] Config Mode — กด Enter ภายใน 5 วินาทีเพื่อตั้งค่า
   Serial.println("\n[CONFIG] Press ENTER within 5 seconds to enter Config Mode...");
   uint32_t cfgStart = millis();
@@ -10557,6 +12019,18 @@ void setup() {
     Serial.println("[Init] MQTT outbound queue created (dormant)");
   }
 
+  // [PHASE1.5-MQTTWORKER] Request/result queues for the MQTT connect worker.
+  // Depth 1 each -- see PHASE1_5_MQTT_WORKER_IMPLEMENTATION_PLAN.md §3.1.
+  // FATAL like the other core queues above: without these, taskNetwork can
+  // never hand off a connect attempt and MQTT would never come up.
+  queueMqttConnectRequest = xQueueCreate(1, sizeof(uint8_t));
+  queueMqttConnectResult  = xQueueCreate(1, sizeof(MqttConnectResult_t));
+  if (queueMqttConnectRequest == NULL || queueMqttConnectResult == NULL) {
+    Serial.println("[FATAL] Failed to create MQTT worker queues!");
+    while (1) delay(1000);
+  }
+  Serial.println("[Init] MQTT worker queues created");
+
 
   delay(2000);
 
@@ -10617,6 +12091,21 @@ void setup() {
     1);
   Serial.printf("| [+] 4G Modem/MQTT    (Priority %d, Stack %d)     |\n",
                 PRIORITY_NETWORK, STACK_SIZE_NETWORK);
+
+  // [PHASE1.5-MQTTWORKER] Owns mqttClient.connect() only. Deliberately NOT
+  // passed to esp_task_wdt_add() anywhere in this file -- see the task
+  // function's own header comment for why that is safe. Core 1, alongside
+  // taskNetwork, since both act on the same Wi-Fi/TLS objects.
+  xTaskCreatePinnedToCore(
+    taskMqttConnectWorker,
+    "MqttWorker",
+    STACK_SIZE_MQTT_WORKER,
+    NULL,
+    PRIORITY_MQTT_WORKER,
+    &taskHandleMqttWorker,
+    1);
+  Serial.printf("| [+] MQTT Worker      (Priority %d, Stack %d)     |\n",
+                PRIORITY_MQTT_WORKER, STACK_SIZE_MQTT_WORKER);
 
   xTaskCreatePinnedToCore(
     taskAnalytics,
@@ -10690,8 +12179,8 @@ void setup() {
   Serial.println("Phase 2 Analytics:");
   Serial.println("  taskAnalytics: Core 1, 1 Hz, Priority 3");
   Serial.println("  Trend source : VibHistory ring -> VibEma / VibWindow / VibSlope / VibTtw");
-  Serial.printf("  Temp history : %d bytes (%u samples)\n",
-                (int)sizeof(g_tempBuf), (unsigned)TEMP_BUF_SIZE);
+  // [Temperature-trend cleanup, Option 2] Temp history line removed --
+  // TEMP_BUF_SIZE/g_tempCount and everything they fed are gone.
   Serial.printf("  Analytics topic: %s\n\n", g_mqttAnalyticsTopic);
 
 
@@ -10805,8 +12294,12 @@ void loop() {
 
     // Vx / Vy / Vz Stuck Recovery Status
     Serial.println("+========================================================+");
-    Serial.printf("| Stuck Threshold: %2u reads x 250ms = %.2f s           |\n",
-                  STUCK_THRESHOLD, STUCK_THRESHOLD * 0.25f);
+    // [Diagnostic-Label-Cleanup] Text/multiplier updated from
+    // "250ms"/*0.25f -- stale since [S3] moved MODBUS_POLL_PERIOD_MS to
+    // 500ms. Display-only: STUCK_THRESHOLD itself and all watchdog logic
+    // are unchanged.
+    Serial.printf("| Stuck Threshold: %2u reads x 500ms = %.2f s           |\n",
+                  STUCK_THRESHOLD, STUCK_THRESHOLD * 0.5f);
     Serial.printf("| Vx Stuck Count:  %3u / %u   (Restarts: %3u)           |\n",
                   g_vxStuckCount, STUCK_THRESHOLD, g_vxRestartCount);
     Serial.printf("| Vy Stuck Count:  %3u / %u   (Restarts: %3u)           |\n",
@@ -10877,9 +12370,10 @@ void loop() {
     // [Phase2] FIFO/DSP trend status (was: legacy slot buffers + legacy EMA)
     {
       const VibEmaState emaSnap = VibEma_Get(millis(), VIB_VELOCITY_MAX_AGE_MS_TBD);
-      Serial.printf("Trend history: %u samples  |  temp ring: %u/%u\n",
-                    (unsigned)VibHistory_Count(),
-                    (unsigned)g_tempCount, (unsigned)TEMP_BUF_SIZE);
+      // [Temperature-trend cleanup, Option 2] "temp ring: X/Y" segment
+      // removed -- g_tempCount/TEMP_BUF_SIZE are gone.
+      Serial.printf("Trend history: %u samples\n",
+                    (unsigned)VibHistory_Count());
       if (emaSnap.valid) Serial.printf("Velocity EMA: %.3f mm/s\n", emaSnap.ema_mms);
       else               Serial.printf("Velocity EMA: -- (unavailable)\n");
     }
