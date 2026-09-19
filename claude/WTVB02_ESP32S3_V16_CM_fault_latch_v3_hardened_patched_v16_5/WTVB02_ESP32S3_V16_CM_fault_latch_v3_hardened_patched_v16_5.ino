@@ -2565,6 +2565,18 @@ static volatile uint32_t g_motorRunFaultLatchHoldoffUntilMs = 0;
 // definition instead of duplicating the "500ms x 10 = 5s" constant.
 constexpr uint32_t CURRENT_EVIDENCE_MAX_AGE_MS = CURRENT_SAMPLE_INTERVAL_MS * 10;
 
+// [Mechanism-B Fix, Phase 1] Empirical containment window, NOT a formal
+// scheduler worst-case guarantee. Measured Mechanism-B ageMs (WTVB02
+// Modbus timeout delaying the CT poll) across 22 real episodes, two
+// independent capture sessions: 1994-2011 ms, all four T1a/T1b/T1c/T2a
+// transaction types represented. This value is sized against that
+// MEASURED evidence with ~989 ms margin -- it does NOT cover the
+// source-derived theoretical worst case (~4.5-4.6 s, if the CT cadence
+// gate happens to not be due on the failing iteration, pushing the
+// delay through the full WTVB02 reconfigure sequence). See timing
+// verification report for the measured-vs-derived distinction.
+constexpr uint32_t CT_GRACE_WINDOW_MS = 3000;
+
 // [Commit 4A] EMA smoothing for the Current evidence path -- CTR4A01's raw
 // Modbus reading has zero existing filtering (single instantaneous sample
 // every 500ms). Alpha matches RPM_SMOOTH_ALPHA (0.25) deliberately, for two
@@ -3117,6 +3129,27 @@ static volatile uint16_t  g_currentHead  = 0;
 static volatile uint16_t  g_currentCount = 0;
 static volatile uint32_t  g_ctReadErrors = 0;  // [v16.6b] cumulative CTR4A01 Modbus failures since boot
 static volatile uint32_t  g_lastCurrentSampleMs = 0;  // [Commit 3] millis() of last SUCCESSFUL CTR4A01 read (0=never); drives MotorStateEvidence.ageMs for MOTOR_SRC_CURRENT
+// [Mechanism-B Fix, Phase 1] File-scope (not taskModbusRead()-local) so
+// both the writer (taskModbusRead(), Core 0) and the reader
+// (buildMotorStateEvidence(), called from taskStateMachine(), also Core 0)
+// can see it -- same cross-function relationship as g_lastCurrentSampleMs
+// above. Written ONLY from WTVB02-related code paths (WTVB02 failure
+// detection + recovery/reconfigure entry, both inside taskModbusRead())
+// -- NEVER from readCTR4A01Current()/readCurrentSensor(), so a T7-itself
+// failure can never extend this window. Absolute millis() deadline;
+// compared with signed wraparound-safe arithmetic, same idiom as
+// g_sensorWarmupUntilMs (see sensorWarmupActive()).
+static volatile uint32_t  g_ctWtvbGraceUntilMs = 0;
+// [Mechanism-B Fix, Phase 1] millis() of the most recent T7/CTR4A01
+// ATTEMPT that FAILED (gate fired, readCTR4A01Current() returned false).
+// Written ONLY inside taskModbusRead()'s CT gate -- NEVER touched by any
+// WTVB02 code path. This is the signal that lets buildMotorStateEvidence()
+// veto the WTVB grace freeze when CT itself is demonstrably the problem,
+// independent of whether a WTVB grace window happens to be active at the
+// same time (a T7 failure cannot create/extend WTVB grace, but it CAN
+// occur while an already-active WTVB grace window exists -- this is what
+// distinguishes the two cases).
+static volatile uint32_t  g_ctLastFailedAttemptMs = 0;
 
 // [P4-02] Telemetry mirror of s_currentEvidenceValid (buildMotorStateEvidence(),
 // MOTOR_SRC_CURRENT case). NOT a second source of truth -- written only there,
@@ -4564,7 +4597,28 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       }
       ev.signalPresent    = s_currentLatched;
       ev.ageMs            = ageMsNow;
-      ev.evidenceFrozen   = (currentAvailability == EvidenceAvailability::UNAVAILABLE_EXPECTED);
+      // [Mechanism-B Fix, Phase 1] Freeze (suppress the FSM's staleness
+      // trip) only when ALL of the following hold:
+      //   (a) a WTVB02-attributable contention window is active
+      //       (g_ctWtvbGraceUntilMs, WTVB02-only write sites), AND
+      //   (b) no T7/CT-itself failure has been recorded more recently
+      //       than the last successful sample -- i.e. CT has not
+      //       demonstrably tried and failed during the current gap.
+      //       Wraparound-safe signed subtraction: if
+      //       g_ctLastFailedAttemptMs is chronologically AFTER
+      //       g_lastCurrentSampleMs, a real CT failure exists inside the
+      //       staleness window and the freeze is vetoed regardless of
+      //       WTVB grace state -- this is what prevents a T7 failure
+      //       occurring DURING an already-active grace window from being
+      //       misclassified as WTVB contention.
+      //   (c) ageMsNow is still within the existing, unmodified outer
+      //       bound.
+      // FifoDriver-owned-bus freezing (UNAVAILABLE_EXPECTED) is untouched
+      // and independent of this whole block, exactly as before.
+      bool wtvbGraceActive   = ((int32_t)(millis() - g_ctWtvbGraceUntilMs) < 0);
+      bool ctFailedDuringGap = ((int32_t)(g_ctLastFailedAttemptMs - g_lastCurrentSampleMs) > 0);
+      ev.evidenceFrozen   = (currentAvailability == EvidenceAvailability::UNAVAILABLE_EXPECTED)
+                          || (wtvbGraceActive && !ctFailedDuringGap && ageMsNow <= CURRENT_EVIDENCE_MAX_AGE_MS);
       ev.absentStoppingMs = NO_CURRENT_STOPPING_MS;
       ev.absentStoppedMs  = FORCE_CURRENT_STOPPED_MS;
       // [v16.5.6] Deliberately derived, not a hardcoded literal: ageMs above
@@ -7363,6 +7417,18 @@ void taskModbusRead(void* parameter) {
       // so the read had become pure bus traffic. VRMS 0x50/0x5C/0x68 stay
       // (stuck-axis watchdog, unaffected by this cleanup).
 
+      // [Mechanism-B Fix, Phase 1] `success` is fully resolved for T1a-T2a
+      // by this point in program order (all four transactions already ran
+      // above). A failure here means the bus was just demonstrably occupied
+      // by a WTVB02 timeout (measured ~2002 ms) immediately before this CT
+      // opportunity -- extend the grace window so buildMotorStateEvidence()
+      // can tell "bus busy" apart from "current genuinely absent". Does NOT
+      // touch success/retryCount/current_valid/g_lastCurrentSampleMs --
+      // read-only w.r.t. everything else in this function.
+      if (!success) {
+        g_ctWtvbGraceUntilMs = millis() + CT_GRACE_WINDOW_MS;
+      }
+
       // Transaction 7: CTR4A01 current sensor -- optional, ~2Hz/500ms cadence [v16.6a]
       // Cadence gating + result storage only -- readCTR4A01Current() owns the
       // slave-ID switch/restore (shares this RS485-enabled window, runs before
@@ -7378,6 +7444,14 @@ void taskModbusRead(void* parameter) {
         // readCTR4A01Current() call site -- validates the T6->T7 turnaround hypothesis.
         vTaskDelay(pdMS_TO_TICKS(5));
         localData.current_valid = readCTR4A01Current(localData.current_a);
+        // [Mechanism-B Fix, Phase 1] T7 was genuinely attempted THIS cycle
+        // (we are inside the cadence-gate block) -- if it failed, record
+        // WHEN, so buildMotorStateEvidence() can tell "CT itself just
+        // failed" apart from "CT was never asked because WTVB02 blocked
+        // the bus". CT-only write site -- no WTVB02 code path touches this.
+        if (!localData.current_valid) {
+          g_ctLastFailedAttemptMs = millis();
+        }
         // [Sensor-Failure-Instrumentation] The CT slave-ID switch (to
         // CURRENT_SENSOR_ID and back to MODBUS_SLAVE_ID) happened above
         // regardless of current_valid's outcome -- set unconditionally so
@@ -7425,6 +7499,15 @@ void taskModbusRead(void* parameter) {
       if (pollPerformed) {
       // -- + ??????????: Reset consecutive error counter --
       if (g_modbusConsecErrors > 0) {
+        // [Mechanism-B Fix, Phase 1] This branch is about to run the
+        // quick-reconfig sequence -- measured minimum ~1962-1976 ms of
+        // further blocking WTVB02 traffic (reconfigSensorAfterRestart(),
+        // plus the 500 ms pre-delay a few lines below) on THIS SAME shared
+        // bus, on an iteration where `success` has already gone back to
+        // true. Re-extend the grace window here too, or this second
+        // contention source would be invisible to the check above (which
+        // only fires on the failing iteration, not the recovery one).
+        g_ctWtvbGraceUntilMs = millis() + CT_GRACE_WINDOW_MS;
         bool wasOffline = g_sensorOffline;
         Serial.printf("[MODBUS] + Sensor back ONLINE (was offline for %u consecutive reads, "
                       "total errors: %lu)\n",
