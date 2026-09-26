@@ -4597,28 +4597,41 @@ static MotorStateEvidence buildMotorStateEvidence(uint32_t timeSincePulseMs, flo
       }
       ev.signalPresent    = s_currentLatched;
       ev.ageMs            = ageMsNow;
-      // [Mechanism-B Fix, Phase 1] Freeze (suppress the FSM's staleness
-      // trip) only when ALL of the following hold:
+      // [Mechanism-B Fix, Phase 1] WTVB02 grace term -- UNCHANGED. It
+      // freezes (suppresses the FSM's staleness trip) only when ALL hold:
       //   (a) a WTVB02-attributable contention window is active
       //       (g_ctWtvbGraceUntilMs, WTVB02-only write sites), AND
       //   (b) no T7/CT-itself failure has been recorded more recently
-      //       than the last successful sample -- i.e. CT has not
-      //       demonstrably tried and failed during the current gap.
-      //       Wraparound-safe signed subtraction: if
-      //       g_ctLastFailedAttemptMs is chronologically AFTER
-      //       g_lastCurrentSampleMs, a real CT failure exists inside the
-      //       staleness window and the freeze is vetoed regardless of
-      //       WTVB grace state -- this is what prevents a T7 failure
-      //       occurring DURING an already-active grace window from being
-      //       misclassified as WTVB contention.
-      //   (c) ageMsNow is still within the existing, unmodified outer
-      //       bound.
+      //       than the last successful sample. Wraparound-safe signed
+      //       subtraction: if g_ctLastFailedAttemptMs is chronologically
+      //       AFTER g_lastCurrentSampleMs, a real CT failure exists inside
+      //       the staleness window and THIS term is vetoed -- WTVB02 grace
+      //       therefore still never masks a CT failure, and a T7 failure
+      //       during an active grace window is never classified as WTVB
+      //       contention.
+      //   (c) ageMsNow is still within CURRENT_EVIDENCE_MAX_AGE_MS.
+      // [vNext-ct-comm] CT communication-failure term -- NEW, separate.
+      // A T7/CTR4A01 read that was attempted and returned no valid answer
+      // is a communication event, not a measurement that current is
+      // absent, so it gets its own bounded freeze of the AGE trips only:
+      //   ctCommGap = ctFailedDuringGap && ageMsNow <= CURRENT_EVIDENCE_MAX_AGE_MS
+      // The EMA/latch are not updated without a fresh sample, so
+      // signalPresent/absentMs keep the last valid CT evidence and the
+      // absence channel (genuine low-current stop) is never gated here.
+      // The freeze is anchored on ageMsNow (time since the last SUCCESSFUL
+      // read), so total staleness is capped at CURRENT_EVIDENCE_MAX_AGE_MS
+      // however many failures occur; beyond it this term is false and the
+      // existing >MAX_AGE reset above invalidates the CT evidence, so a
+      // persistent CT failure still leads to STOPPED. WTVB02 state neither
+      // creates, extends nor is required for this term.
       // FifoDriver-owned-bus freezing (UNAVAILABLE_EXPECTED) is untouched
-      // and independent of this whole block, exactly as before.
+      // and independent of both terms, exactly as before.
       bool wtvbGraceActive   = ((int32_t)(millis() - g_ctWtvbGraceUntilMs) < 0);
       bool ctFailedDuringGap = ((int32_t)(g_ctLastFailedAttemptMs - g_lastCurrentSampleMs) > 0);
+      bool ctCommGap         = ctFailedDuringGap && (ageMsNow <= CURRENT_EVIDENCE_MAX_AGE_MS);
       ev.evidenceFrozen   = (currentAvailability == EvidenceAvailability::UNAVAILABLE_EXPECTED)
-                          || (wtvbGraceActive && !ctFailedDuringGap && ageMsNow <= CURRENT_EVIDENCE_MAX_AGE_MS);
+                          || (wtvbGraceActive && !ctFailedDuringGap && ageMsNow <= CURRENT_EVIDENCE_MAX_AGE_MS)
+                          || ctCommGap;
       ev.absentStoppingMs = NO_CURRENT_STOPPING_MS;
       ev.absentStoppedMs  = FORCE_CURRENT_STOPPED_MS;
       // [v16.5.6] Deliberately derived, not a hardcoded literal: ageMs above
@@ -5331,6 +5344,54 @@ static const int16_t  STUCK_MIN_RAW          = 5;      // |raw| > 5 (0.05 mm/s) 
 // full restart ใช้เวลา ~3s reboot อยู่แล้ว การรีสตาร์ททุก 15s ไม่ทำให้เกิด storm
 static const uint32_t SENSOR_RESTART_COOLDOWN = 15000; // shared cooldown ระหว่าง restart แต่ละครั้ง (15s)
 
+// [vNext-recovery] Phase 1 -- WTVB02 deferred recovery state machine.
+// Converts the two previously-synchronous recovery paths (quick-reconfig,
+// ~2s blocking; full stuck-axis restart, ~4.5-6.5s blocking) into a bounded,
+// resumable per-tick state machine so T7 (CTR4A01 current, the Motor State
+// authority) is never starved for multiple seconds by WTVB02 housekeeping.
+// reconfigSensorAfterRestart()/restartSensorViaModbus() below are UNCHANGED
+// and no longer called from taskModbusRead() -- serviceWtvb02Recovery()
+// (defined just after restartSensorViaModbus()) reuses their exact register
+// addresses, unlock key, command values, and settle-delay DURATIONS; only
+// the blocking vTaskDelay() waits become non-blocking millis() deadlines.
+enum class WtvbRecoveryState : uint8_t {
+  IDLE,
+  RECOVERY_PENDING,   // quick-reconfig armed, one-tick delay before starting
+  UNLOCK,             // full-restart only: pre-restart-command unlock
+  RECONFIG_STEP_1,    // shared: Unlock-for-MODE + MODE write + 500ms settle
+  RECONFIG_STEP_2,    // shared: Unlock-for-SR + SR write + 500ms settle + readback
+  RECONFIG_STEP_3,    // shared: Unlock-for-Save + Save write + 300ms settle
+  RESTART_PENDING,    // full-restart armed, cooldown check
+  RESTART_WAIT,       // full-restart only: send restart cmd, then 3000ms reboot wait
+  RECOVERY_COMPLETE,
+  RECOVERY_FAILED
+};
+
+static WtvbRecoveryState s_wtvbRecoveryState  = WtvbRecoveryState::IDLE;
+static bool              s_wtvbFullRestart    = false;  // true=full-restart path, false=quick-reconfig path
+static uint32_t          s_wtvbStepDeadlineMs = 0;       // shared settle/reboot-wait deadline (one active at a time)
+static bool              s_wtvbReconfigAllOk  = true;    // accumulates allOk across RECONFIG_STEP_1..3
+static char              s_wtvbAxisLabel[4]   = "";      // "Vx"/"Vy"/"Vz"/"ALL" -- carried from arm tick to completion log
+static uint8_t           s_wtvbSubPhase       = 0;       // sub-step counter within multi-transaction states
+// [vNext-recovery fix#1] Set by serviceWtvb02Recovery() on the tick that sends
+// the restart command (whose ~2000ms no-ACK timeout runs AFTER T7). Consumed
+// by taskModbusRead() to skip that tick's WTVB02 output, preserving the
+// original `continue` after restartSensorViaModbus() -- no stale-age packet
+// reaches taskStateMachine; the next tick's T7 refreshes current first.
+static bool              s_wtvbSkipOutputThisTick = false;
+// [vNext-recovery fix#3] A full-restart request that arrived while a QUICK
+// reconfig was in flight. Kept (never dropped) and executed immediately when
+// the quick sequence completes, before returning to IDLE -- full restart takes
+// priority over any new quick arm, and only one sequence ever runs at a time.
+static bool              s_wtvbFullRestartDeferred = false;
+
+// [vNext-recovery fix#2] True only during the 3000ms post-restart-command
+// reboot wait (RESTART_WAIT sub-phase 1): the sensor is intentionally
+// rebooting, so taskModbusRead() must not poll WTVB02 T1a-T2a (T7 still runs).
+static inline bool wtvbRebootWindowActive() {
+  return s_wtvbRecoveryState == WtvbRecoveryState::RESTART_WAIT && s_wtvbSubPhase == 1;
+}
+
 /**
  * Re-configure WTVB02-485 หลัง reboot ผ่าน Modbus (v15.7)
  *
@@ -5679,6 +5740,392 @@ static bool restartSensorViaModbus(const char* axisLabel) {
   Serial.println("[SENSOR] ========================================");
 
   return true;
+}
+
+// [vNext-recovery] Arms the QUICK-reconfig path (mirrors the trigger at the
+// former `if (g_modbusConsecErrors > 0)` call site in taskModbusRead()).
+// Performs the SAME immediate, non-blocking side effects the original code
+// ran at that exact point (counter reset, offline-clear, warmup arm, log) --
+// only the actual reconfigure sequence is deferred to serviceWtvb02Recovery().
+// [vNext-recovery fix#2] The bookkeeping (counter reset, offline-clear, warmup
+// arm, log) ALWAYS runs, exactly as the original did at this point; only the
+// reconfigure sequence itself is not re-armed if a recovery is already in
+// flight (only one may be active at a time).
+static void armWtvb02QuickReconfig() {
+  Serial.printf("[MODBUS] + Sensor back ONLINE (was offline for %u consecutive reads, "
+                "total errors: %lu)\n",
+                g_modbusConsecErrors, g_sensorErrors);
+  g_modbusConsecErrors = 0;
+  g_sensorOffline      = false;
+  g_sensorWarmupUntilMs = millis() + SENSOR_WARMUP_MS;  // 2s suppress window (time-based, as in 993099d)
+  if (s_wtvbRecoveryState != WtvbRecoveryState::IDLE) {
+    Serial.println("[MODBUS] Sensor back -- recovery already in flight, reconfig not re-armed");
+    return;
+  }
+  Serial.println("[MODBUS] Sensor back -- re-configuring MODE=FreqDomain...");
+  // [vNext-recovery G2] 993099d's quick-recovery CT grace, moved here from the
+  // former blocking quick-reconfig block entry: re-armed at recovery START only,
+  // same value/window. With deferral no multi-second block follows, so this is
+  // not needed for staleness (B1 below covers long transactions) -- it is kept
+  // to preserve the hardware-validated 993099d behaviour unchanged.
+  g_ctWtvbGraceUntilMs = millis() + CT_GRACE_WINDOW_MS;
+  s_wtvbFullRestart    = false;
+  s_wtvbReconfigAllOk  = true;
+  s_wtvbRecoveryState  = WtvbRecoveryState::RECOVERY_PENDING;
+}
+
+// [vNext-recovery] Arms the FULL-restart path (mirrors the trigger at the
+// former `if (needRestart)` call site in taskModbusRead()). The cooldown
+// check itself is deferred into RESTART_PENDING -- arming here never touches
+// the bus.
+// [vNext-recovery fix#3] If a full restart is already in flight, this request
+// is already being served (its completion resets all stuck counters). If a
+// QUICK reconfig is in flight, the request is DEFERRED -- never dropped -- and
+// runs as soon as the quick sequence completes (see RECOVERY_COMPLETE).
+static void armWtvb02FullRestart(const char* axisLabel) {
+  Serial.printf("[RESTART-DIAG] needRestart=true axis=%s fifoOwnsBus=%d fifoPhase=%d "
+                "attempt=%lu t=%lums\n",
+                axisLabel, (int)FifoDriver_OwnsBus(),
+                static_cast<int>(FifoDriver_GetPhase()),
+                (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
+                (unsigned long)millis());
+  if (s_wtvbRecoveryState != WtvbRecoveryState::IDLE) {
+    if (s_wtvbFullRestart) {
+      Serial.println("[SENSOR] Full restart already in flight -- request covered");
+    } else if (!s_wtvbFullRestartDeferred) {
+      strncpy(s_wtvbAxisLabel, axisLabel, sizeof(s_wtvbAxisLabel) - 1);
+      s_wtvbAxisLabel[sizeof(s_wtvbAxisLabel) - 1] = '\0';
+      s_wtvbFullRestartDeferred = true;
+      Serial.printf("[SENSOR] Full restart (axis=%s) DEFERRED until quick reconfig completes\n",
+                    s_wtvbAxisLabel);
+    }
+    return;
+  }
+  strncpy(s_wtvbAxisLabel, axisLabel, sizeof(s_wtvbAxisLabel) - 1);
+  s_wtvbAxisLabel[sizeof(s_wtvbAxisLabel) - 1] = '\0';
+  s_wtvbFullRestart   = true;
+  s_wtvbReconfigAllOk = true;
+  s_wtvbRecoveryState = WtvbRecoveryState::RESTART_PENDING;
+}
+
+// [vNext-recovery] Bounded, resumable step function -- does AT MOST ONE
+// Modbus transaction per call. Called once per tick from taskModbusRead(),
+// after T7 has already run, still inside the existing rs485Enable("NORMAL-POLL")
+// window (no second enable/disable pair) -- so it is only ever invoked when
+// !FifoDriver_OwnsBus() is already true at the call site. Every register
+// address/unlock key/command value/settle DURATION below is copied verbatim
+// from the untouched reconfigSensorAfterRestart()/restartSensorViaModbus()
+// above; only blocking vTaskDelay() waits become non-blocking millis()
+// deadlines, and the single continuous function call becomes several bounded
+// visits to this switch.
+static void serviceWtvb02Recovery() {
+  uint32_t nowMs = millis();
+  uint8_t  result;
+
+  switch (s_wtvbRecoveryState) {
+
+    case WtvbRecoveryState::IDLE:
+      break;
+
+    case WtvbRecoveryState::RECOVERY_PENDING:
+      // One-tick arm delay before spending any bus time -- mirrors the
+      // instant the original code decided to reconfigure. Quick path only;
+      // the full-restart path arms via RESTART_PENDING instead.
+      s_wtvbRecoveryState = WtvbRecoveryState::RECONFIG_STEP_1;
+      s_wtvbSubPhase      = 0;
+      break;
+
+    case WtvbRecoveryState::RESTART_PENDING: {
+      // restartSensorViaModbus() cooldown check.
+      // restartSensorViaModbus()'s FifoDriver_OwnsBus() guard is not needed
+      // here: this service only ever runs inside the non-FIFO poll window.
+      uint32_t now = millis();
+      if ((now - g_lastSensorRestart) < SENSOR_RESTART_COOLDOWN && g_lastSensorRestart != 0) {
+        Serial.printf("[SENSOR] %s stuck -- Cooldown active (%lu s remaining)\n",
+                      s_wtvbAxisLabel,
+                      (SENSOR_RESTART_COOLDOWN - (now - g_lastSensorRestart)) / 1000);
+        s_wtvbRecoveryState = WtvbRecoveryState::RECOVERY_FAILED;
+        break;
+      }
+      s_wtvbRecoveryState = WtvbRecoveryState::UNLOCK;
+      break;
+    }
+
+    case WtvbRecoveryState::UNLOCK:
+      // restartSensorViaModbus() Step 1 -- pre-restart-command unlock
+      //. Full-restart path only.
+      Serial.println("[SENSOR] ========================================");
+      Serial.printf("[SENSOR] ! %s STUCK -> Auto-restarting sensor...\n", s_wtvbAxisLabel);
+      Serial.println("[SENSOR] ========================================");
+      result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
+      if (result != modbus.ku8MBSuccess) {
+        Serial.printf("[SENSOR] x Unlock FAILED (err=%d)\n", result);
+        s_wtvbRecoveryState = WtvbRecoveryState::RECOVERY_FAILED;
+        break;
+      }
+      Serial.printf("[SENSOR] + Unlock OK (reg 0x%02X = 0x%04X)\n", REG_UNLOCK, SENSOR_UNLOCK_KEY);
+      s_wtvbStepDeadlineMs = nowMs + 100;  // matches vTaskDelay(pdMS_TO_TICKS(100))
+      s_wtvbSubPhase       = 0;            // 0 = restart command not yet sent
+      s_wtvbRecoveryState  = WtvbRecoveryState::RESTART_WAIT;
+      break;
+
+    case WtvbRecoveryState::RESTART_WAIT:
+      if ((int32_t)(nowMs - s_wtvbStepDeadlineMs) < 0) {
+        break;  // deadline not reached yet -- no-op this tick
+      }
+      if (s_wtvbSubPhase == 0) {
+        // restartSensorViaModbus() Step 2 -- the write is
+        // EXPECTED to fail/timeout (sensor reboots before ACK); that is not
+        // treated as an error, exactly as the original comment states.
+        result = modbus.writeSingleRegister(REG_CMD, 0x00FF);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf("[SENSOR] Restart sent (no ACK expected -- sensor rebooting) err=%d\n", result);
+        } else {
+          Serial.printf("[SENSOR] + Restart command sent (reg 0x%02X = 0x00FF)\n", REG_CMD);
+        }
+        Serial.println("[SENSOR] Waiting 3 seconds for sensor reboot...");
+        s_wtvbStepDeadlineMs = millis() + 3000;  // matches vTaskDelay(pdMS_TO_TICKS(3000))
+        s_wtvbSubPhase       = 1;                // 1 = waiting for reboot
+        s_wtvbSkipOutputThisTick = true;         // [vNext-recovery fix#1] no WTVB02 output this tick
+      } else {
+        // 3s reboot wait elapsed -- enter the shared reconfigure sequence.
+        // [v16.5f fidelity] reconfigSensorAfterRestart()'s default parameter
+        // (sensorWasRestarted=true) invalidates SR provenance on entry
+        // -- the full-restart path always takes this branch,
+        // exactly matching the original restartSensorViaModbus() -> plain
+        // reconfigSensorAfterRestart() call.
+        g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+        g_sensorSrHzVerified    = 0;
+        s_wtvbRecoveryState = WtvbRecoveryState::RECONFIG_STEP_1;
+        s_wtvbSubPhase      = 0;
+      }
+      break;
+
+    case WtvbRecoveryState::RECONFIG_STEP_1:
+      // reconfigSensorAfterRestart() Step 1.
+      if (s_wtvbSubPhase == 0) {
+        Serial.println("[SENSOR-CFG] ========================================");
+        Serial.println("[SENSOR-CFG] Re-configuring sensor after restart...");
+        Serial.println("[SENSOR-CFG] [v16.3] Unlock-per-step: MODE then Save");
+        Serial.printf("[SENSOR-CFG] [Unlock for MODE]...");
+        result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf(" x FAILED (err=%d) -- ABORT\n", result);
+          Serial.println("[SENSOR-CFG] ========================================");
+          // [fidelity] the original hard-aborts here (return false); the
+          // QUICK caller treats that
+          // identically to allOk=false at completion -- no distinct fatal
+          // state exists for either caller at this specific failure, so both
+          // paths fall through to RECOVERY_COMPLETE(allOk=false) here too.
+          s_wtvbReconfigAllOk = false;
+          s_wtvbRecoveryState = WtvbRecoveryState::RECOVERY_COMPLETE;
+          break;
+        }
+        Serial.println(" + OK");
+        s_wtvbStepDeadlineMs = nowMs + 50;  // matches vTaskDelay(pdMS_TO_TICKS(50))
+        s_wtvbSubPhase       = 1;
+        break;
+      }
+      if ((int32_t)(nowMs - s_wtvbStepDeadlineMs) < 0) {
+        break;  // deadline not reached yet
+      }
+      if (s_wtvbSubPhase == 1) {
+        Serial.printf("[SENSOR-CFG] MODE=FreqDomain (0x%02X=0x%04X)...", REG_MODE, SENSOR_MODE_FREQ);
+        result = modbus.writeSingleRegister(REG_MODE, SENSOR_MODE_FREQ);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf(" x FAILED (err=%d)\n", result);
+          s_wtvbReconfigAllOk = false;
+        } else {
+          Serial.println(" + OK");
+        }
+        s_wtvbStepDeadlineMs = millis() + 500;  // matches vTaskDelay(pdMS_TO_TICKS(500))
+        s_wtvbSubPhase       = 2;
+        break;
+      }
+      // sub-phase 2: 500ms settle elapsed -- advance.
+      s_wtvbRecoveryState = WtvbRecoveryState::RECONFIG_STEP_2;
+      s_wtvbSubPhase      = 0;
+      break;
+
+    case WtvbRecoveryState::RECONFIG_STEP_2:
+      // reconfigSensorAfterRestart() Step 2.
+      if (s_wtvbSubPhase == 0) {
+        Serial.printf("[SENSOR-CFG] [Unlock for SR]...");
+        result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf(" x FAILED (err=%d) -- SKIP SR\n", result);
+          s_wtvbReconfigAllOk = false;
+          s_wtvbRecoveryState = WtvbRecoveryState::RECONFIG_STEP_3;  // matches original "SKIP SR"
+          s_wtvbSubPhase      = 0;
+          break;
+        }
+        Serial.println(" + OK");
+        s_wtvbStepDeadlineMs = nowMs + 50;  // matches vTaskDelay(pdMS_TO_TICKS(50))
+        s_wtvbSubPhase       = 1;
+        break;
+      }
+      if ((int32_t)(nowMs - s_wtvbStepDeadlineMs) < 0) {
+        break;
+      }
+      if (s_wtvbSubPhase == 1) {
+        Serial.printf("[SENSOR-CFG] SR write (0x%02X=0x%04X)...", REG_SAMPLE_RATE, SENSOR_SR_PRODUCTION);
+        result = modbus.writeSingleRegister(REG_SAMPLE_RATE, SENSOR_SR_PRODUCTION);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf(" x FAILED (err=%d)\n", result);
+          s_wtvbReconfigAllOk = false;
+        } else {
+          Serial.println(" + OK");
+        }
+        s_wtvbStepDeadlineMs = millis() + 500;  // matches vTaskDelay(pdMS_TO_TICKS(500))
+        s_wtvbSubPhase       = 2;
+        break;
+      }
+      // sub-phase 2: 500ms settle elapsed -- SR read-back + decode/verify
+      //, copied verbatim.
+      result = modbus.readHoldingRegisters(REG_SAMPLE_RATE, 1);
+      if (result == modbus.ku8MBSuccess) {
+        uint16_t srReadback = modbus.getResponseBuffer(0);
+        const char* srLabel;
+        switch (srReadback) {
+          case 0x00: srLabel = "SR0 (32 kHz)"; break;
+          case 0x01: srLabel = "SR1 (16 kHz)"; break;
+          case 0x02: srLabel = "SR2 (8 kHz)";  break;
+          case 0x03: srLabel = "SR3 (4 kHz)";  break;
+          case 0x04: srLabel = "SR4 (2 kHz)";  break;
+          case 0x05: srLabel = "SR5 (1 kHz)";  break;
+          case 0x06: srLabel = "SR6 (512 Hz)"; break;
+          case 0x07: srLabel = "SR7 (256 Hz)"; break;
+          case 0x08: srLabel = "SR8 (128 Hz)"; break;
+          case 0x09: srLabel = "SR9 (64 Hz)";  break;
+          default:   srLabel = NULL;           break;
+        }
+        if (srLabel != NULL) {
+          Serial.printf("[SR] Readback = %s\n", srLabel);
+        } else {
+          Serial.printf("[SR] Unexpected value = 0x%04X\n", srReadback);
+          g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+          g_sensorSrHzVerified    = 0;
+        }
+        if (srLabel != NULL && srReadback == SENSOR_SR_PRODUCTION) {
+          uint32_t srHz = sensorSrIndexToHz(srReadback);
+          if (srHz != 0u) {
+            g_sensorSrIndexVerified = srReadback;
+            g_sensorSrHzVerified    = srHz;
+          }
+        }
+        if (srReadback != SENSOR_SR_PRODUCTION) {
+          Serial.printf("[SR] MISMATCH: readback=0x%04X expected=0x%04X (SENSOR_SR_PRODUCTION) -- SR config FAILED\n",
+                        srReadback, SENSOR_SR_PRODUCTION);
+          s_wtvbReconfigAllOk = false;
+          g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+          g_sensorSrHzVerified    = 0;
+        }
+      } else {
+        Serial.println("[SR] Readback FAILED");
+        s_wtvbReconfigAllOk = false;
+        g_sensorSrIndexVerified = FIFO_SR_INDEX_UNKNOWN;
+        g_sensorSrHzVerified    = 0;
+      }
+      s_wtvbRecoveryState = WtvbRecoveryState::RECONFIG_STEP_3;
+      s_wtvbSubPhase      = 0;
+      break;
+
+    case WtvbRecoveryState::RECONFIG_STEP_3:
+      // reconfigSensorAfterRestart() Step 3.
+      if (s_wtvbSubPhase == 0) {
+        Serial.printf("[SENSOR-CFG] [Unlock for Save]...");
+        result = modbus.writeSingleRegister(REG_UNLOCK, SENSOR_UNLOCK_KEY);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf(" x FAILED (err=%d) -- SKIP Save\n", result);
+          s_wtvbReconfigAllOk = false;
+          // [fidelity] the 300ms delay is OUTSIDE the original
+          // if/else -- it always runs, even on this failure branch.
+          s_wtvbStepDeadlineMs = millis() + 300;
+          s_wtvbSubPhase       = 2;  // skip the Save-write sub-phase
+          break;
+        }
+        Serial.println(" + OK");
+        s_wtvbStepDeadlineMs = nowMs + 50;  // matches vTaskDelay(pdMS_TO_TICKS(50))
+        s_wtvbSubPhase       = 1;
+        break;
+      }
+      if ((int32_t)(nowMs - s_wtvbStepDeadlineMs) < 0) {
+        break;
+      }
+      if (s_wtvbSubPhase == 1) {
+        Serial.printf("[SENSOR-CFG] Save (0x%02X=0x%04X)...", REG_CMD, SENSOR_CMD_SAVE);
+        result = modbus.writeSingleRegister(REG_CMD, SENSOR_CMD_SAVE);
+        if (result != modbus.ku8MBSuccess) {
+          Serial.printf(" x FAILED (err=%d) -- config NOT persisted to NVM!\n", result);
+          s_wtvbReconfigAllOk = false;
+        } else {
+          Serial.println(" + OK");
+        }
+        s_wtvbStepDeadlineMs = millis() + 300;  // matches vTaskDelay(pdMS_TO_TICKS(300))
+        s_wtvbSubPhase       = 2;
+        break;
+      }
+      // sub-phase 2: 300ms settle elapsed -- reconfigure sequence done.
+      if (s_wtvbReconfigAllOk) {
+        Serial.println("[SENSOR-CFG] All config steps OK -- MODE=FreqDomain(0x02) saved (SR/DRM not written by this function)");
+      } else {
+        Serial.println("[SENSOR-CFG] WARNING: Some config steps FAILED -- sensor may not output CF/VRMS");
+      }
+      Serial.println("[SENSOR-CFG] ========================================");
+      s_wtvbRecoveryState = WtvbRecoveryState::RECOVERY_COMPLETE;
+      break;
+
+    case WtvbRecoveryState::RECOVERY_COMPLETE:
+      if (s_wtvbFullRestart) {
+        // restartSensorViaModbus() tail -- unconditional,
+        // regardless of s_wtvbReconfigAllOk, exactly matching the original
+        // (which discards reconfigSensorAfterRestart()'s return value here).
+        g_lastSensorRestart = millis();
+        g_vxStuckCount       = 0;
+        g_vyStuckCount       = 0;
+        g_vzStuckCount       = 0;
+        g_allZeroStuckCount  = 0;
+        Serial.printf("[SENSOR] + Sensor restart complete (triggered by %s), resuming reads\n", s_wtvbAxisLabel);
+        Serial.println("[SENSOR] ========================================");
+        // Former taskModbusRead() caller-side log for restartOk==true.
+        Serial.printf("[SENSOR] + Auto-restart OK (axis=%s), monitoring recovery...\n", s_wtvbAxisLabel);
+      } else {
+        // Former taskModbusRead() caller-side handling for reOk==false.
+        if (!s_wtvbReconfigAllOk) {
+          Serial.println("[MODBUS] WARNING: Sensor reconfig failed -- CF/VRMS may be 0 until next restart");
+          g_sensorWarmupUntilMs = millis() + SENSOR_WARMUP_RECONFIG_FAIL_MS;
+          Serial.println("[MODBUS] ! Extending warmup suppress to 4s after reconfig fail");
+        }
+        // [vNext-recovery fix#3] Execute a full restart deferred during this
+        // quick sequence now, instead of returning to IDLE -- it goes through
+        // RESTART_PENDING, so the original cooldown check applies unchanged.
+        if (s_wtvbFullRestartDeferred) {
+          s_wtvbFullRestartDeferred = false;
+          Serial.printf("[SENSOR] Running deferred full restart (axis=%s)\n", s_wtvbAxisLabel);
+          s_wtvbFullRestart   = true;
+          s_wtvbReconfigAllOk = true;
+          s_wtvbRecoveryState = WtvbRecoveryState::RESTART_PENDING;
+          break;
+        }
+      }
+      s_wtvbRecoveryState = WtvbRecoveryState::IDLE;
+      break;
+
+    case WtvbRecoveryState::RECOVERY_FAILED:
+      // Only reachable via the two full-restart-specific gates (cooldown
+      // active at RESTART_PENDING, or pre-restart-command unlock failure at
+      // UNLOCK) -- the quick-reconfig path has no equivalent hard-fail state
+      // in the original (see RECONFIG_STEP_1's fidelity note). Former
+      // taskModbusRead() caller-side handling for restartOk==false
+      // -- note only vx/vy/vz are reset here, NOT
+      // g_allZeroStuckCount (that asymmetry is in the original).
+      Serial.printf("[SENSOR] x Auto-restart FAILED (axis=%s), retry after cooldown\n", s_wtvbAxisLabel);
+      g_vxStuckCount      = 0;
+      g_vyStuckCount      = 0;
+      g_vzStuckCount      = 0;
+      s_wtvbRecoveryState = WtvbRecoveryState::IDLE;
+      break;
+  }
 }
 
 // ============================================================================
@@ -6884,6 +7331,34 @@ void taskModbusRead(void* parameter) {
   static uint32_t s_lastT1aTimingStatsLogMs = 0;
   static uint32_t s_lastRxDiagStatsLogMs = 0;
 
+  // [WTVB02-Timing-Instrumentation, Phase 0] Successful-duration tracking for
+  // T1a/T1b/T1c/T2a. Diagnostic-only -- never read by any control-flow
+  // decision. T1b/T1c/T2a reuse the t1bStartMs/t1bEndMs, t1cStartMs/t1cEndMs,
+  // t2aStartMs/t2aEndMs timestamps that already exist above (added for
+  // [RX-Byte-Diag]) -- no new millis() calls are introduced by this block.
+  // T1a's own s_t1aSuccessDurSumMs/Count/MaxMs above are unchanged; only a
+  // MinMs companion is added here to close the previously-identified gap.
+  static uint32_t s_t1aSuccessDurMinMs   = UINT32_MAX;
+  static uint32_t s_t1bSuccessDurSumMs   = 0;
+  static uint32_t s_t1bSuccessDurCount   = 0;
+  static uint32_t s_t1bSuccessDurMaxMs   = 0;
+  static uint32_t s_t1bSuccessDurMinMs   = UINT32_MAX;
+  static uint32_t s_t1cSuccessDurSumMs   = 0;
+  static uint32_t s_t1cSuccessDurCount   = 0;
+  static uint32_t s_t1cSuccessDurMaxMs   = 0;
+  static uint32_t s_t1cSuccessDurMinMs   = UINT32_MAX;
+  static uint32_t s_t2aSuccessDurSumMs   = 0;
+  static uint32_t s_t2aSuccessDurCount   = 0;
+  static uint32_t s_t2aSuccessDurMaxMs   = 0;
+  static uint32_t s_t2aSuccessDurMinMs   = UINT32_MAX;
+  // [WTVB02-Timing-Instrumentation, Phase 0] Fixed bucket histogram --
+  // diagnostic-only, never read by any control-flow decision. Row index:
+  // 0=T1A, 1=T1B, 2=T1C, 3=T2A. Boundaries chosen to reveal whether
+  // successful responses ever approach ku16MBResponseTimeout (2000ms,
+  // ModbusMaster.h, unmodified by this patch) without storing every sample.
+  static const uint16_t kDurBucketBoundsMs[11] = {100,250,500,750,1000,1250,1500,1750,1900,1950,2000};
+  static uint32_t s_durBucketCount[4][12] = {{0}};
+
   while (1) {
     g_sensorReads++;
 
@@ -6996,7 +7471,11 @@ void taskModbusRead(void* parameter) {
         fifoReq.requirePermissive = fifoIntent.requirePermissive;
         fifoReq.maxRetries = 2;
         fifoReq.admissionContext.motorStable      = (g_motorRunState == MOTOR_RUNNING);
-        fifoReq.admissionContext.sensorHealthy    = (g_modbusConsecErrors == 0);
+        // [vNext-recovery] Also require no WTVB02 recovery in flight: with
+        // deferral, g_modbusConsecErrors is reset when a recovery is ARMED,
+        // before the reconfigure sequence has finished.
+        fifoReq.admissionContext.sensorHealthy    = (g_modbusConsecErrors == 0) &&
+                                                     (s_wtvbRecoveryState == WtvbRecoveryState::IDLE);
         // [PHASE1.5-MQTTWORKER] Was a direct, unsynchronized cross-core
         // mqttClient.connected() call (Core 0 touching a Core 1-owned
         // mbedTLS session with no barrier -- NetworkClientSecure::connected()
@@ -7160,6 +7639,9 @@ void taskModbusRead(void* parameter) {
     // block below actually runs. See docs/engineering/ (Sensor Queue Full
     // audit series) for the full root-cause trace this closes.
     bool pollPerformed = false;
+    // [vNext-recovery B1] Per-tick copy of s_wtvbSkipOutputThisTick (always
+    // false on FIFO-owned ticks -- the flag is only set inside the poll window).
+    bool wtvbSkipOutput = false;
 
     // [Task 4.2] RS485 bus arbitration (A-5) -- the normal Modbus/CTR4A01
     // polling below is skipped entirely while FifoDriver owns the bus
@@ -7192,193 +7674,288 @@ void taskModbusRead(void* parameter) {
       rs485Enable("NORMAL-POLL");
       vTaskDelay(pdMS_TO_TICKS(5));  // 5ms stabilization
 
-      // [Sensor-Failure-Instrumentation] Consume-and-clear (read once, then
-      // reset) so only THIS cycle's T1a is ever tagged as "first after CT
-      // switch" -- read-only, no effect on any transaction below.
-      bool firstAfterCT = s_ctSlaveSwitchLastCycle;
-      s_ctSlaveSwitchLastCycle = false;
-      // [Sensor-Failure-Instrumentation, Base-Rate] Elapsed time from CT
-      // slave-ID restoration to this cycle's T1a start -- only meaningful
-      // (and only measured) when this cycle is actually firstAfterCT.
-      if (firstAfterCT) {
-        uint32_t ctToT1aGapMs = millis() - s_ctRestoreMs;
-        s_ctToT1aGapSumMs += ctToT1aGapMs;
-        s_ctToT1aGapCount++;
-        if (ctToT1aGapMs > s_ctToT1aGapMaxMs) s_ctToT1aGapMaxMs = ctToT1aGapMs;
-      }
-      const char* prevTxnName = "CYCLE-START";
-
-      // Transaction 1: Velocity RMS X, Y, Z (§6.4.14-16)
-      // VRMSX=0x50, VRMSY=0x5C, VRMSZ=0x68 (ไม่ consecutive -- อ่านแยก 3 ครั้ง)
-      // Scaling: raw / 1000.0f → mm/s (True RMS, ไม่ต้อง × 0.7071)
-      // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Bracket the T1a call
-      // itself with timestamps -- read-only, no effect on the call, its
-      // return value, or the 5ms delay that follows it.
-      uint32_t t1aStartMs = millis();
-      uint8_t rcVrmsX = modbus.readHoldingRegisters(REG_VRMS_X, 1);
-      uint32_t t1aEndMs = millis();
-      // [Sensor-Failure-Instrumentation, Base-Rate] Count EVERY T1a attempt
-      // (success + failure), split by firstAfterCT -- unconditional, before
-      // the outcome branch below, so the base rate reflects all executions.
-      s_t1aTotal++;
-      if (firstAfterCT) s_t1aTotalFirstAfterCT++;
-      if (rcVrmsX == modbus.ku8MBSuccess) {
-        raw_x = (int16_t)modbus.getResponseBuffer(0);
-        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Successful-call
-        // duration, read-only.
-        uint32_t t1aDurMs = t1aEndMs - t1aStartMs;
-        s_t1aSuccessDurSumMs += t1aDurMs;
-        s_t1aSuccessDurCount++;
-        if (t1aDurMs > s_t1aSuccessDurMaxMs) s_t1aSuccessDurMaxMs = t1aDurMs;
-      } else {
-        success = false; retryCount++;
-        if (firstAfterCT) s_t1aFailFirstAfterCT++; else s_t1aFailNotFirstAfterCT++;
-        logModbusTransactionFail("T1a-VRMSX", REG_VRMS_X, MODBUS_SLAVE_ID, 3, rcVrmsX,
-                                  firstAfterCT, prevTxnName, "T1b-VRMSY");
-        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Failed-call timing
-        // diagnostic -- printed AFTER the existing MODBUS-FAIL line above,
-        // does not replace or alter it. Read-only; no effect on retry/
-        // reconfig logic. ctToStartMs/ctToEndMs are only physically
-        // meaningful when firstAfterCT=1 (see firstAfterCT field itself).
-        uint32_t t1aDurMs    = t1aEndMs - t1aStartMs;
-        uint32_t ctToStartMs = t1aStartMs - s_ctRestoreMs;
-        uint32_t ctToEndMs   = t1aEndMs - s_ctRestoreMs;
-        s_t1aFailDurSumMs += t1aDurMs;
-        s_t1aFailDurCount++;
-        if (t1aDurMs > s_t1aFailDurMaxMs) s_t1aFailDurMaxMs = t1aDurMs;
+      // [vNext-recovery] WTVB02 T1a/T1b/T1c/T2a are NOT polled during the 3000ms
+      // post-restart-command reboot wait: the sensor is intentionally rebooting,
+      // so each read would only time out (~2000ms), delay T7, and falsely count
+      // g_modbusConsecErrors / arm G1. success stays true and raw_* keep their
+      // previous values. T7 (CTR4A01 current) below is NOT gated.
+      if (!wtvbRebootWindowActive()) {
+        // [Sensor-Failure-Instrumentation] Consume-and-clear (read once, then
+        // reset) so only THIS cycle's T1a is ever tagged as "first after CT
+        // switch" -- read-only, no effect on any transaction below.
+        bool firstAfterCT = s_ctSlaveSwitchLastCycle;
+        s_ctSlaveSwitchLastCycle = false;
+        // [Sensor-Failure-Instrumentation, Base-Rate] Elapsed time from CT
+        // slave-ID restoration to this cycle's T1a start -- only meaningful
+        // (and only measured) when this cycle is actually firstAfterCT.
         if (firstAfterCT) {
-          s_t1aFailCtToEndSumMs += ctToEndMs;
-          s_t1aFailCtToEndCount++;
-          if (ctToEndMs > s_t1aFailCtToEndMaxMs) s_t1aFailCtToEndMaxMs = ctToEndMs;
+          uint32_t ctToT1aGapMs = millis() - s_ctRestoreMs;
+          s_ctToT1aGapSumMs += ctToT1aGapMs;
+          s_ctToT1aGapCount++;
+          if (ctToT1aGapMs > s_ctToT1aGapMaxMs) s_ctToT1aGapMaxMs = ctToT1aGapMs;
         }
-        Serial.printf("[T1A-TIMING] firstAfterCT=%d ctToStartMs=%lu transactionDurationMs=%lu "
-                      "ctToEndMs=%lu rc=0x%02X(%s) fifoOwnsBus=%d rs485EN=%d prev=%s slave=0x%02X\r\n",
-                      (int)firstAfterCT, (unsigned long)ctToStartMs, (unsigned long)t1aDurMs,
-                      (unsigned long)ctToEndMs, rcVrmsX, modbusRcName(rcVrmsX),
-                      (int)FifoDriver_OwnsBus(), (int)digitalRead(RS485_EN_PIN),
-                      prevTxnName, (unsigned)MODBUS_SLAVE_ID);
-        // [RX-Byte-Diag] Printed AFTER the existing [T1A-TIMING] line above;
-        // does not replace or alter it.
-        logModbusRxByteDiag(kRxDiagT1a, rcVrmsX, t1aDurMs);
-      }
-      prevTxnName = "T1a-VRMSX";
-      vTaskDelay(pdMS_TO_TICKS(5));
+        const char* prevTxnName = "CYCLE-START";
 
-      // [Sensor-Failure-Instrumentation, Base-Rate] Periodic summary only --
-      // never fires more than once per 30s, regardless of poll cadence.
-      // Read-only reporting; does not affect success, retryCount, or any
-      // other control-flow state.
-      {
-        uint32_t nowStats = millis();
-        if (nowStats - s_lastT1aStatsLogMs >= 30000) {
-          s_lastT1aStatsLogMs = nowStats;
-          uint32_t t1aNotFirstAfterCT = s_t1aTotal - s_t1aTotalFirstAfterCT;
-          float rateFirstAfterCT = s_t1aTotalFirstAfterCT
-              ? (100.0f * (float)s_t1aFailFirstAfterCT / (float)s_t1aTotalFirstAfterCT)
-              : 0.0f;
-          float rateNotFirstAfterCT = t1aNotFirstAfterCT
-              ? (100.0f * (float)s_t1aFailNotFirstAfterCT / (float)t1aNotFirstAfterCT)
-              : 0.0f;
-          float avgGapAfterCTms = s_ctToT1aGapCount
-              ? ((float)s_ctToT1aGapSumMs / (float)s_ctToT1aGapCount)
-              : 0.0f;
-          Serial.printf("[T1A-STATS] total=%lu firstAfterCT1=%lu firstAfterCT0=%lu "
-                        "fail1=%lu fail0=%lu rate1=%.2f%% rate0=%.2f%% "
-                        "avgGapAfterCTms=%.1f maxGapAfterCTms=%lu t=%lums\r\n",
-                        (unsigned long)s_t1aTotal, (unsigned long)s_t1aTotalFirstAfterCT,
-                        (unsigned long)t1aNotFirstAfterCT, (unsigned long)s_t1aFailFirstAfterCT,
-                        (unsigned long)s_t1aFailNotFirstAfterCT, rateFirstAfterCT, rateNotFirstAfterCT,
-                        avgGapAfterCTms, (unsigned long)s_ctToT1aGapMaxMs, (unsigned long)nowStats);
+        // Transaction 1: Velocity RMS X, Y, Z (§6.4.14-16)
+        // VRMSX=0x50, VRMSY=0x5C, VRMSZ=0x68 (ไม่ consecutive -- อ่านแยก 3 ครั้ง)
+        // Scaling: raw / 1000.0f → mm/s (True RMS, ไม่ต้อง × 0.7071)
+        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Bracket the T1a call
+        // itself with timestamps -- read-only, no effect on the call, its
+        // return value, or the 5ms delay that follows it.
+        uint32_t t1aStartMs = millis();
+        uint8_t rcVrmsX = modbus.readHoldingRegisters(REG_VRMS_X, 1);
+        uint32_t t1aEndMs = millis();
+        // [Sensor-Failure-Instrumentation, Base-Rate] Count EVERY T1a attempt
+        // (success + failure), split by firstAfterCT -- unconditional, before
+        // the outcome branch below, so the base rate reflects all executions.
+        s_t1aTotal++;
+        if (firstAfterCT) s_t1aTotalFirstAfterCT++;
+        if (rcVrmsX == modbus.ku8MBSuccess) {
+          raw_x = (int16_t)modbus.getResponseBuffer(0);
+          // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Successful-call
+          // duration, read-only.
+          uint32_t t1aDurMs = t1aEndMs - t1aStartMs;
+          s_t1aSuccessDurSumMs += t1aDurMs;
+          s_t1aSuccessDurCount++;
+          if (t1aDurMs > s_t1aSuccessDurMaxMs) s_t1aSuccessDurMaxMs = t1aDurMs;
+          if (t1aDurMs < s_t1aSuccessDurMinMs) s_t1aSuccessDurMinMs = t1aDurMs;
+          // [WTVB02-Timing-Instrumentation, Phase 0] Diagnostic-only bucket
+          // histogram -- never read by any control-flow decision.
+          {
+            uint8_t t1aBucketIdx = 11;
+            for (uint8_t b = 0; b < 11; b++) {
+              if (t1aDurMs <= kDurBucketBoundsMs[b]) { t1aBucketIdx = b; break; }
+            }
+            s_durBucketCount[0][t1aBucketIdx]++;
+          }
+        } else {
+          success = false; retryCount++;
+          if (firstAfterCT) s_t1aFailFirstAfterCT++; else s_t1aFailNotFirstAfterCT++;
+          logModbusTransactionFail("T1a-VRMSX", REG_VRMS_X, MODBUS_SLAVE_ID, 3, rcVrmsX,
+                                    firstAfterCT, prevTxnName, "T1b-VRMSY");
+          // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Failed-call timing
+          // diagnostic -- printed AFTER the existing MODBUS-FAIL line above,
+          // does not replace or alter it. Read-only; no effect on retry/
+          // reconfig logic. ctToStartMs/ctToEndMs are only physically
+          // meaningful when firstAfterCT=1 (see firstAfterCT field itself).
+          uint32_t t1aDurMs    = t1aEndMs - t1aStartMs;
+          uint32_t ctToStartMs = t1aStartMs - s_ctRestoreMs;
+          uint32_t ctToEndMs   = t1aEndMs - s_ctRestoreMs;
+          s_t1aFailDurSumMs += t1aDurMs;
+          s_t1aFailDurCount++;
+          if (t1aDurMs > s_t1aFailDurMaxMs) s_t1aFailDurMaxMs = t1aDurMs;
+          if (firstAfterCT) {
+            s_t1aFailCtToEndSumMs += ctToEndMs;
+            s_t1aFailCtToEndCount++;
+            if (ctToEndMs > s_t1aFailCtToEndMaxMs) s_t1aFailCtToEndMaxMs = ctToEndMs;
+          }
+          Serial.printf("[T1A-TIMING] firstAfterCT=%d ctToStartMs=%lu transactionDurationMs=%lu "
+                        "ctToEndMs=%lu rc=0x%02X(%s) fifoOwnsBus=%d rs485EN=%d prev=%s slave=0x%02X\r\n",
+                        (int)firstAfterCT, (unsigned long)ctToStartMs, (unsigned long)t1aDurMs,
+                        (unsigned long)ctToEndMs, rcVrmsX, modbusRcName(rcVrmsX),
+                        (int)FifoDriver_OwnsBus(), (int)digitalRead(RS485_EN_PIN),
+                        prevTxnName, (unsigned)MODBUS_SLAVE_ID);
+          // [RX-Byte-Diag] Printed AFTER the existing [T1A-TIMING] line above;
+          // does not replace or alter it.
+          logModbusRxByteDiag(kRxDiagT1a, rcVrmsX, t1aDurMs);
         }
-      }
+        prevTxnName = "T1a-VRMSX";
+        vTaskDelay(pdMS_TO_TICKS(5));
 
-      // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Periodic aggregate
-      // summary only -- independent 30s gate, never fires per-cycle. Purely
-      // derived/accumulated read-only diagnostics; does not affect success,
-      // retryCount, or any other control-flow state. success/failure counts
-      // are derived from the existing Base-Rate counters above rather than
-      // duplicated in new state.
-      {
-        uint32_t nowTimingStats = millis();
-        if (nowTimingStats - s_lastT1aTimingStatsLogMs >= 30000) {
-          s_lastT1aTimingStatsLogMs = nowTimingStats;
-          uint32_t firstAfterCTFailCount    = s_t1aFailFirstAfterCT;
-          uint32_t firstAfterCTSuccessCount = s_t1aTotalFirstAfterCT - s_t1aFailFirstAfterCT;
-          uint32_t notFirstTotal            = s_t1aTotal - s_t1aTotalFirstAfterCT;
-          uint32_t notFirstFailCount        = s_t1aFailNotFirstAfterCT;
-          uint32_t notFirstSuccessCount     = notFirstTotal - notFirstFailCount;
-          float avgCtToStartMs = s_ctToT1aGapCount
-              ? ((float)s_ctToT1aGapSumMs / (float)s_ctToT1aGapCount) : 0.0f;
-          float avgSuccessDurMs = s_t1aSuccessDurCount
-              ? ((float)s_t1aSuccessDurSumMs / (float)s_t1aSuccessDurCount) : 0.0f;
-          float avgFailDurMs = s_t1aFailDurCount
-              ? ((float)s_t1aFailDurSumMs / (float)s_t1aFailDurCount) : 0.0f;
-          float avgFailCtToEndMs = s_t1aFailCtToEndCount
-              ? ((float)s_t1aFailCtToEndSumMs / (float)s_t1aFailCtToEndCount) : 0.0f;
-          Serial.printf("[T1A-TIMING-STATS] firstAfterCT_ok=%lu firstAfterCT_fail=%lu "
-                        "notFirst_ok=%lu notFirst_fail=%lu "
-                        "avgCtToStartMs=%.1f maxCtToStartMs=%lu "
-                        "avgSuccessDurMs=%.1f maxSuccessDurMs=%lu "
-                        "avgFailDurMs=%.1f maxFailDurMs=%lu "
-                        "avgFailCtToEndMs=%.1f maxFailCtToEndMs=%lu t=%lums\r\n",
-                        (unsigned long)firstAfterCTSuccessCount, (unsigned long)firstAfterCTFailCount,
-                        (unsigned long)notFirstSuccessCount, (unsigned long)notFirstFailCount,
-                        avgCtToStartMs, (unsigned long)s_ctToT1aGapMaxMs,
-                        avgSuccessDurMs, (unsigned long)s_t1aSuccessDurMaxMs,
-                        avgFailDurMs, (unsigned long)s_t1aFailDurMaxMs,
-                        avgFailCtToEndMs, (unsigned long)s_t1aFailCtToEndMaxMs,
-                        (unsigned long)nowTimingStats);
+        // [Sensor-Failure-Instrumentation, Base-Rate] Periodic summary only --
+        // never fires more than once per 30s, regardless of poll cadence.
+        // Read-only reporting; does not affect success, retryCount, or any
+        // other control-flow state.
+        {
+          uint32_t nowStats = millis();
+          if (nowStats - s_lastT1aStatsLogMs >= 30000) {
+            s_lastT1aStatsLogMs = nowStats;
+            uint32_t t1aNotFirstAfterCT = s_t1aTotal - s_t1aTotalFirstAfterCT;
+            float rateFirstAfterCT = s_t1aTotalFirstAfterCT
+                ? (100.0f * (float)s_t1aFailFirstAfterCT / (float)s_t1aTotalFirstAfterCT)
+                : 0.0f;
+            float rateNotFirstAfterCT = t1aNotFirstAfterCT
+                ? (100.0f * (float)s_t1aFailNotFirstAfterCT / (float)t1aNotFirstAfterCT)
+                : 0.0f;
+            float avgGapAfterCTms = s_ctToT1aGapCount
+                ? ((float)s_ctToT1aGapSumMs / (float)s_ctToT1aGapCount)
+                : 0.0f;
+            Serial.printf("[T1A-STATS] total=%lu firstAfterCT1=%lu firstAfterCT0=%lu "
+                          "fail1=%lu fail0=%lu rate1=%.2f%% rate0=%.2f%% "
+                          "avgGapAfterCTms=%.1f maxGapAfterCTms=%lu t=%lums\r\n",
+                          (unsigned long)s_t1aTotal, (unsigned long)s_t1aTotalFirstAfterCT,
+                          (unsigned long)t1aNotFirstAfterCT, (unsigned long)s_t1aFailFirstAfterCT,
+                          (unsigned long)s_t1aFailNotFirstAfterCT, rateFirstAfterCT, rateNotFirstAfterCT,
+                          avgGapAfterCTms, (unsigned long)s_ctToT1aGapMaxMs, (unsigned long)nowStats);
+          }
         }
-      }
 
-      // [RX-Byte-Diag] Bracketing timestamp only -- read-only, no effect on
-      // the call itself.
-      uint32_t t1bStartMs = millis();
-      uint8_t rcVrmsY = modbus.readHoldingRegisters(REG_VRMS_Y, 1);
-      uint32_t t1bEndMs = millis();
-      if (rcVrmsY == modbus.ku8MBSuccess) {
-        raw_y = (int16_t)modbus.getResponseBuffer(0);
-      } else {
-        success = false; retryCount++;
-        logModbusTransactionFail("T1b-VRMSY", REG_VRMS_Y, MODBUS_SLAVE_ID, 3, rcVrmsY,
-                                  false, prevTxnName, "T1c-VRMSZ");
-        logModbusRxByteDiag(kRxDiagT1b, rcVrmsY, t1bEndMs - t1bStartMs);
-      }
-      prevTxnName = "T1b-VRMSY";
-      vTaskDelay(pdMS_TO_TICKS(5));
+        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Periodic aggregate
+        // summary only -- independent 30s gate, never fires per-cycle. Purely
+        // derived/accumulated read-only diagnostics; does not affect success,
+        // retryCount, or any other control-flow state. success/failure counts
+        // are derived from the existing Base-Rate counters above rather than
+        // duplicated in new state.
+        {
+          uint32_t nowTimingStats = millis();
+          if (nowTimingStats - s_lastT1aTimingStatsLogMs >= 30000) {
+            s_lastT1aTimingStatsLogMs = nowTimingStats;
+            uint32_t firstAfterCTFailCount    = s_t1aFailFirstAfterCT;
+            uint32_t firstAfterCTSuccessCount = s_t1aTotalFirstAfterCT - s_t1aFailFirstAfterCT;
+            uint32_t notFirstTotal            = s_t1aTotal - s_t1aTotalFirstAfterCT;
+            uint32_t notFirstFailCount        = s_t1aFailNotFirstAfterCT;
+            uint32_t notFirstSuccessCount     = notFirstTotal - notFirstFailCount;
+            float avgCtToStartMs = s_ctToT1aGapCount
+                ? ((float)s_ctToT1aGapSumMs / (float)s_ctToT1aGapCount) : 0.0f;
+            float avgSuccessDurMs = s_t1aSuccessDurCount
+                ? ((float)s_t1aSuccessDurSumMs / (float)s_t1aSuccessDurCount) : 0.0f;
+            float avgFailDurMs = s_t1aFailDurCount
+                ? ((float)s_t1aFailDurSumMs / (float)s_t1aFailDurCount) : 0.0f;
+            float avgFailCtToEndMs = s_t1aFailCtToEndCount
+                ? ((float)s_t1aFailCtToEndSumMs / (float)s_t1aFailCtToEndCount) : 0.0f;
+            Serial.printf("[T1A-TIMING-STATS] firstAfterCT_ok=%lu firstAfterCT_fail=%lu "
+                          "notFirst_ok=%lu notFirst_fail=%lu "
+                          "avgCtToStartMs=%.1f maxCtToStartMs=%lu "
+                          "avgSuccessDurMs=%.1f maxSuccessDurMs=%lu "
+                          "avgFailDurMs=%.1f maxFailDurMs=%lu "
+                          "avgFailCtToEndMs=%.1f maxFailCtToEndMs=%lu t=%lums\r\n",
+                          (unsigned long)firstAfterCTSuccessCount, (unsigned long)firstAfterCTFailCount,
+                          (unsigned long)notFirstSuccessCount, (unsigned long)notFirstFailCount,
+                          avgCtToStartMs, (unsigned long)s_ctToT1aGapMaxMs,
+                          avgSuccessDurMs, (unsigned long)s_t1aSuccessDurMaxMs,
+                          avgFailDurMs, (unsigned long)s_t1aFailDurMaxMs,
+                          avgFailCtToEndMs, (unsigned long)s_t1aFailCtToEndMaxMs,
+                          (unsigned long)nowTimingStats);
+            // [WTVB02-Timing-Instrumentation, Phase 0] Unified success-timing
+            // report for T1a/T1b/T1c/T2a, reusing this existing 30s cadence --
+            // no new timer/gate added. Diagnostic-only; nothing below is read
+            // by any control-flow decision.
+            {
+              float t1aMean = s_t1aSuccessDurCount ? ((float)s_t1aSuccessDurSumMs / (float)s_t1aSuccessDurCount) : 0.0f;
+              float t1bMean = s_t1bSuccessDurCount ? ((float)s_t1bSuccessDurSumMs / (float)s_t1bSuccessDurCount) : 0.0f;
+              float t1cMean = s_t1cSuccessDurCount ? ((float)s_t1cSuccessDurSumMs / (float)s_t1cSuccessDurCount) : 0.0f;
+              float t2aMean = s_t2aSuccessDurCount ? ((float)s_t2aSuccessDurSumMs / (float)s_t2aSuccessDurCount) : 0.0f;
+              uint32_t t1aMinOut = s_t1aSuccessDurCount ? s_t1aSuccessDurMinMs : 0;
+              uint32_t t1bMinOut = s_t1bSuccessDurCount ? s_t1bSuccessDurMinMs : 0;
+              uint32_t t1cMinOut = s_t1cSuccessDurCount ? s_t1cSuccessDurMinMs : 0;
+              uint32_t t2aMinOut = s_t2aSuccessDurCount ? s_t2aSuccessDurMinMs : 0;
+              Serial.printf("[TIMING] T1A count=%lu mean=%.1f min=%lu max=%lu\r\n",
+                            (unsigned long)s_t1aSuccessDurCount, t1aMean, (unsigned long)t1aMinOut, (unsigned long)s_t1aSuccessDurMaxMs);
+              Serial.printf("[TIMING] T1B count=%lu mean=%.1f min=%lu max=%lu\r\n",
+                            (unsigned long)s_t1bSuccessDurCount, t1bMean, (unsigned long)t1bMinOut, (unsigned long)s_t1bSuccessDurMaxMs);
+              Serial.printf("[TIMING] T1C count=%lu mean=%.1f min=%lu max=%lu\r\n",
+                            (unsigned long)s_t1cSuccessDurCount, t1cMean, (unsigned long)t1cMinOut, (unsigned long)s_t1cSuccessDurMaxMs);
+              Serial.printf("[TIMING] T2A count=%lu mean=%.1f min=%lu max=%lu\r\n",
+                            (unsigned long)s_t2aSuccessDurCount, t2aMean, (unsigned long)t2aMinOut, (unsigned long)s_t2aSuccessDurMaxMs);
+              static const char* kTimingHistNames[4] = {"T1A", "T1B", "T1C", "T2A"};
+              for (uint8_t txn = 0; txn < 4; txn++) {
+                Serial.printf("[TIMING-HIST] %s <=100:%lu <=250:%lu <=500:%lu <=750:%lu <=1000:%lu <=1250:%lu <=1500:%lu <=1750:%lu <=1900:%lu <=1950:%lu <=2000:%lu >2000:%lu\r\n",
+                              kTimingHistNames[txn],
+                              (unsigned long)s_durBucketCount[txn][0], (unsigned long)s_durBucketCount[txn][1],
+                              (unsigned long)s_durBucketCount[txn][2], (unsigned long)s_durBucketCount[txn][3],
+                              (unsigned long)s_durBucketCount[txn][4], (unsigned long)s_durBucketCount[txn][5],
+                              (unsigned long)s_durBucketCount[txn][6], (unsigned long)s_durBucketCount[txn][7],
+                              (unsigned long)s_durBucketCount[txn][8], (unsigned long)s_durBucketCount[txn][9],
+                              (unsigned long)s_durBucketCount[txn][10], (unsigned long)s_durBucketCount[txn][11]);
+              }
+            }
+          }
+        }
 
-      uint32_t t1cStartMs = millis();
-      uint8_t rcVrmsZ = modbus.readHoldingRegisters(REG_VRMS_Z, 1);
-      uint32_t t1cEndMs = millis();
-      if (rcVrmsZ == modbus.ku8MBSuccess) {
-        raw_z = (int16_t)modbus.getResponseBuffer(0);
-      } else {
-        success = false; retryCount++;
-        logModbusTransactionFail("T1c-VRMSZ", REG_VRMS_Z, MODBUS_SLAVE_ID, 3, rcVrmsZ,
-                                  false, prevTxnName, "T2a-TEMP");
-        logModbusRxByteDiag(kRxDiagT1c, rcVrmsZ, t1cEndMs - t1cStartMs);
-      }
-      prevTxnName = "T1c-VRMSZ";
-      vTaskDelay(pdMS_TO_TICKS(5));
+        // [RX-Byte-Diag] Bracketing timestamp only -- read-only, no effect on
+        // the call itself.
+        uint32_t t1bStartMs = millis();
+        uint8_t rcVrmsY = modbus.readHoldingRegisters(REG_VRMS_Y, 1);
+        uint32_t t1bEndMs = millis();
+        if (rcVrmsY == modbus.ku8MBSuccess) {
+          raw_y = (int16_t)modbus.getResponseBuffer(0);
+          // [WTVB02-Timing-Instrumentation, Phase 0] Reuses the existing
+          // t1bStartMs/t1bEndMs timestamps above (added for [RX-Byte-Diag]) --
+          // no new millis() call. Diagnostic-only, never read by control flow.
+          uint32_t t1bDurMs = t1bEndMs - t1bStartMs;
+          s_t1bSuccessDurSumMs += t1bDurMs;
+          s_t1bSuccessDurCount++;
+          if (t1bDurMs > s_t1bSuccessDurMaxMs) s_t1bSuccessDurMaxMs = t1bDurMs;
+          if (t1bDurMs < s_t1bSuccessDurMinMs) s_t1bSuccessDurMinMs = t1bDurMs;
+          {
+            uint8_t t1bBucketIdx = 11;
+            for (uint8_t b = 0; b < 11; b++) {
+              if (t1bDurMs <= kDurBucketBoundsMs[b]) { t1bBucketIdx = b; break; }
+            }
+            s_durBucketCount[1][t1bBucketIdx]++;
+          }
+        } else {
+          success = false; retryCount++;
+          logModbusTransactionFail("T1b-VRMSY", REG_VRMS_Y, MODBUS_SLAVE_ID, 3, rcVrmsY,
+                                    false, prevTxnName, "T1c-VRMSZ");
+          logModbusRxByteDiag(kRxDiagT1b, rcVrmsY, t1bEndMs - t1bStartMs);
+        }
+        prevTxnName = "T1b-VRMSY";
+        vTaskDelay(pdMS_TO_TICKS(5));
 
-      // Transaction 2a: Temperature (0x40)
-      uint32_t t2aStartMs = millis();
-      uint8_t rcTemp = modbus.readHoldingRegisters(REG_TEMPERATURE, 1);
-      uint32_t t2aEndMs = millis();
-      if (rcTemp == modbus.ku8MBSuccess) {
-        raw_temp = (int16_t)modbus.getResponseBuffer(0);
-      } else {
-        success = false;
-        // [FREQ/CF-Cleanup] "next" label updated from "T2b-FREQ" -- that
-        // transaction no longer exists; T7-CTR4A01 is the next transaction
-        // actually attempted this cycle (cosmetic string only, no control-flow
-        // effect -- see logModbusTransactionFail()'s own signature above).
-        logModbusTransactionFail("T2a-TEMP", REG_TEMPERATURE, MODBUS_SLAVE_ID, 3, rcTemp,
-                                  false, prevTxnName, "T7-CTR4A01");
-        logModbusRxByteDiag(kRxDiagT2a, rcTemp, t2aEndMs - t2aStartMs);
-      }
-      prevTxnName = "T2a-TEMP";
-      vTaskDelay(pdMS_TO_TICKS(5));
+        uint32_t t1cStartMs = millis();
+        uint8_t rcVrmsZ = modbus.readHoldingRegisters(REG_VRMS_Z, 1);
+        uint32_t t1cEndMs = millis();
+        if (rcVrmsZ == modbus.ku8MBSuccess) {
+          raw_z = (int16_t)modbus.getResponseBuffer(0);
+          // [WTVB02-Timing-Instrumentation, Phase 0] Reuses the existing
+          // t1cStartMs/t1cEndMs timestamps above (added for [RX-Byte-Diag]) --
+          // no new millis() call. Diagnostic-only, never read by control flow.
+          uint32_t t1cDurMs = t1cEndMs - t1cStartMs;
+          s_t1cSuccessDurSumMs += t1cDurMs;
+          s_t1cSuccessDurCount++;
+          if (t1cDurMs > s_t1cSuccessDurMaxMs) s_t1cSuccessDurMaxMs = t1cDurMs;
+          if (t1cDurMs < s_t1cSuccessDurMinMs) s_t1cSuccessDurMinMs = t1cDurMs;
+          {
+            uint8_t t1cBucketIdx = 11;
+            for (uint8_t b = 0; b < 11; b++) {
+              if (t1cDurMs <= kDurBucketBoundsMs[b]) { t1cBucketIdx = b; break; }
+            }
+            s_durBucketCount[2][t1cBucketIdx]++;
+          }
+        } else {
+          success = false; retryCount++;
+          logModbusTransactionFail("T1c-VRMSZ", REG_VRMS_Z, MODBUS_SLAVE_ID, 3, rcVrmsZ,
+                                    false, prevTxnName, "T2a-TEMP");
+          logModbusRxByteDiag(kRxDiagT1c, rcVrmsZ, t1cEndMs - t1cStartMs);
+        }
+        prevTxnName = "T1c-VRMSZ";
+        vTaskDelay(pdMS_TO_TICKS(5));
+
+        // Transaction 2a: Temperature (0x40)
+        uint32_t t2aStartMs = millis();
+        uint8_t rcTemp = modbus.readHoldingRegisters(REG_TEMPERATURE, 1);
+        uint32_t t2aEndMs = millis();
+        if (rcTemp == modbus.ku8MBSuccess) {
+          raw_temp = (int16_t)modbus.getResponseBuffer(0);
+          // [WTVB02-Timing-Instrumentation, Phase 0] Reuses the existing
+          // t2aStartMs/t2aEndMs timestamps above (added for [RX-Byte-Diag]) --
+          // no new millis() call. Diagnostic-only, never read by control flow.
+          uint32_t t2aDurMs = t2aEndMs - t2aStartMs;
+          s_t2aSuccessDurSumMs += t2aDurMs;
+          s_t2aSuccessDurCount++;
+          if (t2aDurMs > s_t2aSuccessDurMaxMs) s_t2aSuccessDurMaxMs = t2aDurMs;
+          if (t2aDurMs < s_t2aSuccessDurMinMs) s_t2aSuccessDurMinMs = t2aDurMs;
+          {
+            uint8_t t2aBucketIdx = 11;
+            for (uint8_t b = 0; b < 11; b++) {
+              if (t2aDurMs <= kDurBucketBoundsMs[b]) { t2aBucketIdx = b; break; }
+            }
+            s_durBucketCount[3][t2aBucketIdx]++;
+          }
+        } else {
+          success = false;
+          // [FREQ/CF-Cleanup] "next" label updated from "T2b-FREQ" -- that
+          // transaction no longer exists; T7-CTR4A01 is the next transaction
+          // actually attempted this cycle (cosmetic string only, no control-flow
+          // effect -- see logModbusTransactionFail()'s own signature above).
+          logModbusTransactionFail("T2a-TEMP", REG_TEMPERATURE, MODBUS_SLAVE_ID, 3, rcTemp,
+                                    false, prevTxnName, "T7-CTR4A01");
+          logModbusRxByteDiag(kRxDiagT2a, rcTemp, t2aEndMs - t2aStartMs);
+        }
+        prevTxnName = "T2a-TEMP";
+        vTaskDelay(pdMS_TO_TICKS(5));
+      }  // [vNext-recovery] end WTVB02 T1a-T2a reboot-window gate
 
       // [RX-Byte-Diag] Periodic aggregate summary only -- independent 30s
       // gate, never fires per-cycle, no per-success logging. Purely reads
@@ -7464,6 +8041,24 @@ void taskModbusRead(void* parameter) {
         s_ctRestoreMs = millis();
       }
 
+      // [vNext-recovery] Service the WTVB02 deferred-recovery state machine
+      // HERE: after T7 (so current is always sampled before any recovery
+      // transaction can occupy the bus), inside this same NORMAL-POLL window
+      // (no second rs485Enable/Disable pair). At most one Modbus transaction.
+      // [vNext-recovery B1] If the call blocked >250ms (a ~2000ms timeout --
+      // successful transactions take tens of ms), skip this tick's output.
+      // 250ms, not xFrequency (500ms here): it keeps any tick that DOES enqueue
+      // a valid packet shorter than one period, so vTaskDelayUntil() always
+      // blocks after the enqueue and taskStateMachine() evaluates it before the
+      // next tick's T1a can busy-wait (ModbusMasterDiag does not yield), and it
+      // bounds a valid packet's current age to < ~750ms (< ageStoppingMs 1500).
+      uint32_t t_wtvbSvcStartMs = millis();
+      serviceWtvb02Recovery();
+      if ((millis() - t_wtvbSvcStartMs) > 250UL) {
+        s_wtvbSkipOutputThisTick = true;
+        g_ctWtvbGraceUntilMs = millis() + CT_GRACE_WINDOW_MS;
+      }
+
       rs485Disable("NORMAL-POLL");
 
       // [Task 4.2A -- TEMPORARY DIAGNOSTIC ONLY] Modbus poll window ended.
@@ -7474,6 +8069,10 @@ void taskModbusRead(void* parameter) {
       if (FifoDriver_GetPhase() != FifoPhase::ACTIVE) {
         FifoDiag_SetBusOwner(BusOwnerDiag::NONE);
       }
+      // [vNext-recovery B1] Consume the skip flag this same tick (it can only be
+      // set inside this poll window), so it can never leak into a later tick.
+      wtvbSkipOutput = s_wtvbSkipOutputThisTick;
+      s_wtvbSkipOutputThisTick = false;
     } else {
       // [ADR Option E, Phase 1] FifoDriver owns the bus this cycle -- the
       // whole poll window above (including CTR4A01 current) was skipped.
@@ -7497,66 +8096,25 @@ void taskModbusRead(void* parameter) {
       // side. The pollPerformed==false branch (FIFO owns the bus) is at
       // the bottom of this if/else, right before the queue-full helper.
       if (pollPerformed) {
+      // [vNext-recovery B1] A recovery transaction this tick blocked >250ms
+      // after T7 (e.g. the restart command's expected no-ACK timeout), so this
+      // tick's current sample is stale: skip its processing/enqueue, exactly as
+      // the former post-restart `continue`. Inside pollPerformed on purpose --
+      // the FIFO-marker branch below is never bypassed. Next tick's T7 is due.
+      if (wtvbSkipOutput) {
+        xLastWakeTime = xTaskGetTickCount();
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+        continue;
+      }
       // -- + ??????????: Reset consecutive error counter --
       if (g_modbusConsecErrors > 0) {
-        // [Mechanism-B Fix, Phase 1] This branch is about to run the
-        // quick-reconfig sequence -- measured minimum ~1962-1976 ms of
-        // further blocking WTVB02 traffic (reconfigSensorAfterRestart(),
-        // plus the 500 ms pre-delay a few lines below) on THIS SAME shared
-        // bus, on an iteration where `success` has already gone back to
-        // true. Re-extend the grace window here too, or this second
-        // contention source would be invisible to the check above (which
-        // only fires on the failing iteration, not the recovery one).
-        g_ctWtvbGraceUntilMs = millis() + CT_GRACE_WINDOW_MS;
-        bool wasOffline = g_sensorOffline;
-        Serial.printf("[MODBUS] + Sensor back ONLINE (was offline for %u consecutive reads, "
-                      "total errors: %lu)\n",
-                      g_modbusConsecErrors, g_sensorErrors);
-        g_modbusConsecErrors = 0;
-        g_sensorOffline      = false;
-        // [PATCHED v16.3c] gate warmup ทุกครั้งที่ sensor กลับมา (consec >= 1)
-        // เดิม: gate เฉพาะ wasOffline (consec >= 3) → spike ผ่านตอน consec=1
-        // ใหม่: gate ทุกครั้ง เพราะ spike เกิดหลัง consec=1 เสมอ
-        g_sensorWarmupUntilMs = millis() + SENSOR_WARMUP_MS;  // 2s suppress window (was 8 reads x 250ms)
-
-        // [PATCHED v16.3d] Re-configure sensor ทุกครั้งที่กลับมา online
-        // sensor WTVB02 รีบูตตัวเองจาก RS485 noise แม้ consec=1 read fail
-        // ทำให้ MODE กลับ default (0x00) และ CF/VRMS=0
-        // แก้: reconfig ทุกครั้งไม่ว่า wasOffline จะเป็น true หรือ false
-        Serial.println("[MODBUS] Sensor back -- re-configuring MODE=FreqDomain...");
-        // [v16.3w] แก้ diagnosis จาก v16.3v: การรอนานขึ้น (3000ms) ไม่ช่วย —
-        // log ยืนยันว่า quick-reconfig ยัง err=226 ครบทุกครั้ง เพราะ sensor ที่ค้างจาก noise
-        // ไม่ยอมรับ unlock จนกว่าจะโดน restart command (reg 0x00=0x00FF) จริง ซึ่งมีแค่ full-restart path
-        // → fail-fast: รอสั้น + ลองครั้งเดียว แล้วปล่อยให้ ALL-ZERO detector (5 reads=1.25s)
-        //   escalate ไป full restart path ที่ฟื้นได้จริง (ไม่เสียเวลา ~5s เปล่า ๆ ในเส้นทางที่ล้มเหลวแน่)
-        vTaskDelay(pdMS_TO_TICKS(500));
-        // [v16.5f] sensorWasRestarted=false: this is the QUICK reconfig -- no
-        // restart command (reg 0x00=0x00FF) is issued on this path, as the
-        // comment above states, so the sensor cannot have reverted its NVM and
-        // a previously VERIFIED sample rate is still true. Passing false stops
-        // this path from destroying that provenance on its way to failing,
-        // which is what left srHz=0 permanently in the 2026-08-24T12:51Z event.
-        // The full-restart path below still calls with the default (true).
-        // [v16.5h] EN-pin fix: rs485Disable("NORMAL-POLL") has already run
-        // (above) by the time this branch is reached, so every Modbus
-        // transaction inside reconfigSensorAfterRestart() below was executing
-        // with RS485_EN_PIN de-asserted -- the exact cause of the "err=226 /
-        // ku8MBResponseTimedOut every time" behaviour the v16.3w comment
-        // above misattributed to a noise-stuck sensor. Bracket matches the
-        // already-correct STUCK-RESTART pattern (rs485Enable/rs485Disable
-        // around restartSensorViaModbus()) exactly, including its settle delay.
-        rs485Enable("QUICK-RECONFIG");
-        vTaskDelay(pdMS_TO_TICKS(5));
-        bool reOk = reconfigSensorAfterRestart(false);
-        rs485Disable("QUICK-RECONFIG");
-        if (!reOk) {
-          Serial.println("[MODBUS] WARNING: Sensor reconfig failed -- CF/VRMS may be 0 until next restart");
-          // [v16.3m] reconfig fail → extend warmup suppress window
-          // sensor อาจส่งค่า garbage สูงผิดปกติ เช่น rms=19.5 mm/s
-          // เพิ่ม warmup reads เป็น 16 (4 วินาที) เพื่อ suppress garbage values
-          g_sensorWarmupUntilMs = millis() + SENSOR_WARMUP_RECONFIG_FAIL_MS;
-          Serial.println("[MODBUS] ! Extending warmup suppress to 4s after reconfig fail");
-        }
+        // [vNext-recovery] Quick-reconfig is ARMED here, not executed: the
+        // former blocking 500ms delay + QUICK-RECONFIG bracket is replaced by
+        // serviceWtvb02Recovery() (one bounded transaction per tick, after T7).
+        // armWtvb02QuickReconfig() applies the original bookkeeping (online log,
+        // counter reset, offline clear, SENSOR_WARMUP_MS) and re-arms the G2
+        // CT grace at recovery start.
+        armWtvb02QuickReconfig();
       }
 
       // ============================================================
@@ -7567,153 +8125,119 @@ void taskModbusRead(void* parameter) {
       // Cooldown 30 ?????? shared ?????? (restart ??????????????????????)
       // ============================================================
 
-      bool needRestart  = false;   // flag ??????? restart ????????
-      const char* stuckAxis = "";  // ?????????? trigger ????? log
+      // [vNext-recovery B2] Stuck detection runs ONLY while no WTVB02 recovery
+      // is in flight -- as with the former blocking recovery, which never let it
+      // run mid-sequence. Counters are neither incremented nor reset while
+      // recovery is active, so the `== STUCK_THRESHOLD` edge cannot be stepped
+      // over, and a restart can never be requested during recovery.
+      if (s_wtvbRecoveryState == WtvbRecoveryState::IDLE) {
+        bool needRestart  = false;   // flag ??????? restart ????????
+        const char* stuckAxis = "";  // ?????????? trigger ????? log
 
-      // --- [v16.3f] All-Zero STUCK: raw_x = raw_y = raw_z = 0 พร้อมกัน ---
-      // Bug เดิม: per-axis check ต้องการ othersAlive → ถ้าทุกแกน=0 ไม่มีแกนไหน trigger
-      // Fix: ตรวจ all-zero แยกก่อน per-axis check เพื่อให้ auto-recovery ทำงานได้
-      {
-        bool allZero = (abs(raw_x) <= STUCK_MIN_RAW) &&
-                       (abs(raw_y) <= STUCK_MIN_RAW) &&
-                       (abs(raw_z) <= STUCK_MIN_RAW);
+        // --- [v16.3f] All-Zero STUCK: raw_x = raw_y = raw_z = 0 พร้อมกัน ---
+        // Bug เดิม: per-axis check ต้องการ othersAlive → ถ้าทุกแกน=0 ไม่มีแกนไหน trigger
+        // Fix: ตรวจ all-zero แยกก่อน per-axis check เพื่อให้ auto-recovery ทำงานได้
+        {
+          bool allZero = (abs(raw_x) <= STUCK_MIN_RAW) &&
+                         (abs(raw_y) <= STUCK_MIN_RAW) &&
+                         (abs(raw_z) <= STUCK_MIN_RAW);
 
-        if (allZero) {
-          g_allZeroStuckCount++;
-          if (g_allZeroStuckCount == STUCK_THRESHOLD) {
-            Serial.printf("[SENSOR] ! ALL-ZERO for %u reads (Vx=%d Vy=%d Vz=%d) -> restart\n",
-                          g_allZeroStuckCount, raw_x, raw_y, raw_z);
-            needRestart = true;
-            stuckAxis   = "ALL";
-            g_allZeroRestartCount++;
+          if (allZero) {
+            g_allZeroStuckCount++;
+            if (g_allZeroStuckCount == STUCK_THRESHOLD) {
+              Serial.printf("[SENSOR] ! ALL-ZERO for %u reads (Vx=%d Vy=%d Vz=%d) -> restart\n",
+                            g_allZeroStuckCount, raw_x, raw_y, raw_z);
+              needRestart = true;
+              stuckAxis   = "ALL";
+              g_allZeroRestartCount++;
+            }
+          } else {
+            if (g_allZeroStuckCount > 0) {
+              Serial.printf("[SENSOR] + All-zero recovered! (stuck %u reads)\n",
+                            g_allZeroStuckCount);
+            }
+            g_allZeroStuckCount = 0;
           }
-        } else {
-          if (g_allZeroStuckCount > 0) {
-            Serial.printf("[SENSOR] + All-zero recovered! (stuck %u reads)\n",
-                          g_allZeroStuckCount);
-          }
-          g_allZeroStuckCount = 0;
-        }
-      }
-
-      // --- Vy STUCK ---
-      {
-        bool vyIsZero    = (raw_y == 0);
-        bool othersAlive = (abs(raw_x) > STUCK_MIN_RAW) || (abs(raw_z) > STUCK_MIN_RAW);
-
-        if (vyIsZero && othersAlive) {
-          g_vyStuckCount++;
-          if (g_vyStuckCount == STUCK_THRESHOLD) {
-            Serial.printf("[SENSOR] ! Vy=0 for %u reads (Vx=%d Vz=%d) -> restart\n",
-                          g_vyStuckCount, raw_x, raw_z);
-            needRestart = true;
-            stuckAxis   = "Vy";
-            g_vyRestartCount++;
-          }
-        } else {
-          if (g_vyStuckCount > 0 && !vyIsZero) {
-            Serial.printf("[SENSOR] + Vy recovered! (stuck %u reads, now raw_y=%d)\n",
-                          g_vyStuckCount, raw_y);
-          }
-          g_vyStuckCount = 0;
-        }
-      }
-
-      // --- Vz STUCK ---
-      if (!needRestart) {
-        bool vzIsZero    = (raw_z == 0);
-        bool othersAlive = (abs(raw_x) > STUCK_MIN_RAW) || (abs(raw_y) > STUCK_MIN_RAW);
-
-        if (vzIsZero && othersAlive) {
-          g_vzStuckCount++;
-          if (g_vzStuckCount == STUCK_THRESHOLD) {
-            Serial.printf("[SENSOR] ! Vz=0 for %u reads (Vx=%d Vy=%d) -> restart\n",
-                          g_vzStuckCount, raw_x, raw_y);
-            needRestart = true;
-            stuckAxis   = "Vz";
-            g_vzRestartCount++;
-          }
-        } else {
-          if (g_vzStuckCount > 0 && !vzIsZero) {
-            Serial.printf("[SENSOR] + Vz recovered! (stuck %u reads, now raw_z=%d)\n",
-                          g_vzStuckCount, raw_z);
-          }
-          g_vzStuckCount = 0;
-        }
-      }
-
-      // --- Vx STUCK ---
-      if (!needRestart) {
-        bool vxIsZero    = (raw_x == 0);
-        bool othersAlive = (abs(raw_y) > STUCK_MIN_RAW) || (abs(raw_z) > STUCK_MIN_RAW);
-
-        if (vxIsZero && othersAlive) {
-          g_vxStuckCount++;
-          if (g_vxStuckCount == STUCK_THRESHOLD) {
-            Serial.printf("[SENSOR] ! Vx=0 for %u reads (Vy=%d Vz=%d) -> restart\n",
-                          g_vxStuckCount, raw_y, raw_z);
-            needRestart = true;
-            stuckAxis   = "Vx";
-            g_vxRestartCount++;
-          }
-        } else {
-          if (g_vxStuckCount > 0 && !vxIsZero) {
-            Serial.printf("[SENSOR] + Vx recovered! (stuck %u reads, now raw_x=%d)\n",
-                          g_vxStuckCount, raw_x);
-          }
-          g_vxStuckCount = 0;
-        }
-      }
-
-      // --- ??? Restart ????? axis ??? stuck ??? threshold ---
-      if (needRestart) {
-        // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY, auto-restart runtime-
-        // verification investigation, not a permanent production feature]
-        // needRestart-just-became-true + restartSensorViaModbus() entry,
-        // with the exact FIFO-ownership/phase/attempt context Task 5.1/5.2
-        // identified as unguarded. This is the single point that answers
-        // "was a FIFO session ACTIVE when auto-restart fired?".
-        uint32_t t5_3EntryMs = millis();
-        Serial.printf("[RESTART-DIAG] needRestart=true axis=%s fifoOwnsBus=%d "
-                      "fifoPhase=%d attempt=%lu t=%lums\n",
-                      stuckAxis, (int)FifoDriver_OwnsBus(),
-                      static_cast<int>(FifoDriver_GetPhase()),
-                      (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
-                      (unsigned long)t5_3EntryMs);
-        rs485Enable("STUCK-RESTART");
-        vTaskDelay(pdMS_TO_TICKS(5));
-
-        Serial.printf("[RESTART-DIAG] restartSensorViaModbus() ENTRY axis=%s "
-                      "fifoOwnsBus=%d fifoPhase=%d attempt=%lu t=%lums\n",
-                      stuckAxis, (int)FifoDriver_OwnsBus(),
-                      static_cast<int>(FifoDriver_GetPhase()),
-                      (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
-                      (unsigned long)millis());
-        bool restartOk = restartSensorViaModbus(stuckAxis);
-        Serial.printf("[RESTART-DIAG] restartSensorViaModbus() EXIT ok=%d axis=%s "
-                      "fifoOwnsBus=%d fifoPhase=%d attempt=%lu elapsedMs=%lu t=%lums\n",
-                      (int)restartOk, stuckAxis, (int)FifoDriver_OwnsBus(),
-                      static_cast<int>(FifoDriver_GetPhase()),
-                      (unsigned long)FifoDriver_GetAttemptNumberForDiag(),
-                      (unsigned long)(millis() - t5_3EntryMs), (unsigned long)millis());
-
-        if (restartOk) {
-          Serial.printf("[SENSOR] + Auto-restart OK (axis=%s), monitoring recovery...\n", stuckAxis);
-        } else {
-          Serial.printf("[SENSOR] x Auto-restart FAILED (axis=%s), retry after cooldown\n", stuckAxis);
-          // reset counters ????????????????????????? cooldown
-          g_vxStuckCount = 0;
-          g_vyStuckCount = 0;
-          g_vzStuckCount = 0;
         }
 
-        rs485Disable("STUCK-RESTART");
+        // --- Vy STUCK ---
+        {
+          bool vyIsZero    = (raw_y == 0);
+          bool othersAlive = (abs(raw_x) > STUCK_MIN_RAW) || (abs(raw_z) > STUCK_MIN_RAW);
 
-        // Reset timing ????? restart ??????? ~3 ??????
-        xLastWakeTime = xTaskGetTickCount();
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-        continue;  // ?????????? ?????????????
-      }
+          if (vyIsZero && othersAlive) {
+            g_vyStuckCount++;
+            if (g_vyStuckCount == STUCK_THRESHOLD) {
+              Serial.printf("[SENSOR] ! Vy=0 for %u reads (Vx=%d Vz=%d) -> restart\n",
+                            g_vyStuckCount, raw_x, raw_z);
+              needRestart = true;
+              stuckAxis   = "Vy";
+              g_vyRestartCount++;
+            }
+          } else {
+            if (g_vyStuckCount > 0 && !vyIsZero) {
+              Serial.printf("[SENSOR] + Vy recovered! (stuck %u reads, now raw_y=%d)\n",
+                            g_vyStuckCount, raw_y);
+            }
+            g_vyStuckCount = 0;
+          }
+        }
+
+        // --- Vz STUCK ---
+        if (!needRestart) {
+          bool vzIsZero    = (raw_z == 0);
+          bool othersAlive = (abs(raw_x) > STUCK_MIN_RAW) || (abs(raw_y) > STUCK_MIN_RAW);
+
+          if (vzIsZero && othersAlive) {
+            g_vzStuckCount++;
+            if (g_vzStuckCount == STUCK_THRESHOLD) {
+              Serial.printf("[SENSOR] ! Vz=0 for %u reads (Vx=%d Vy=%d) -> restart\n",
+                            g_vzStuckCount, raw_x, raw_y);
+              needRestart = true;
+              stuckAxis   = "Vz";
+              g_vzRestartCount++;
+            }
+          } else {
+            if (g_vzStuckCount > 0 && !vzIsZero) {
+              Serial.printf("[SENSOR] + Vz recovered! (stuck %u reads, now raw_z=%d)\n",
+                            g_vzStuckCount, raw_z);
+            }
+            g_vzStuckCount = 0;
+          }
+        }
+
+        // --- Vx STUCK ---
+        if (!needRestart) {
+          bool vxIsZero    = (raw_x == 0);
+          bool othersAlive = (abs(raw_y) > STUCK_MIN_RAW) || (abs(raw_z) > STUCK_MIN_RAW);
+
+          if (vxIsZero && othersAlive) {
+            g_vxStuckCount++;
+            if (g_vxStuckCount == STUCK_THRESHOLD) {
+              Serial.printf("[SENSOR] ! Vx=0 for %u reads (Vy=%d Vz=%d) -> restart\n",
+                            g_vxStuckCount, raw_y, raw_z);
+              needRestart = true;
+              stuckAxis   = "Vx";
+              g_vxRestartCount++;
+            }
+          } else {
+            if (g_vxStuckCount > 0 && !vxIsZero) {
+              Serial.printf("[SENSOR] + Vx recovered! (stuck %u reads, now raw_x=%d)\n",
+                            g_vxStuckCount, raw_x);
+            }
+            g_vxStuckCount = 0;
+          }
+        }
+
+        // --- ??? Restart ????? axis ??? stuck ??? threshold ---
+        if (needRestart) {
+          // [vNext-recovery] Full restart is ARMED here, not executed: the former
+          // blocking STUCK-RESTART bracket (~4.5-6.5s) and its `continue` are
+          // replaced by serviceWtvb02Recovery(). If a quick reconfig is in flight
+          // the request is deferred (never dropped) and runs when it completes.
+          armWtvb02FullRestart(stuckAxis);
+        }
+      }  // [vNext-recovery B2] end stuck-detection IDLE gate
 
       // ============================================================
       // DATA PROCESSING [v15.0]
@@ -7858,7 +8382,15 @@ void taskModbusRead(void* parameter) {
     // site that needs gating: the loop's other two vTaskDelayUntil() call
     // sites (the stuck-restart and NaN-guard early-continues) are nested
     // inside the `if (!FifoDriver_OwnsBus())` block above and so are
-    // unreachable while FIFO owns the bus -- they always resolve to 250ms.
+    // unreachable while FIFO owns the bus -- they always use xFrequency
+    // (MODBUS_POLL_PERIOD_MS, 500ms normal polling period).
+    // [v16.5.a2] Overrun re-base: a tick that overran >=2 periods
+    // would otherwise trigger stale catch-up ticks. Keep ONE
+    // immediate tick, then resume the nominal 500 ms period.
+    if (!FifoDriver_OwnsBus() &&
+        (TickType_t)(xTaskGetTickCount() - xLastWakeTime) >= 2 * xFrequency) {
+      xLastWakeTime = xTaskGetTickCount() - xFrequency;
+    }
     vTaskDelayUntil(&xLastWakeTime,
                     FifoDriver_OwnsBus() ? xFrequencyFifo : xFrequency);
   }
