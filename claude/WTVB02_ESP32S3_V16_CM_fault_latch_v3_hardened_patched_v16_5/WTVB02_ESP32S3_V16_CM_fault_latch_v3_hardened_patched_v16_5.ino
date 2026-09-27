@@ -246,7 +246,7 @@
 // Site Identity
 ///////////////////////////////////////////////////////////////////////////////
 #define PLANT_ID "plant01"   // Plant / Site identity
-#define MACHINE_ID "pump01"  // Machine identity (tag-level)
+#define MACHINE_ID "rig_01"  // Machine identity (tag-level)  // [rig_01] was "pump01"
 #define SENSOR_ID "vb01"     // Sensor identity
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -562,6 +562,9 @@ static constexpr const char* GPRS_PASS = "";
 #define RATED_RPM_TOL         75       // +/-75 RPM around RATED_RPM -> RUNNING band (5% of 1500)
 #define RPM_SMOOTH_ALPHA      0.25f   // EMA filter coefficient (0=heavy,1=none)
 #define SPIKE_REJECT_FACTOR   1.1f    // Reject pulses > MAX_RPM x factor
+// [vNext-rpmdiag] TEMPORARY DIAGNOSTIC -- accepted/rejected edge statistics.
+// Algorithm untouched. Set to 0 (or remove) to return to production.
+#define RPM_DIAG_ENABLE 1
 #define NO_PULSE_STOPPING_MS  400     // No pulse > 400 ms -> STOPPING
 #define FORCE_STOP_TIMEOUT_MS 2000    // No pulse > 2 s   -> STOPPED
 // [v16.5.4] Maximum credible pulse gap for RPM EMA continuity. A measured
@@ -665,7 +668,7 @@ struct FaultLatch_t {
 // --- MQTT Configuration (mTLS / Mosquitto) ---
 #define MQTT_SERVER "iot.promlogix.com"  // Broker Public IP
 #define MQTT_PORT 8883                           // TLS port
-#define MQTT_CLIENT_ID "pump01"           // -> "PLANT01-ESP01"
+#define MQTT_CLIENT_ID "rig_01"           // [rig_01] was "pump01"; must match cert CN=rig_01
 #define MQTT_QOS 1                               // QoS 1 -- at-least-once delivery
 // [P1-S3] /device-health cadence. Fixed and independent of publishInterval
 // (30/10/5 s by alarm state) on purpose: engineering diagnostics must not
@@ -720,59 +723,10 @@ GqxIBNFsqLdGN189BwBlBPnWscWJg+oGqLtT
 -----END CERTIFICATE-----
 )EOF";
 
-// Client Certificate -- PLANT01-ESP01.crt  (CN must match MQTT_CLIENT_ID)
-static const char* client_crt = R"EOF(
------BEGIN CERTIFICATE-----
-MIIC4zCCAcsCFHrIJfxa9kIp8xl2OiGamsQiUjWrMA0GCSqGSIb3DQEBCwUAMEsx
-CzAJBgNVBAYTAlRIMRIwEAYDVQQKDAlQcm9tbG9naXgxDDAKBgNVBAsMA0lvVDEa
-MBgGA1UEAwwRUHJvbWxvZ2l4LVJvb3QtQ0EwHhcNMjYwNTAyMTE0NTM0WhcNMjcw
-NTAyMTE0NTM0WjARMQ8wDQYDVQQDDAZwdW1wMDEwggEiMA0GCSqGSIb3DQEBAQUA
-A4IBDwAwggEKAoIBAQCcFCUyXJIAHj1m5LJNFSzrR9trx4ELBYq4UpAZZtiY618T
-jYCecCqNRDIeaGNLadXjAqZRADE1cV1NZzIDnMw4DUA8fqEJ+8GURiCkvlypwDcf
-Zv4Gdto20uQFSKfFvvoBRu7ze89VVNY/0uc4Qpip04hzK4fspmI/zDz8JUPxDELt
-Rp769mKgmoNsUO14DSMWJbAolbXLDpBaGuD61Svlm5o/YKNfcLDbm35+6aDG7+/J
-FzM9DYYPQxkvw+Nu+t2gkHfs+qcgLo+7oget/P2JXOy1Ysc2jMqQNDco8M1rob8T
-NZzb4mKcW4LtgNGudsyel5p0utmlxKeTevXvIx5HAgMBAAEwDQYJKoZIhvcNAQEL
-BQADggEBAF+pIJv97lLnSRRAwTo6UTxWEPhY32BCWsN09me6bDbq87dogqtZTL1H
-c2wZClOea+jE0U/hBIo/Vh/f5YNCDH3nMEuIBgs6fNM8Y2DaIM/Wz6hh1iQap6FE
-dwDbDMckfpGM4Sn5valLzYwkqe4aflaDY5Uas9FzolPOCItGsc4g2gafOaDoOrFo
-XDjfTO3o2eznKC/Ou/ft/tVcdEX/BdFKu1Sqw8UntlkjaDtM4T9bz+RfoYTL0UPT
-zKcQVPxhvKKbyiCe62gBYl5tLD1vriUBZwioCJLHfV2XMJx47msJiOLtyz6SdDc0
-dzc7CkmVKekWfJ+jVC0bgIONpwLNEWo=
------END CERTIFICATE-----
-)EOF";
-
-// Client Private Key -- PLANT01-ESP01.key
-static const char* client_key = R"EOF(
------BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCcFCUyXJIAHj1m
-5LJNFSzrR9trx4ELBYq4UpAZZtiY618TjYCecCqNRDIeaGNLadXjAqZRADE1cV1N
-ZzIDnMw4DUA8fqEJ+8GURiCkvlypwDcfZv4Gdto20uQFSKfFvvoBRu7ze89VVNY/
-0uc4Qpip04hzK4fspmI/zDz8JUPxDELtRp769mKgmoNsUO14DSMWJbAolbXLDpBa
-GuD61Svlm5o/YKNfcLDbm35+6aDG7+/JFzM9DYYPQxkvw+Nu+t2gkHfs+qcgLo+7
-oget/P2JXOy1Ysc2jMqQNDco8M1rob8TNZzb4mKcW4LtgNGudsyel5p0utmlxKeT
-evXvIx5HAgMBAAECggEAAuJQaaTSQdRNOCiDru70PIjAYjZ2iPiaPpuv8/g1imXX
-BOp5dPQHpUKcVnmBVDRpcl9rKVYCksU8fyCoCO8Nyv9br4J7gU64nf/JvKGT3sMh
-gaAKk54AnEC7W+miyAGmZv2jjrY794ywxM8l3KFGZuT0wYQNZ+8PI7Snb9VUcxDK
-jHGUQrXM+fbKGLXRkhfeFzfUD7aNqYZWMkt2KwzZsSh8M+ctp+G5IdcNEQOS2GVo
-wX6d2KGkNudd9aCKi50XQPFem2TVOllFQYijld2SABYK1pQiPXR+NrLSnb6RUm15
-3w/g3eax0qa52XdD+KTixxi1oPe8yxe4qDAz6lLEqQKBgQDK5U/Bt4Jo4geCV0Za
-izoNnLcqa6+nHlsphYXw5pUqLSLq4RCGJMcbojkYXxXxJYsmlm0+OQ9S9WW6rJ8d
-z2jPUWS3MKVW3KZ338oS9AgBr1aNhggkCQpg2SEbsmM1khs+t8HoN8LIFLGVb7PB
-dZKLw8VctsSlxwPgsxsont4qHQKBgQDE7e+HKhKWplAwwIBDCUUy1xjZH+nIeYsV
-hWF4iE1hDuUN/dYFVClDS4aRPDrgeB4lzzqw5NCSHR/Gu0TeHMspJj1k1CDBiI12
-LruakLOw4P3ul13Yv23EJuUq/In8Q3otYF3yaks1nwM9/hgEMRmlsbUgbSGW1tKW
-RkvorwqcswKBgHGEaOIuRPVfeOoQ4FjqSpmxE73VMBqlXkXV4cGNkOlfBYk6UN9s
-lkW8tosPMBySb88wHIDSteMpTzhpOkEYeUB8/oeL3QXDQBQTjmCaThx7OEbINafL
-sxXKhb6USPOBAmNNtlyxTfZZtZ2xOHZFzK8L4lFkJJPHzECclNZeRFh1AoGBAJML
-t9eNquOivC4rD5r+yRT1WDCIi+COITSoq+d8n4rhvFd+Otkvxr/hHVJFTxFdn+VL
-n9+Ge9ceuCOEoh/YEDthumYXn33joP2mV59KfWKOHg6SKBk4l5XoFSbL+5zKJejM
-FFp21EHtwlX/7Z7zqtr2nvDfjD09m3FqfDP6wEnRAoGAK90MergErflRfvNqGmSf
-BUkR4hIjiNHCnNizxJUtuwG+HDf7bg0Lvo5KYALYnwNuSEzE1EsLJEFl22a7zCJ8
-EZ5Dxy12SrP6E+hbMhuV1KeMax45WU4beFu88wTlbz8A8is2KKjKbS9+8e79R1I/
-l0PCpmCF8SZ8OXd/UfRIbLk=
------END PRIVATE KEY-----
-)EOF";
+// [rig_01] Client certificate + private key for CN=rig_01 live in the LOCAL,
+// untracked header below (never commit it). It defines client_crt/client_key
+// with the same names/types as the pump01 blocks they replace.
+#include "rig01_credentials.h"
 
 // --- Machine Configuration ---
 #define MACHINE_NAME MACHINE_ID  // Display uses MACHINE_ID for consistency
@@ -2679,7 +2633,7 @@ static bool parseTrendPersistence(const String& v, TrendPersistence_t* out) {
 // [v16.3v] ค่า default จะถูกเซตจาก #define ใน loadNvsConfig()
 // ไม่ใช้ PLANT_ID/MACHINE_ID โดยตรงเพราะ #define ยังไม่ถูก process ณ จุดนี้
 static char g_cfgPlant[32]   = "plant01";
-static char g_cfgMachine[32] = "pump01";
+static char g_cfgMachine[32] = "rig_01";  // [rig_01] was "pump01"
 static char g_cfgSensor[16]  = "vb01";
 static int  g_cfgRpm         = 1500;
 static char g_cfgApn[32]     = "internet";
@@ -3357,6 +3311,22 @@ static const uint32_t RPM_DEBOUNCE_US = 8000UL;
 volatile uint32_t g_rpmLastPulseTime  = 0;
 volatile uint32_t g_rpmPulseInterval  = 0;
 volatile uint32_t g_rpmTotalPulses    = 0;
+#if RPM_DIAG_ENABLE
+// [vNext-rpmdiag] TEMPORARY DIAGNOSTIC. Written only in rpmISR() (core 1),
+// read by rpmDiagService() (core 0). All 32-bit => each read is atomic; a
+// multi-counter snapshot may be off by one edge between counters (acceptable).
+// Plain DRAM variables -- no flash-resident tables (ISR is not IRAM-flagged).
+volatile uint32_t g_rpmDiagEdges      = 0;  // every FALLING edge entering rpmISR()
+volatile uint32_t g_rpmDiagRejected   = 0;  // interval <= RPM_DEBOUNCE_US (8 ms)
+volatile uint32_t g_rpmDiagRejLt1ms   = 0;  // rejected, interval < 1 ms
+volatile uint32_t g_rpmDiagRej1to5ms  = 0;  // rejected, 1-5 ms
+volatile uint32_t g_rpmDiagRej5to8ms  = 0;  // rejected, 5-8 ms
+// accepted interval bins: [0]8-15 [1]15-20 [2]20-30 [3]30-40 [4]40-49 [5]49-51 [6]>51 ms
+volatile uint32_t g_rpmDiagBin[7]     = {0, 0, 0, 0, 0, 0, 0};
+volatile uint32_t g_rpmDiag8to20      = 0;  // accepted 8-20 ms (old 20 ms debounce would reject)
+volatile uint32_t g_rpmDiag20to42     = 0;  // accepted 20-42 ms (passes both debounces)
+volatile uint32_t g_rpmDiagMinAccUs   = 0xFFFFFFFFUL;  // min accepted interval, reset per report
+#endif
 
 // RPM processing state (Core 0 only -- no mutex needed)
 static float           g_rpmFiltered       = 0.0f;  // EMA evidence signal -- state-machine input only; [v16.5.4] reset (with g_rpmEvidence.valid=false) after a pulse gap/idle > MAX_EMA_INTERVAL_US, otherwise never reset by state
@@ -3470,11 +3440,35 @@ static uint32_t    g_lastNvsSaveMs  = 0;
 void IRAM_ATTR rpmISR() {
   uint32_t now      = micros();
   uint32_t interval = now - g_rpmLastPulseTime;
+#if RPM_DIAG_ENABLE
+  g_rpmDiagEdges++;                                   // [vNext-rpmdiag]
+#endif
   if (interval > RPM_DEBOUNCE_US) {
     g_rpmPulseInterval = interval;
     g_rpmLastPulseTime = now;
     g_rpmTotalPulses++;
+#if RPM_DIAG_ENABLE
+    // [vNext-rpmdiag] integer compares only
+    if      (interval <  15000UL) g_rpmDiagBin[0]++;
+    else if (interval <  20000UL) g_rpmDiagBin[1]++;
+    else if (interval <  30000UL) g_rpmDiagBin[2]++;
+    else if (interval <  40000UL) g_rpmDiagBin[3]++;
+    else if (interval <  49000UL) g_rpmDiagBin[4]++;
+    else if (interval <= 51000UL) g_rpmDiagBin[5]++;
+    else                          g_rpmDiagBin[6]++;
+    if      (interval < 20000UL) g_rpmDiag8to20++;
+    else if (interval < 42000UL) g_rpmDiag20to42++;
+    if (interval < g_rpmDiagMinAccUs) g_rpmDiagMinAccUs = interval;
+#endif
   }
+#if RPM_DIAG_ENABLE
+  else {                                              // [vNext-rpmdiag] rejected by debounce
+    g_rpmDiagRejected++;
+    if      (interval < 1000UL) g_rpmDiagRejLt1ms++;
+    else if (interval < 5000UL) g_rpmDiagRej1to5ms++;
+    else                        g_rpmDiagRej5to8ms++;
+  }
+#endif
 }
 
 // NVS: ???? runtime_hour ??? Flash
@@ -5043,6 +5037,63 @@ static void processRPM(VibrationData_t* data) {
   data->runtime_hour = roundf(getCurrentRuntimeHour() * 10000.0f) / 10000.0f;
   data->prox         = prox;
 }
+
+#if RPM_DIAG_ENABLE
+// [vNext-rpmdiag] TEMPORARY DIAGNOSTIC. Core 0, called once per processRPM()
+// (~500 ms). Read-only w.r.t. the RPM algorithm; prints one line per >=5 s.
+static void rpmDiagService() {
+  static bool     init = false;
+  static uint32_t winStartMs, lastEdges, lastAcc, lastRej, lastR1, lastR2, lastR3,
+                  lastB[7], last820, last2042, prevAccSample,
+                  perMin = 0xFFFFFFFFUL, perMax = 0, calls = 0;
+  const uint32_t nowMs = millis();
+  const uint32_t acc   = g_rpmTotalPulses;
+  if (!init) {
+    init = true; winStartMs = nowMs; prevAccSample = acc;
+    lastEdges = g_rpmDiagEdges; lastAcc = acc; lastRej = g_rpmDiagRejected;
+    lastR1 = g_rpmDiagRejLt1ms; lastR2 = g_rpmDiagRej1to5ms; lastR3 = g_rpmDiagRej5to8ms;
+    for (int i = 0; i < 7; i++) lastB[i] = g_rpmDiagBin[i];
+    last820 = g_rpmDiag8to20; last2042 = g_rpmDiag20to42;
+    return;
+  }
+  const uint32_t perCall = acc - prevAccSample;       // accepted pulses in this ~500 ms call
+  prevAccSample = acc;
+  if (perCall < perMin) perMin = perCall;
+  if (perCall > perMax) perMax = perCall;
+  calls++;
+  const uint32_t winMs = nowMs - winStartMs;
+  if (winMs < 5000UL) return;
+
+  uint32_t b[7]; for (int i = 0; i < 7; i++) b[i] = g_rpmDiagBin[i];
+  const uint32_t edges = g_rpmDiagEdges, rej = g_rpmDiagRejected;
+  const uint32_t r1 = g_rpmDiagRejLt1ms, r2 = g_rpmDiagRej1to5ms, r3 = g_rpmDiagRej5to8ms;
+  const uint32_t s820 = g_rpmDiag8to20, s2042 = g_rpmDiag20to42;
+  const uint32_t lastUs = g_rpmPulseInterval, minUs = g_rpmDiagMinAccUs;
+  g_rpmDiagMinAccUs = 0xFFFFFFFFUL;                   // benign race: may miss 1 min update
+  const uint32_t dAcc = acc - lastAcc;
+  Serial.printf("[RPMDIAG] win=%lums calls=%lu edges=%lu acc=%lu acc/s=%lu.%lu "
+                "acc/500ms[min=%lu max=%lu] rej=%lu(<1:%lu 1-5:%lu 5-8:%lu) "
+                "lastUs=%lu raw=%lu minAccUs=%lu "
+                "b8-15=%lu b15-20=%lu b20-30=%lu b30-40=%lu b40-49=%lu b49-51=%lu b>51=%lu "
+                "s8-20=%lu s20-42=%lu filt=%.1f rep=%.1f\n",
+                (unsigned long)winMs, (unsigned long)calls,
+                (unsigned long)(edges - lastEdges), (unsigned long)dAcc,
+                (unsigned long)(dAcc * 1000UL / winMs), (unsigned long)((dAcc * 10000UL / winMs) % 10UL),
+                (unsigned long)perMin, (unsigned long)perMax,
+                (unsigned long)(rej - lastRej), (unsigned long)(r1 - lastR1),
+                (unsigned long)(r2 - lastR2), (unsigned long)(r3 - lastR3),
+                (unsigned long)lastUs, (unsigned long)(lastUs ? 60000000UL / lastUs : 0),
+                (unsigned long)(minUs == 0xFFFFFFFFUL ? 0 : minUs),
+                (unsigned long)(b[0]-lastB[0]), (unsigned long)(b[1]-lastB[1]), (unsigned long)(b[2]-lastB[2]),
+                (unsigned long)(b[3]-lastB[3]), (unsigned long)(b[4]-lastB[4]), (unsigned long)(b[5]-lastB[5]),
+                (unsigned long)(b[6]-lastB[6]),
+                (unsigned long)(s820 - last820), (unsigned long)(s2042 - last2042),
+                g_rpmFiltered, g_rpmReported);
+  winStartMs = nowMs; lastEdges = edges; lastAcc = acc; lastRej = rej;
+  lastR1 = r1; lastR2 = r2; lastR3 = r3; for (int i = 0; i < 7; i++) lastB[i] = b[i];
+  last820 = s820; last2042 = s2042; perMin = 0xFFFFFFFFUL; perMax = 0; calls = 0;
+}
+#endif
 
 // [v16.5.4] Business Decision computation -- single owner of this formula,
 // called only from captureTelemetrySnapshot() below. Previously this exact
@@ -8450,6 +8501,9 @@ void taskStateMachine(void* parameter) {
 
       // -- + ?????????????: ???????????? --
       processRPM(&sensorData);
+#if RPM_DIAG_ENABLE
+      rpmDiagService();   // [vNext-rpmdiag] TEMPORARY DIAGNOSTIC -- read-only reporter
+#endif
 
       // [Phase2] LEGACY VRMS DE-GLITCH REMOVED IN FULL.
       // Deleted: s_lastGoodRms / s_lastGoodX/Y/Z / s_glitchHold, isDropGlitch,
