@@ -426,38 +426,56 @@ static uint8_t s_lastEnPinLoggedState = 0xFF;
 // Register map reused verbatim from experimental/CTR4A01_SENSOR/CTR4A01_SENSOR.ino
 #define CURRENT_SENSOR_ID   0x01     // CTR4A01 slave address
 #define CT_REG_AC_CURRENT   0x0000   // function 04 (input register), unit mA (0-5000 = 0-5A)
-// §6.4.14-16: Velocity RMS (True RMS, ÷1000 → mm/s)
-// เปลี่ยนจาก VX/VY/VZ (0x3A Peak ÷100) → VRMSX/Y/Z (True RMS ÷1000)
-// ต้องตั้ง DRM=0x02 (Frequency domain) เพื่อให้ค่าถูกต้อง
-// [M1A DEPRECATED] ==========================================================
-// These three registers are NO LONGER the Product Phase-1 vibration alarm
-// source. As of M1A the alarm state machine, health score and fault latch all
-// read velocity_rms_overall produced by FIFO RAW -> DSP (see g_velCarrier).
+// [vNext-t1blk] T1 REGISTER SOURCE MIGRATION -- VRMS (0x50/0x5C/0x68) -> VX/VY/VZ
+// (0x3A~0x3C). Register source only: these values are, and remain, RAW
+// watchdog inputs -- see the [Phase2] note at the stuck-detection site. No
+// scaling is applied to them anywhere, so this migration introduces no unit
+// change into any Product metric.
 //
-// They are retained ONLY for:
-//   - backward-compatible telemetry (/sensor rms,vx,vy,vz,peak,peak_velocity_*
-//     and /vibration rms) -- deprecated, removal no earlier than Phase 5
-//   - the trend/EMA/TTW engine, which still consumes them until M1B (their
-//     cadence changes 4 Hz -> ~0.5 Hz, so that migration is deliberately a
-//     separate change -- see M1B dependency list)
-//   - VERIFY_TEST diagnostics
+// WHY A BLOCK READ: 0x3A/0x3B/0x3C are contiguous. Datasheet §6.4.6 gives the
+// worked example verbatim -- `50 03 00 3A 00 03` -- i.e. slave 0x50, function
+// 03, start 0x003A, quantity 3. One transaction replaces the three separate
+// single-register reads the non-contiguous VRMS addresses forced.
+//
+// HISTORY: this firmware previously read 0x3A~0x3C (as REG_PEAK_X, DESIGN-0004,
+// scaled /100 into peak_velocity_x/y/z) and moved to VRMSX/Y/Z (True RMS,
+// /1000, requires DRM=0x02 Frequency domain). Both of those scaled consumers
+// were later removed in Phase2, leaving only the raw watchdog use -- which is
+// why the address can move back without a scale or algorithm change.
+//
+// FOLLOW-UP VALIDATION (deliberately NOT in this patch): STUCK_MIN_RAW is
+// still 5 and its comment still reads "(0.05 mm/s)". That figure corresponds
+// to /100 (VX/VY/VZ), not the /1000 (VRMS) the code has been reading since the
+// earlier migration, so the threshold's physical meaning changes with this
+// patch. Recalibrate it only against captured raw 0x3A~0x3C values from the
+// live rig -- see the note at STUCK_MIN_RAW.
+// [M1A DEPRECATED] ==========================================================
+// These registers are NOT the Product vibration alarm source. As of M1A the
+// alarm state machine, health score and fault latch all read
+// velocity_rms_overall produced by FIFO RAW -> DSP (see g_velCarrier).
+//
+// [Phase2] The scaled consumers are gone: rms_x/y/z, rms_overall,
+// vel_peak_x/y/z, vel_peak_overall and peak_velocity_x/y/z were all removed,
+// together with the /sensor fields that published them. The trend/EMA/TTW
+// engine reads g_velCarrier, not these registers. What survives is the
+// all-zero / Vx / Vy / Vz stuck detection and the sensor auto-restart -- a
+// hardware watchdog, not a metric.
 //
 // Do NOT add a new Product decision that reads these values or anything
-// derived from them (vel_peak_*, rms_x/y/z, rms_overall).
-// Removal plan: Phase 5 cleanup -- see M1A review section 10.
+// derived from them.
 // ===========================================================================
-#define REG_VRMS_X 0x50  // VRMSX: X-axis velocity RMS (mm/s) §6.4.14  [DEPRECATED]
-#define REG_VRMS_Y 0x5C  // VRMSY: Y-axis velocity RMS (mm/s) §6.4.15  [DEPRECATED]
-#define REG_VRMS_Z 0x68  // VRMSZ: Z-axis velocity RMS (mm/s) §6.4.16  [DEPRECATED]
+#define REG_VIB_VEL_X 0x3A  // VX/VY/VZ: 3 CONTIGUOUS registers 0x3A~0x3C §6.4.6  [RAW WATCHDOG INPUT]
 #define REG_TEMPERATURE 0x40
 // [FREQ/CF-Cleanup] REG_FREQ_X (0x44) and REG_CFX/REG_CFY/REG_CFZ (0x47/0x53/
 // 0x5F) REMOVED. Their reads only ever fed a REFERENCE-ONLY comparison
 // ([FREQ-SRC]/[CF-SRC] diagnostic logs, also removed) against the canonical
 // FIFO/DSP dominant-frequency and crest-factor values -- no product consumer
 // ever read the register-derived numbers. See VRMS_FREQ_CF_DEPENDENCY_AUDIT
-// for the full trace. VRMS registers (0x50/0x5C/0x68 above) are UNAFFECTED --
-// they remain the stuck-axis watchdog's only input.
-// [Phase2] REG_PEAK_X (0x3A) REMOVED -- no reader left after peak_velocity_*.
+// for the full trace.
+// [vNext-t1blk] The stuck-axis watchdog's only input is now REG_VIB_VEL_X
+// (0x3A~0x3C above); the VRMS addresses 0x50/0x5C/0x68 are no longer read by
+// this firmware at all. Phase2's "REG_PEAK_X (0x3A) REMOVED" note is therefore
+// superseded -- 0x3A is read again, as the watchdog source, not as a metric.
 
 // --- Sensor Re-config Registers (v15.7) ---
 // ใช้หลัง restartSensorViaModbus() เพื่อ restore config ที่อาจกลับเป็น default
@@ -530,7 +548,16 @@ static volatile uint32_t g_sensorSrHzVerified    = 0;  // 0 == NOT established
 
 #define REG_DRM           0x002B  // Displacement range mode register §6.4.11
 #define SENSOR_DRM_FREQ   0x0002  // 0x02 = Frequency domain algorithm
-                                  // จำเป็นสำหรับ VRMS (0x50/0x5C/0x68) ให้คำนวณถูกต้อง
+// [vNext-t1blk] RATIONALE UPDATED. This used to read "required so VRMS
+// (0x50/0x5C/0x68) computes correctly" -- that reason is gone: T1 no longer
+// reads the VRMS registers at all.
+// MODE/DRM CONFIGURATION MUST STILL BE WRITTEN AND MUST NOT BE REMOVED. It is
+// now retained for FIFO/DSP/SR operation: the sample-rate (SR) write and its
+// read-back share this same unlock/write/save sequence, and FIFO RAW -> DSP
+// velocity -- the single authoritative vibration measurement (g_velCarrier) --
+// is only valid against a verified SR. Dropping the MODE/DRM write would break
+// that path, not just a register read. See serviceWtvb02Recovery()'s
+// RECONFIG_STEP_1..3 and g_sensorSrHzVerified.
 #define SENSOR_MODE_FREQ  0x0002  // Frequency domain algorithm (MODE=0x02)
                                   // ยืนยันจาก CF test log: MODE=0x02 เท่านั้นที่ให้ CF/VRMS มีค่า
                                   // MODE=0x00 (LowFreq) และ 0x01 (HighFreq) → CF/VRMS = 0x0000 ทั้งหมด
@@ -1652,6 +1679,9 @@ enum class BusOwnerDiag : uint8_t { NONE, MODBUS, FIFO };
 // enum is used as a parameter type by RxDiagBump()/logModbusRxByteDiag()
 // (defined much later, near modbusRcName()), so it must live here, before
 // the file's first function definition.
+// [vNext-t1blk] kRxDiagT1a now denotes the single 3-register T1 block read
+// (0x3A~0x3C). kRxDiagT1b/kRxDiagT1c are retained so the enum size and every
+// existing index stay unchanged, but nothing writes them any more.
 enum RxDiagTxnIndex { kRxDiagT1a = 0, kRxDiagT1b, kRxDiagT1c, kRxDiagT2a, kRxDiagT7, kRxDiagTxnCount };
 
 // RTC
@@ -5389,6 +5419,13 @@ static volatile uint16_t g_allZeroRestartCount = 0;
 static uint32_t g_lastSensorRestart = 0;        // millis() ??? restart ?????? (shared cooldown)
 
 static const uint16_t STUCK_THRESHOLD        = 5;      // 5 ????? x 250ms = 1.25 ?????? (????? 10)
+// [vNext-t1blk] FOLLOW-UP VALIDATION ITEM -- VALUE DELIBERATELY UNCHANGED HERE.
+// The T1 source moved from VRMS (0x50/0x5C/0x68) to VX/VY/VZ (0x3A~0x3C) in
+// this patch. This threshold compares RAW register counts, so the migration
+// does not break it mechanically -- but its physical meaning changes, and the
+// "(0.05 mm/s)" in the comment below corresponds to /100 (VX/VY/VZ), not the
+// /1000 (VRMS) that was actually being read before. Recalibrate ONLY against
+// captured raw 0x3A~0x3C values from the live rig; do not guess a new number.
 static const int16_t  STUCK_MIN_RAW          = 5;      // |raw| > 5 (0.05 mm/s) ?????? "?????"
 // [v16.3v] 30000 -> 15000: cooldown 30s บล็อกการกู้คืนนานเกินไปเมื่อ noise เกิดถี่
 // (log: fault ครั้งที่ 2 เกิด ~8s หลัง restart แรก → โดน block → RMS ค้าง 0.00 > 90s)
@@ -6773,8 +6810,13 @@ static const char* modbusRcName(uint8_t rc) {
 // declared much earlier (near BusOwnerDiag) per the auto-prototype
 // constraint; only the arrays/functions below need to live here.
 static uint32_t   g_rxDiagCount[kRxDiagTxnCount][3] = { {0} };  // [txn][0=zero,1=1..4,2=>=5]
+// [vNext-t1blk] Slot 0 is now the single 3-register T1 block (0x3A~0x3C).
+// Slots 1-2 held the former T1b/T1c single-register transactions, which no
+// longer exist; the array keeps its size so kRxDiagTxnCount, g_rxDiagCount and
+// every index below stay unchanged -- inert unused rows, the same pattern the
+// removed cf_x/freq_x fields already use in this file.
 static const char* const kRxDiagTxnNames[kRxDiagTxnCount] = {
-  "T1a-VRMSX", "T1b-VRMSY", "T1c-VRMSZ", "T2a-TEMP", "T7-CTR4A01"
+  "T1-VIBVEL", "(unused)", "(unused)", "T2a-TEMP", "T7-CTR4A01"
 };
 
 // [RX-Byte-Diag] Classifies a byte count into one of the 3 categories and
@@ -6848,13 +6890,16 @@ static bool readCurrentSensor(uint16_t &milliAmps) {
     // [Sensor-Failure-Instrumentation] T7 in the transaction sequence.
     // [Diagnostic-Label-Cleanup] prev updated from "T5-CFZ" -- that
     // transaction was removed by the FREQ/CF cleanup; T2a-TEMP is the actual
-    // predecessor in the current 5-transaction sequence (T1a/T1b/T1c/T2a/T7).
-    // next is still always T1a-VRMSX of the following cycle -- both fixed by
+    // predecessor in the current 3-transaction sequence (T1/T2a/T7).
+    // [vNext-t1blk] Sequence and label updated: T1a/T1b/T1c collapsed into the
+    // single T1 block read, so the sequence is 3 transactions, not 5, and the
+    // next transaction is T1-VIBVEL.
+    // next is still always T1-VIBVEL of the following cycle -- both fixed by
     // the poll sequence, so hardcoded here rather than threaded through as
     // parameters. firstAfterCT does not apply to T7 itself (it IS the CT
     // slave-ID switch, not a transaction after one).
     logModbusTransactionFail("T7-CTR4A01", CT_REG_AC_CURRENT, CURRENT_SENSOR_ID, 4, r,
-                              false, "T2a-TEMP", "T1a-VRMSX(next cycle)");
+                              false, "T2a-TEMP", "T1-VIBVEL(next cycle)");
     // [RX-Byte-Diag] Reuses the elapsedMs already computed above (read-only
     // diagnostic timing, pre-existing from [v16.6c]) -- no new bracketing
     // needed for T7.
@@ -7383,28 +7428,24 @@ void taskModbusRead(void* parameter) {
   static uint32_t s_lastRxDiagStatsLogMs = 0;
 
   // [WTVB02-Timing-Instrumentation, Phase 0] Successful-duration tracking for
-  // T1a/T1b/T1c/T2a. Diagnostic-only -- never read by any control-flow
-  // decision. T1b/T1c/T2a reuse the t1bStartMs/t1bEndMs, t1cStartMs/t1cEndMs,
-  // t2aStartMs/t2aEndMs timestamps that already exist above (added for
-  // [RX-Byte-Diag]) -- no new millis() calls are introduced by this block.
-  // T1a's own s_t1aSuccessDurSumMs/Count/MaxMs above are unchanged; only a
+  // T1/T2a. Diagnostic-only -- never read by any control-flow decision. T2a
+  // reuses the t2aStartMs/t2aEndMs timestamps that already exist above (added
+  // for [RX-Byte-Diag]) -- no new millis() calls are introduced by this block.
+  // T1's own s_t1aSuccessDurSumMs/Count/MaxMs above are unchanged; only a
   // MinMs companion is added here to close the previously-identified gap.
+  // [vNext-t1blk] s_t1a* now times the single 3-register T1 block read.
   static uint32_t s_t1aSuccessDurMinMs   = UINT32_MAX;
-  static uint32_t s_t1bSuccessDurSumMs   = 0;
-  static uint32_t s_t1bSuccessDurCount   = 0;
-  static uint32_t s_t1bSuccessDurMaxMs   = 0;
-  static uint32_t s_t1bSuccessDurMinMs   = UINT32_MAX;
-  static uint32_t s_t1cSuccessDurSumMs   = 0;
-  static uint32_t s_t1cSuccessDurCount   = 0;
-  static uint32_t s_t1cSuccessDurMaxMs   = 0;
-  static uint32_t s_t1cSuccessDurMinMs   = UINT32_MAX;
+  // [vNext-t1blk] s_t1b*/s_t1c* REMOVED -- the T1b/T1c transactions they timed
+  // no longer exist (single 3-register T1 block read). s_t1a* now describes
+  // that block. Nothing else referenced them.
   static uint32_t s_t2aSuccessDurSumMs   = 0;
   static uint32_t s_t2aSuccessDurCount   = 0;
   static uint32_t s_t2aSuccessDurMaxMs   = 0;
   static uint32_t s_t2aSuccessDurMinMs   = UINT32_MAX;
   // [WTVB02-Timing-Instrumentation, Phase 0] Fixed bucket histogram --
   // diagnostic-only, never read by any control-flow decision. Row index:
-  // 0=T1A, 1=T1B, 2=T1C, 3=T2A. Boundaries chosen to reveal whether
+  // 0=T1 (3-register block), 1-2 inert (former T1B/T1C, [vNext-t1blk]),
+  // 3=T2A. Array size kept at 4 so no index shifts. Boundaries reveal whether
   // successful responses ever approach ku16MBResponseTimeout (2000ms,
   // ModbusMaster.h, unmodified by this patch) without storing every sample.
   static const uint16_t kDurBucketBoundsMs[11] = {100,250,500,750,1000,1250,1500,1750,1900,1950,2000};
@@ -7747,22 +7788,33 @@ void taskModbusRead(void* parameter) {
         }
         const char* prevTxnName = "CYCLE-START";
 
-        // Transaction 1: Velocity RMS X, Y, Z (§6.4.14-16)
-        // VRMSX=0x50, VRMSY=0x5C, VRMSZ=0x68 (ไม่ consecutive -- อ่านแยก 3 ครั้ง)
-        // Scaling: raw / 1000.0f → mm/s (True RMS, ไม่ต้อง × 0.7071)
-        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Bracket the T1a call
+        // Transaction 1: Vibration velocity X, Y, Z -- ONE block read (§6.4.6)
+        // [vNext-t1blk] Was three separate single-register reads of the
+        // non-contiguous VRMS addresses (0x50/0x5C/0x68). 0x3A/0x3B/0x3C are
+        // contiguous, so the datasheet's own worked example -- `50 03 00 3A 00
+        // 03` -- reads all three axes in one transaction. Response buffer order
+        // is X, Y, Z (index 0, 1, 2).
+        // NO SCALING is applied: raw_x/y/z are RAW watchdog inputs only (see the
+        // [Phase2] note at the stuck-detection site below). They are not, and
+        // must not become, a Product vibration metric -- that is FIFO RAW -> DSP
+        // velocity via g_velCarrier, untouched by this patch.
+        // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Bracket the T1 call
         // itself with timestamps -- read-only, no effect on the call, its
         // return value, or the 5ms delay that follows it.
         uint32_t t1aStartMs = millis();
-        uint8_t rcVrmsX = modbus.readHoldingRegisters(REG_VRMS_X, 1);
+        uint8_t rcT1 = modbus.readHoldingRegisters(REG_VIB_VEL_X, 3);
         uint32_t t1aEndMs = millis();
         // [Sensor-Failure-Instrumentation, Base-Rate] Count EVERY T1a attempt
         // (success + failure), split by firstAfterCT -- unconditional, before
         // the outcome branch below, so the base rate reflects all executions.
         s_t1aTotal++;
         if (firstAfterCT) s_t1aTotalFirstAfterCT++;
-        if (rcVrmsX == modbus.ku8MBSuccess) {
+        if (rcT1 == modbus.ku8MBSuccess) {
+          // [vNext-t1blk] All three axes come from this one response, in
+          // register order 0x3A/0x3B/0x3C. Signed int16 exactly as before.
           raw_x = (int16_t)modbus.getResponseBuffer(0);
+          raw_y = (int16_t)modbus.getResponseBuffer(1);
+          raw_z = (int16_t)modbus.getResponseBuffer(2);
           // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Successful-call
           // duration, read-only.
           uint32_t t1aDurMs = t1aEndMs - t1aStartMs;
@@ -7782,8 +7834,11 @@ void taskModbusRead(void* parameter) {
         } else {
           success = false; retryCount++;
           if (firstAfterCT) s_t1aFailFirstAfterCT++; else s_t1aFailNotFirstAfterCT++;
-          logModbusTransactionFail("T1a-VRMSX", REG_VRMS_X, MODBUS_SLAVE_ID, 3, rcVrmsX,
-                                    firstAfterCT, prevTxnName, "T1b-VRMSY");
+          // [vNext-t1blk] One failure now means all three axes are unavailable
+          // this cycle; failure semantics are otherwise unchanged
+          // (success=false; retryCount++ above, exactly as before).
+          logModbusTransactionFail("T1-VIBVEL", REG_VIB_VEL_X, MODBUS_SLAVE_ID, 3, rcT1,
+                                    firstAfterCT, prevTxnName, "T2a-TEMP");
           // [Sensor-Failure-Instrumentation, CT-T1a-Timing] Failed-call timing
           // diagnostic -- printed AFTER the existing MODBUS-FAIL line above,
           // does not replace or alter it. Read-only; no effect on retry/
@@ -7803,14 +7858,14 @@ void taskModbusRead(void* parameter) {
           Serial.printf("[T1A-TIMING] firstAfterCT=%d ctToStartMs=%lu transactionDurationMs=%lu "
                         "ctToEndMs=%lu rc=0x%02X(%s) fifoOwnsBus=%d rs485EN=%d prev=%s slave=0x%02X\r\n",
                         (int)firstAfterCT, (unsigned long)ctToStartMs, (unsigned long)t1aDurMs,
-                        (unsigned long)ctToEndMs, rcVrmsX, modbusRcName(rcVrmsX),
+                        (unsigned long)ctToEndMs, rcT1, modbusRcName(rcT1),
                         (int)FifoDriver_OwnsBus(), (int)digitalRead(RS485_EN_PIN),
                         prevTxnName, (unsigned)MODBUS_SLAVE_ID);
           // [RX-Byte-Diag] Printed AFTER the existing [T1A-TIMING] line above;
           // does not replace or alter it.
-          logModbusRxByteDiag(kRxDiagT1a, rcVrmsX, t1aDurMs);
+          logModbusRxByteDiag(kRxDiagT1a, rcT1, t1aDurMs);
         }
-        prevTxnName = "T1a-VRMSX";
+        prevTxnName = "T1-VIBVEL";
         vTaskDelay(pdMS_TO_TICKS(5));
 
         // [Sensor-Failure-Instrumentation, Base-Rate] Periodic summary only --
@@ -7878,28 +7933,23 @@ void taskModbusRead(void* parameter) {
                           avgFailCtToEndMs, (unsigned long)s_t1aFailCtToEndMaxMs,
                           (unsigned long)nowTimingStats);
             // [WTVB02-Timing-Instrumentation, Phase 0] Unified success-timing
-            // report for T1a/T1b/T1c/T2a, reusing this existing 30s cadence --
+            // report for T1/T2a, reusing this existing 30s cadence --
             // no new timer/gate added. Diagnostic-only; nothing below is read
             // by any control-flow decision.
             {
+              // [vNext-t1blk] T1B/T1C rows dropped -- those transactions no
+              // longer exist. T1 is the 3-register block; T2A unchanged.
               float t1aMean = s_t1aSuccessDurCount ? ((float)s_t1aSuccessDurSumMs / (float)s_t1aSuccessDurCount) : 0.0f;
-              float t1bMean = s_t1bSuccessDurCount ? ((float)s_t1bSuccessDurSumMs / (float)s_t1bSuccessDurCount) : 0.0f;
-              float t1cMean = s_t1cSuccessDurCount ? ((float)s_t1cSuccessDurSumMs / (float)s_t1cSuccessDurCount) : 0.0f;
               float t2aMean = s_t2aSuccessDurCount ? ((float)s_t2aSuccessDurSumMs / (float)s_t2aSuccessDurCount) : 0.0f;
               uint32_t t1aMinOut = s_t1aSuccessDurCount ? s_t1aSuccessDurMinMs : 0;
-              uint32_t t1bMinOut = s_t1bSuccessDurCount ? s_t1bSuccessDurMinMs : 0;
-              uint32_t t1cMinOut = s_t1cSuccessDurCount ? s_t1cSuccessDurMinMs : 0;
               uint32_t t2aMinOut = s_t2aSuccessDurCount ? s_t2aSuccessDurMinMs : 0;
-              Serial.printf("[TIMING] T1A count=%lu mean=%.1f min=%lu max=%lu\r\n",
+              Serial.printf("[TIMING] T1 count=%lu mean=%.1f min=%lu max=%lu\r\n",
                             (unsigned long)s_t1aSuccessDurCount, t1aMean, (unsigned long)t1aMinOut, (unsigned long)s_t1aSuccessDurMaxMs);
-              Serial.printf("[TIMING] T1B count=%lu mean=%.1f min=%lu max=%lu\r\n",
-                            (unsigned long)s_t1bSuccessDurCount, t1bMean, (unsigned long)t1bMinOut, (unsigned long)s_t1bSuccessDurMaxMs);
-              Serial.printf("[TIMING] T1C count=%lu mean=%.1f min=%lu max=%lu\r\n",
-                            (unsigned long)s_t1cSuccessDurCount, t1cMean, (unsigned long)t1cMinOut, (unsigned long)s_t1cSuccessDurMaxMs);
               Serial.printf("[TIMING] T2A count=%lu mean=%.1f min=%lu max=%lu\r\n",
                             (unsigned long)s_t2aSuccessDurCount, t2aMean, (unsigned long)t2aMinOut, (unsigned long)s_t2aSuccessDurMaxMs);
-              static const char* kTimingHistNames[4] = {"T1A", "T1B", "T1C", "T2A"};
+              static const char* kTimingHistNames[4] = {"T1", "", "", "T2A"};
               for (uint8_t txn = 0; txn < 4; txn++) {
+                if (txn == 1 || txn == 2) continue;  // [vNext-t1blk] inert rows
                 Serial.printf("[TIMING-HIST] %s <=100:%lu <=250:%lu <=500:%lu <=750:%lu <=1000:%lu <=1250:%lu <=1500:%lu <=1750:%lu <=1900:%lu <=1950:%lu <=2000:%lu >2000:%lu\r\n",
                               kTimingHistNames[txn],
                               (unsigned long)s_durBucketCount[txn][0], (unsigned long)s_durBucketCount[txn][1],
@@ -7913,65 +7963,14 @@ void taskModbusRead(void* parameter) {
           }
         }
 
-        // [RX-Byte-Diag] Bracketing timestamp only -- read-only, no effect on
-        // the call itself.
-        uint32_t t1bStartMs = millis();
-        uint8_t rcVrmsY = modbus.readHoldingRegisters(REG_VRMS_Y, 1);
-        uint32_t t1bEndMs = millis();
-        if (rcVrmsY == modbus.ku8MBSuccess) {
-          raw_y = (int16_t)modbus.getResponseBuffer(0);
-          // [WTVB02-Timing-Instrumentation, Phase 0] Reuses the existing
-          // t1bStartMs/t1bEndMs timestamps above (added for [RX-Byte-Diag]) --
-          // no new millis() call. Diagnostic-only, never read by control flow.
-          uint32_t t1bDurMs = t1bEndMs - t1bStartMs;
-          s_t1bSuccessDurSumMs += t1bDurMs;
-          s_t1bSuccessDurCount++;
-          if (t1bDurMs > s_t1bSuccessDurMaxMs) s_t1bSuccessDurMaxMs = t1bDurMs;
-          if (t1bDurMs < s_t1bSuccessDurMinMs) s_t1bSuccessDurMinMs = t1bDurMs;
-          {
-            uint8_t t1bBucketIdx = 11;
-            for (uint8_t b = 0; b < 11; b++) {
-              if (t1bDurMs <= kDurBucketBoundsMs[b]) { t1bBucketIdx = b; break; }
-            }
-            s_durBucketCount[1][t1bBucketIdx]++;
-          }
-        } else {
-          success = false; retryCount++;
-          logModbusTransactionFail("T1b-VRMSY", REG_VRMS_Y, MODBUS_SLAVE_ID, 3, rcVrmsY,
-                                    false, prevTxnName, "T1c-VRMSZ");
-          logModbusRxByteDiag(kRxDiagT1b, rcVrmsY, t1bEndMs - t1bStartMs);
-        }
-        prevTxnName = "T1b-VRMSY";
-        vTaskDelay(pdMS_TO_TICKS(5));
-
-        uint32_t t1cStartMs = millis();
-        uint8_t rcVrmsZ = modbus.readHoldingRegisters(REG_VRMS_Z, 1);
-        uint32_t t1cEndMs = millis();
-        if (rcVrmsZ == modbus.ku8MBSuccess) {
-          raw_z = (int16_t)modbus.getResponseBuffer(0);
-          // [WTVB02-Timing-Instrumentation, Phase 0] Reuses the existing
-          // t1cStartMs/t1cEndMs timestamps above (added for [RX-Byte-Diag]) --
-          // no new millis() call. Diagnostic-only, never read by control flow.
-          uint32_t t1cDurMs = t1cEndMs - t1cStartMs;
-          s_t1cSuccessDurSumMs += t1cDurMs;
-          s_t1cSuccessDurCount++;
-          if (t1cDurMs > s_t1cSuccessDurMaxMs) s_t1cSuccessDurMaxMs = t1cDurMs;
-          if (t1cDurMs < s_t1cSuccessDurMinMs) s_t1cSuccessDurMinMs = t1cDurMs;
-          {
-            uint8_t t1cBucketIdx = 11;
-            for (uint8_t b = 0; b < 11; b++) {
-              if (t1cDurMs <= kDurBucketBoundsMs[b]) { t1cBucketIdx = b; break; }
-            }
-            s_durBucketCount[2][t1cBucketIdx]++;
-          }
-        } else {
-          success = false; retryCount++;
-          logModbusTransactionFail("T1c-VRMSZ", REG_VRMS_Z, MODBUS_SLAVE_ID, 3, rcVrmsZ,
-                                    false, prevTxnName, "T2a-TEMP");
-          logModbusRxByteDiag(kRxDiagT1c, rcVrmsZ, t1cEndMs - t1cStartMs);
-        }
-        prevTxnName = "T1c-VRMSZ";
-        vTaskDelay(pdMS_TO_TICKS(5));
+        // [vNext-t1blk] Former Transaction 1b (VRMSY 0x5C) and 1c (VRMSZ 0x68)
+        // REMOVED. Both axes now arrive in the single T1 block read above, so
+        // there is nothing left for these two transactions to fetch. Their
+        // per-transaction timing/RX-byte instrumentation goes with them; the
+        // T1 block's own instrumentation (kRxDiagT1a row, s_t1a* counters,
+        // s_durBucketCount[0]) now covers the whole three-axis read.
+        // Net effect on the bus: 3 WTVB02 transactions -> 1, and the two 5 ms
+        // inter-transaction delays that separated them are gone with them.
 
         // Transaction 2a: Temperature (0x40)
         uint32_t t2aStartMs = millis();
@@ -8040,10 +8039,17 @@ void taskModbusRead(void* parameter) {
       // dspCrestFactor(), published as freq_x/y/z and crest_factor) are
       // computed from FIFO RAW -> DSP and are entirely unaffected.
       //
-      // [Phase2] Transaction 6 (Peak Velocity 0x3A~0x3C) REMOVED earlier. Its
-      // only consumer was peak_velocity_x/y/z on /sensor, dropped in Phase 1,
-      // so the read had become pure bus traffic. VRMS 0x50/0x5C/0x68 stay
-      // (stuck-axis watchdog, unaffected by this cleanup).
+      // [Phase2] Transaction 6 (Peak Velocity 0x3A~0x3C) was REMOVED here at the
+      // time, because its only consumer was peak_velocity_x/y/z on /sensor,
+      // dropped in Phase 1, so that read had become pure bus traffic.
+      // [vNext-t1blk] SUPERSEDED -- do not read the paragraph above as current
+      // state. 0x3A~0x3C is read again, and is now the ONLY T1 source and the
+      // stuck-axis watchdog's only input (one block read, quantity 3, raw
+      // values, no scaling). The VRMS addresses 0x50/0x5C/0x68 are no longer
+      // read by T1 -- or anywhere else in this firmware.
+      // NOTE ON 0x50: it still appears in code as MODBUS_SLAVE_ID (the WTVB02
+      // slave address), which coincidentally equals the old REG_VRMS_X. That
+      // occurrence is the slave address, NOT a register address, and must stay.
 
       // [Mechanism-B Fix, Phase 1] `success` is fully resolved for T1a-T2a
       // by this point in program order (all four transactions already ran
@@ -8294,7 +8300,8 @@ void taskModbusRead(void* parameter) {
       // DATA PROCESSING [v15.0]
       // ============================================================
 
-      // [Phase2] Step 1/2 REMOVED. raw_x/y/z (VRMS registers 0x50/0x5C/0x68) are
+      // [Phase2] Step 1/2 REMOVED. raw_x/y/z (velocity registers -- 0x3A~0x3C
+      // since [vNext-t1blk], previously VRMS 0x50/0x5C/0x68) are
       // NO LONGER converted into a vibration measurement. They survive solely as
       // the input to the all-zero / Vx / Vy / Vz stuck detection and the sensor
       // auto-restart above -- a hardware watchdog, not a metric. The single
