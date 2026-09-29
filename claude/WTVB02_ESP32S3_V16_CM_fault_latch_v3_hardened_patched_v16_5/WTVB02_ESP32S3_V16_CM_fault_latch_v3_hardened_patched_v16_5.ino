@@ -11530,6 +11530,34 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
       // [P4-02] pure copy, no computation -- see P4_02_DESIGN_CONTRACT.md
       h["current_evidence_valid"] = snap->currentEvidenceValid;
 
+      // [v16.6k] ESP32-S3 controller die temperature -- NOT the WTVB02 sensor
+      // temperature. The sensor's own reading stays on /sensor and /vibration
+      // as `temp` (Modbus REG_TEMPERATURE 0x40), unchanged and untouched; this
+      // is the MCU's internal thermal diode and belongs on this topic because
+      // it describes the device, not the machine. The OLED already draws the
+      // same distinction, labelling the sensor value "S-T" for exactly this
+      // reason (see drawStatusScreen()).
+      //
+      // temperatureRead() is the Arduino-ESP32 core's own wrapper (declared in
+      // esp32-hal.h, which Arduino.h already pulls in -- no new library). On
+      // ESP32-S3 it takes the SOC_TEMP_SENSOR_SUPPORTED path and returns
+      // CELSIUS directly from temperature_sensor_get_celsius(); the legacy
+      // Fahrenheit conversion in that function applies only to the original
+      // ESP32. It returns NAN when the sensor fails to install or read, which
+      // is why the guard below is load-bearing rather than defensive: NAN is
+      // not representable in JSON and ArduinoJson would emit bare `null`,
+      // handing consumers a key they cannot distinguish from a parse failure.
+      //
+      // OMIT-WHEN-INVALID, matching the contract every other conditional key
+      // on these topics already follows (velocity_rms_*, freq_*, sync_age_s):
+      // an absent key means "not measured" and is never a fabricated 0.0, which
+      // a consumer could read as a real 0 degC die temperature.
+      {
+        const float mcuTempC = temperatureRead();
+        if (!isnan(mcuTempC) && !isinf(mcuTempC))
+          h["mcu_temp_c"] = roundf(mcuTempC * 10.0f) / 10.0f;
+      }
+
       // [Temperature-trend cleanup, Option 2] trend_window_s field removed --
       // confirmed orphaned by live VPS audit (written to InfluxDB, read by
       // nothing), same standard already applied to temp_slope.
