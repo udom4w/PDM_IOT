@@ -5379,10 +5379,25 @@ static inline void rs485Enable(const char* caller = "?") {
                 (unsigned long)FifoDriver_GetAttemptNumberForDiag(), (unsigned long)millis());
 }
 
+// [v16.5.b1] RS485_EN_PIN (GPIO42) is now held LOW continuously after setup():
+// this function no longer drives the pin at all. The MAX13487E is the
+// AutoDirection variant, so RE/SHDN in the normal-operation state do NOT
+// assert the bus driver -- it engages only on DI activity -- therefore holding
+// the transceiver awake does not occupy the bus. This matches the vendor
+// reference configuration (LilyGO RS485_Master.ino/Factory.ino set GPIO42 LOW
+// once in setup() and never toggle it).
+// Scope of this change: the single digitalWrite(RS485_EN_PIN, HIGH) is removed
+// and nothing replaces it. rs485Disable() is retained as the logical
+// bus-release boundary so that every existing call site stays unchanged.
+// FifoDriver_OwnsBus() is and remains the sole RS485 arbitration mechanism.
+// LogEnPinTransition() is deliberately NOT called here: it emits
+// "[EN-DIAG] GPIO42 -> HIGH", which would now be a false statement.
+// rs485Enable()'s LogEnPinTransition(LOW) is unaffected and stays accurate --
+// it reports the one real transition, at setup().
 static inline void rs485Disable(const char* caller = "?") {
-  digitalWrite(RS485_EN_PIN, HIGH);
-  LogEnPinTransition(HIGH);  // [Task 4.5 -- TEMPORARY DIAGNOSTIC ONLY]
-  // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY] see rs485Enable()'s own comment.
+  // [Task 5.3 -- TEMPORARY DIAGNOSTIC ONLY] Reports the CALL, not a pin
+  // change, so it remains accurate: rs485Disable() is still invoked at each
+  // bus-release boundary. See rs485Enable()'s own comment.
   LOGT("[EN-CALLER] rs485Disable() caller=%s fifoOwnsBus=%d attempt=%lu t=%lums\n",
                 caller, (int)FifoDriver_OwnsBus(),
                 (unsigned long)FifoDriver_GetAttemptNumberForDiag(), (unsigned long)millis());
