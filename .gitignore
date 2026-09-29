@@ -21,9 +21,16 @@ investigation_archives/
 # VS Code
 .vscode/
 
+# Credentials & generated files
+rig01_credentials.h
+build_info.h
+
 # Windows
 Thumbs.db
 Desktop.ini
+desktop.ini
 
 # Logs
 *.log
+**/build_log*.txt
+**/upload_log*.txt
