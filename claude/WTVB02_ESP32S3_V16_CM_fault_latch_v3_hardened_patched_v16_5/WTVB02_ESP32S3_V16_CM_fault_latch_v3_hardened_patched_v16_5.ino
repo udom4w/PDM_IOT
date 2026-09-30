@@ -10331,7 +10331,7 @@ void drawMachineScreen(VibrationData_t* data) {
   // so it is never a hardcoded guess.
   if (unavailable) {
     u8g2.setFont(u8g2_font_ncenB08_tr);
-    const char* msg = "VIBRATION UNAVAILABLE";
+    const char* msg = "VIB. UNAVAILABLE"; // [vNEXT-boot]
     uint8_t uw = u8g2.getStrWidth(msg);
     u8g2.drawStr((128 - uw) / 2, 40, msg);
   } else {
@@ -10346,29 +10346,19 @@ void drawMachineScreen(VibrationData_t* data) {
     }
   }
 
-  // Line 4: RPM / Current (y=52).
-  // [OLED-UI-v2 fix] CUR now gated on displayCurrentFresh() (age-based,
-  // g_lastCurrentSampleMs + CURRENT_EVIDENCE_MAX_AGE_MS -- same window
-  // publishTelemetry() already uses for its own currentFresh export)
-  // instead of data->current_valid directly. current_valid is a raw
-  // per-~250ms-tick flag (true only on the exact CTR4A01 sample tick, false
-  // every other tick even though current_a is still fresh) -- using it here
-  // produced the ~0.5Hz CUR flicker observed on hardware. taskModbusRead()
-  // and current_valid's own semantics are unchanged; only this read site
-  // moved to the already-existing, already-correct freshness window.
+  // Line 4: TEMP / Current (y=52). [vNEXT-boot]
   u8g2.setFont(u8g2_font_6x10_tr);
-  snprintf(buf, sizeof(buf), "RPM %.0f", data->rpm);
+  snprintf(buf, sizeof(buf), "TEMP %.1fC", data->temperature);
   u8g2.drawStr(0, 52, buf);
   if (displayCurrentFresh()) snprintf(buf, sizeof(buf), "CUR %.2fA", data->current_a);
   else                       snprintf(buf, sizeof(buf), "CUR --");
   u8g2.drawStr(68, 52, buf);
 
-  // Line 5: WTVB02 sensor temperature (y=63). Labeled S-T (not bare "Temp")
-  // to disambiguate from the ESP32 controller temperature, which is NOT
-  // implemented in this change (docs/engineering/OLED_NEW_UI_MOCKUP.md §4).
+  // Line 5: RPM (y=63), only when vibration available. [vNEXT-boot]
   if (!unavailable) {
     u8g2.setFont(u8g2_font_5x7_tr);
-    snprintf(buf, sizeof(buf), "S-T %.1fC", data->temperature);
+    if (data->rpm_signal_lost) snprintf(buf, sizeof(buf), "RPM --");
+    else                       snprintf(buf, sizeof(buf), "RPM %.0f", data->rpm);
     u8g2.drawStr(0, 63, buf);
   }
 }
@@ -12540,15 +12530,14 @@ void setup() {
   u8g2.begin();
   u8g2.setContrast(255);
 
-  // Splash screen
+  // Splash screen [vNEXT-boot]
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB14_tr);
-  u8g2.drawStr(25, 20, "4G LTE");
   u8g2.setFont(u8g2_font_ncenB10_tr);
-  u8g2.drawStr(10, 40, "Vib Monitor");
+  { const char* title = "PROMLOGIX"; u8g2.drawStr((128 - u8g2.getStrWidth(title)) / 2, 23, title); }
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(30, 55, MACHINE_NAME);
-  u8g2.drawStr(20, 64, "SIMCom A7670");
+  u8g2.drawStr(25, 37, "MODEL. PDM-01");
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr(9, 51, "Predictive Maintenance");
   u8g2.sendBuffer();
 
   Serial.println("[Init] OLED initialized");
