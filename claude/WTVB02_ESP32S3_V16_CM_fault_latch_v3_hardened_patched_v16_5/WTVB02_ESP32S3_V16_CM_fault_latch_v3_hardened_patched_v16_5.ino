@@ -1878,6 +1878,7 @@ typedef struct {
   uint8_t  motor_state;   // MotorRunState_t: 0=STOPPED,1=STARTING,2=RUNNING,3=STOPPING
   float    runtime_hour;  // Accumulated running hours (NVS persistent)
   uint8_t  prox;          // 1=pulse normal, 0=Fault/?????? pulse
+  bool     rpm_signal_lost; // [vNEXT-rpmsig] true when RUNNING but no RPM pulse
 
   // --- CTR4A01 current sensor [v16.6a] ---
   float    current_a;     // AC current [A], valid only if current_valid
@@ -1899,6 +1900,8 @@ typedef struct {
   bool     crc_ok;        // true = ทุก read ผ่าน CRC (มาถึง de-glitch = true เสมอ)
 
 } VibrationData_t;
+static_assert(sizeof(VibrationData_t) == 80u,
+              "VibrationData_t grew -- rpm_signal_lost was meant to fit existing padding");
 
 
 // System state (shared between cores)
@@ -4189,6 +4192,8 @@ static bool replayTelemBuf() {
     rv["temp"]        = round(snap.temperature * 10) / 10.0f;
     rv["rpm"]         = snap.rpm;
     rv["motor_state"] = snap.motor_state;
+    rv["rpm_signal_lost"] = // [vNEXT-rpmsig] derived: RUNNING+rpm==0 => signal lost
+        (snap.motor_state == (uint8_t)MOTOR_RUNNING) && (snap.rpm <= 0.0f);
 
     // [Phase 3J] alarm_level: the verdict THIS record carried when it was
     // captured, rendered by the same pure formatter the live path uses. It is
@@ -5061,11 +5066,16 @@ static void processRPM(VibrationData_t* data) {
   // ---------- Runtime Hour Update ----------
   updateRuntimeHour();
 
+  // ---------- RPM Signal Lost ----------
+  const bool rpmSignalLost =
+      (g_motorRunState == MOTOR_RUNNING) && !g_rpmEvidence.valid; // [vNEXT-rpmsig]
+
   // ---------- Write to shared VibrationData_t ----------
   data->rpm          = roundf(g_rpmReported * 10.0f) / 10.0f;
   data->motor_state  = (uint8_t)g_motorRunState;
   data->runtime_hour = roundf(getCurrentRuntimeHour() * 10000.0f) / 10000.0f;
   data->prox         = prox;
+  data->rpm_signal_lost = rpmSignalLost; // [vNEXT-rpmsig]
 }
 
 #if RPM_DIAG_ENABLE
@@ -11352,6 +11362,7 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
     // number; the order-ratio form is Phase-2 diagnostic. Calculations
     // (freqX/Y/Z, freqRatioX/Y/Z) are UNTOUCHED and still feed /sensor.
     doc["motor_state"]         = data->motor_state;
+    doc["rpm_signal_lost"]     = data->rpm_signal_lost; // [vNEXT-rpmsig]
     // [P1-S2] "state" (DEPRECATED alias of motor_state) REMOVED -- the source
     // comment already said to delete it once dashboards moved to motor_state.
     doc["operating_hours_total"] = data->runtime_hour;
