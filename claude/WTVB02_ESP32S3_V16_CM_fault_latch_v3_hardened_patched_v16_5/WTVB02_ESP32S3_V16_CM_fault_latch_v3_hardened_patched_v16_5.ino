@@ -2002,6 +2002,12 @@ typedef struct {
 typedef enum {
   MQTT_OUTBOUND_TOPIC_TREND = 0,   // only topic routed through this queue (design v16.5 §3.2)
   MQTT_OUTBOUND_TOPIC_EVENT = 1,   // [Result Consumer, Commit 2] SDS SS18.3 /event -- FIFO capture metadata
+  // [v16.5-P0-FIFORAW] Diagnostic FIFO_RAW snapshot topic. Routed through this
+  // SAME queue and the same 1536 B payload cap as TREND/EVENT -- no queue
+  // constant changes, so the diagnostic path cannot enlarge the queue's RAM
+  // footprint or starve the existing two topics of slots beyond the normal
+  // drop-newest policy enqueueMqttOutbound() already applies to all of them.
+  MQTT_OUTBOUND_TOPIC_FIFO_RAW = 2,
 } MqttOutboundTopic_t;
 
 typedef struct {
@@ -2098,6 +2104,32 @@ typedef struct {
 typedef struct {
   uint32_t captureId;   // notification only; payload lives in g_accelSnap
 } AccelSnapshotReady_t;
+
+// ----------------------------------------------------------------------------
+// [v16.5-P0-FIFORAW] Core 0 -> Core 1 alarm arm for the diagnostic FIFO_RAW
+// snapshot. Phase 0 carries metadata only -- no sample bytes anywhere in this
+// path.
+//
+// WHY A QUEUE AND NOT A FLAG: the arm carries three fields (event code and an
+// epoch), which CLAUDE.md's cross-core rule puts firmly on the mutex/queue
+// side of the line -- a multi-field struct is never safe as a bare shared
+// variable, and a single-word flag could not carry the event identity that
+// distinguishes a WARNING arm from a CRITICAL one. This mirrors the existing
+// queueAccelSnapshot / queueFifoTrigger idiom rather than inventing a new one.
+//
+// WHY DEPTH 1: the depth-1 + xQueueSend(timeout 0) pair is what makes this
+// path structurally incapable of disturbing anything else. Core 0 never
+// blocks; a second alarm arriving before Core 1 has consumed the first is
+// simply dropped and counted (g_fifoRawArmDropped), which is also exactly the
+// de-duplication the acceptance tests require -- a WARNING->WARNING or
+// CRITICAL->CRITICAL non-transition never reaches this queue in the first
+// place (checkAndLatchFault()'s edge guards), and a genuine burst cannot
+// queue up a backlog of stale diagnostic events.
+// ----------------------------------------------------------------------------
+typedef struct {
+  uint8_t  evCode;   // FL_EVT_WARNING or FL_EVT_CRITICAL only -- never BEARING/HEALTH/NONE
+  uint32_t tsEpoch;  // RTC epoch at the alarm edge; FL_TS_UNKNOWN (0) when RTC/sync invalid
+} FifoRawArm_t;
 
 // ----------------------------------------------------------------------------
 // [M1A] Core 1 -> Core 0 velocity carrier.
@@ -2227,6 +2259,13 @@ QueueHandle_t queueDisplayUpdate = NULL;
 QueueHandle_t queueMaintEvent = NULL;   // V14.4: maintenance reset (Button -> Network)
 QueueHandle_t queueMqttOutboundTrend = NULL;  // [v16.5] Section 7 Item 3: dormant, no producer/consumer wired yet
 QueueHandle_t queueFifoTrigger = NULL;  // [Broker, Commit 1] FIFO trigger intent (any task -> taskModbusRead), depth 1
+// [v16.5-P0-FIFORAW] Alarm arm carrier (Core 0 taskStateMachine -> Core 1
+// taskAnalytics), depth 1. Best-effort by construction: a NULL handle, a full
+// queue, or a never-consumed arm all degrade the diagnostic snapshot only and
+// can never delay or drop normal telemetry.
+QueueHandle_t queueFifoRawArm = NULL;
+static volatile uint32_t g_fifoRawArmDropped   = 0;  // arms lost to a full depth-1 queue
+static volatile uint32_t g_fifoRawArmPublished = 0;  // metadata events successfully enqueued to MQTT
 // [ARCH-INVARIANT] The Trigger Broker's single admission point. Every
 // producer sends here; taskModbusRead()'s drain block is the only reader.
 // See docs/FIFO_TRIGGER_BROKER_INVARIANTS.md.
@@ -3173,6 +3212,16 @@ static char g_mqttTopicTrend     [128];  // factory/.../trend
 static char g_mqttTopicEvent     [128];  // factory/.../vibration/event (V14.4 maintenance audit)
 static char g_mqttTopicCommand   [128];  // [Commit 7A] factory/.../vibration/command -- inbound, subscribed only
 static char g_mqttTopicDeviceHealth[128];  // [P1-S3] factory/.../device-health -- engineering diagnostics, NOT the Product-1 contract
+// [v16.5-P0-FIFORAW] factory/.../vibration/fifo_raw -- diagnostic snapshot,
+// outbound only. Named under vibration/ to match the two sibling FIFO-domain
+// leaves that already live there (/vibration/event, /vibration/command) rather
+// than opening a second-level namespace for one topic. This is safe with
+// respect to the live pipeline for a verified reason, not a hopeful one:
+// Node-RED declares exactly three mqtt-in nodes (.../vibration, .../trend,
+// .../device-health) with no '#' wildcard anywhere, so a new leaf is dark by
+// default and cannot reach InfluxDB until someone adds a node for it -- the
+// same way /vibration/event, /sensor and /decision are already dark today.
+static char g_mqttTopicFifoRaw[128];
 // ─────────────────────────────────────────────────────────────────────────────
 
 // [Commit 7A] MQTT inbound command callback. Fires from mqttClient.loop()
@@ -4365,6 +4414,53 @@ static void checkAndLatchFault(const VibrationData_t* data,
   } else {
     Serial.printf("[LATCH] ts=UNKNOWN (rtcValid=%d synced=%d)\n",
                   (int)g_rtcValid, (int)g_timeSync.synced);
+  }
+
+  // [v16.5-P0-FIFORAW] Arm the diagnostic FIFO_RAW snapshot on the DETECTED
+  // alarm edge, for WARNING and CRITICAL only.
+  //
+  // PLACEMENT IS DELIBERATE, on two axes:
+  //
+  // 1. AFTER evCode derivation, BEFORE the latch arbitration below. The
+  //    arbitration can SKIP an event whose severity does not beat an existing
+  //    pending latch (see the g_fl.pending block just below). Arming there
+  //    would make a genuine NORMAL->WARNING transition silently produce no
+  //    diagnostic snapshot whenever a higher-severity latch happened to be
+  //    unacknowledged -- which is precisely the case the acceptance criteria
+  //    require to emit exactly one event. The detected edge is what maps 1:1
+  //    onto the state transition; the accepted latch does not.
+  //
+  // 2. OUTSIDE mutexFaultLatch. v16.3n records an ipc1 stack overflow caused
+  //    by doing too much while holding this mutex (saveFaultLatchNVS() needs a
+  //    cross-core IPC call). A non-blocking xQueueSend is cheap, but keeping it
+  //    out of that critical section entirely means this addition cannot extend
+  //    the mutex's hold time by even one instruction.
+  //
+  // The edge guards above already give the required de-duplication for free:
+  // WARNING->WARNING fails `g_flPrevState == STATE_NORMAL` and
+  // CRITICAL->CRITICAL fails `g_flPrevState != STATE_CRITICAL`, so a
+  // non-transition never reaches this point. WARNING->CRITICAL does reach it,
+  // as a CRITICAL arm, which is the intended behavior.
+  //
+  // Non-blocking and unconditionally safe: timeout 0 means Core 0 never waits,
+  // and a full depth-1 queue (previous arm not yet consumed by Core 1) drops
+  // this arm with a counter rather than blocking the state machine. BEARING and
+  // HEALTH events fall through untouched -- they latch exactly as before and
+  // arm nothing.
+  if ((evCode == FL_EVT_WARNING || evCode == FL_EVT_CRITICAL) &&
+      queueFifoRawArm != NULL) {
+    FifoRawArm_t arm;
+    arm.evCode  = evCode;
+    arm.tsEpoch = epochNow;   // FL_TS_UNKNOWN (0) when the RTC could not be trusted
+    if (xQueueSend(queueFifoRawArm, &arm, 0) != pdTRUE) {
+      g_fifoRawArmDropped++;
+      Serial.printf("[FIFO-RAW] ARM DROPPED ev=%u(%s) -- previous arm not yet consumed, dropped_total=%lu\n",
+                    evCode, faultEventStr(evCode),
+                    (unsigned long)g_fifoRawArmDropped);
+    } else {
+      Serial.printf("[FIFO-RAW] ARMED ev=%u(%s) ts=%lu\n",
+                    evCode, faultEventStr(evCode), (unsigned long)epochNow);
+    }
   }
 
   // ── mutexFaultLatch: guards g_fl + g_flCount + the fault_latch NVS namespace ──
@@ -8507,11 +8603,18 @@ void taskStateMachine(void* parameter) {
         MachineState_t offlineState = STATE_NORMAL;
         if (xSemaphoreTake(mutexSystemState, pdMS_TO_TICKS(10)) == pdTRUE) {
           if (g_systemState.state != STATE_MAINTENANCE) {
-            if (g_systemState.state != STATE_NORMAL) {
-              Serial.println("[STATE] Sensor OFFLINE -> forced STATE_NORMAL, buzzer OFF");
+            if (g_systemState.state < STATE_WARNING) {
+              g_systemState.state       = STATE_NORMAL;
+              g_systemState.buzzerActive = false;
+            } else {
+              // [v16.5-P0-OFFLINE-HOLD] Hold WARNING/CRITICAL during sensor offline.
+              // Forcing STATE_NORMAL here lets the hysteresis engine re-derive a
+              // NORMAL->WARNING/CRITICAL edge after recovery, generating a duplicate
+              // FL_EVT. Holding the state means prevVib=WARNING/CRITICAL on the first
+              // post-warmup cycle: the persistence engine applies "same level or
+              // de-escalation" immediately and g_flPrevState is never overwritten.
+              Serial.println("[STATE] Sensor OFFLINE -> holding alarm state (WARNING/CRITICAL)");
             }
-            g_systemState.state       = STATE_NORMAL;
-            g_systemState.buzzerActive = false;
           }
           offlineState = g_systemState.state;
           xSemaphoreGive(mutexSystemState);
@@ -8616,6 +8719,17 @@ void taskStateMachine(void* parameter) {
         // real decision, not an absence of one, so it may clear an alarm.
       } else if (sensorWarmupActive()) {
         newState = STATE_NORMAL;  // warmup window หลัง sensor online → suppress spike
+        // [v16.5-P0-REQUAL] A warmup window cannot DECIDE anything, so it must
+        // HOLD the existing alarm, never clear it. Without this line the
+        // placeholder NORMAL above was applied at the vibDecisionValid gate
+        // below, which cleared a live WARNING/CRITICAL while suppressLatch
+        // simultaneously froze g_flPrevState -- the two then disagreed, the
+        // hysteresis engine re-entered via the NORMAL ON edges as an
+        // escalation, and the same physical fault re-qualified a second
+        // NORMAL->WARNING edge. This makes the branch consistent with the
+        // !vibOk and !vibThresholdsConfigured() branches immediately below,
+        // which already declare "no decision possible" the same way.
+        vibDecisionValid = false;
       } else if (!vibOk) {
         // ── VIBRATION_UNAVAILABLE ────────────────────────────────────────────
         // Velocity invalid or stale (FIFO suspended, DSP gate failed, or no
@@ -9534,8 +9648,14 @@ void taskNetwork(void* parameter) {
         // [Result Consumer, Commit 2] MQTT_OUTBOUND_TOPIC_EVENT added -- routes
         // handleFifoCaptureCompletion()'s /event payload the same way TREND
         // already routes to /trend; no other change to this drain's logic.
+        // [v16.5-P0-FIFORAW] Third arm added. The drain itself is unchanged:
+        // still one message per taskNetwork() iteration, still the same
+        // publish call, same QoS, same failure accounting. A diagnostic
+        // message is therefore rate-limited identically to /trend and /event
+        // and cannot burst at the broker.
         const char* outTopic = (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_TREND)  ? g_mqttTopicTrend
                               : (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_EVENT) ? g_mqttTopicEvent
+                              : (outMsg.topic_id == MQTT_OUTBOUND_TOPIC_FIFO_RAW) ? g_mqttTopicFifoRaw
                               : NULL;
         if (outTopic != NULL) {
 #ifdef DEBUG_MQTT_TIMING
@@ -11625,6 +11745,104 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 
 
 // ----------------------------------------------------------------------------
+// [v16.5-P0-FIFORAW] Build and enqueue ONE metadata-only fifo_raw_v1 message.
+//
+// PHASE 0 SCOPE, STATED AS A CONTRACT: this function carries NO sample bytes.
+// `d` is published as an empty string and `data_present` as false, so a
+// consumer can never mistake this for a data chunk. There is no base64 here,
+// no CRC32, no chunk loop and no reference to g_accelWork's x/y/z arrays --
+// the 6144-byte waveform is not read, not copied and not serialized anywhere
+// in this path. chunk_total is published as its eventual value (8) so the
+// downstream schema is already correct when Phase 2 starts emitting real
+// chunks, but Phase 0 emits exactly one message per alarm edge.
+//
+// Signature takes only scalars deliberately: passing FifoRawArm_t by value
+// would make a custom struct a function parameter, which .ino auto-prototype
+// generation requires to be typedef'd ahead of the file's first function
+// (CLAUDE.md). Scalars sidestep that constraint entirely.
+//
+// Provenance rule: srHz and sampleCount are the CAPTURE's own recorded values,
+// passed in from g_accelWork, never compile-time literals. sampleCount is
+// structurally always VIB_ACCEL_REQUIRED_SAMPLES (1024) here, because
+// handleFifoCaptureCompletion() only performs the Core 0 -> Core 1 copy when
+// result.sampleCount == VIB_ACCEL_REQUIRED_SAMPLES -- so publishing the real
+// field both satisfies "metadata must come from the real capture" and yields
+// the required fifo_length of 1024.
+//
+// Returns nothing and cannot fail in a way that matters: an oversized payload
+// is dropped with a log (it cannot happen at ~390 B against a 448 B buffer,
+// but the guard matches the discipline every other publisher in this file
+// uses), and a rejected enqueue is counted. Neither outcome touches normal
+// telemetry.
+// ----------------------------------------------------------------------------
+static void publishFifoRawMetadata(uint8_t  evCode,
+                                   uint32_t tsEpoch,
+                                   uint32_t captureId,
+                                   uint32_t snapshotId,
+                                   uint32_t srHz,
+                                   uint16_t sampleCount,
+                                   float    rpmAtCapture) {
+  // Only WARNING and CRITICAL ever arm, so this mapping is total. Derived from
+  // evCode rather than read from g_systemState.state on purpose: the alarm
+  // level that belongs on this message is the one that fired the edge on
+  // Core 0, not whatever the live state happens to be by the time Core 1 runs
+  // ~1-2 s later.
+  const char* alarmLevelStrP0 = (evCode == FL_EVT_CRITICAL) ? "CRITICAL" : "WARNING";
+
+  StaticJsonDocument<448> fDoc;
+  fDoc["schema"]         = "fifo_raw_v1";
+  fDoc["plant_id"]       = PLANT_ID;
+  fDoc["machine_id"]     = MACHINE_ID;
+  fDoc["sensor_id"]      = SENSOR_ID;
+  fDoc["fw"]             = FW_VERSION;
+  fDoc["capture_id"]     = captureId;
+  fDoc["snapshot_id"]    = snapshotId;
+  fDoc["alarm_level"]    = alarmLevelStrP0;
+  fDoc["alarm_event"]    = faultEventStr(evCode);   // "ALARM_WARNING" | "ALARM_CRITICAL"
+  fDoc["ts_epoch"]       = tsEpoch;                 // 0 == FL_TS_UNKNOWN, i.e. RTC not trusted
+  fDoc["sample_rate_hz"] = srHz;                    // capture provenance
+  fDoc["fifo_length"]    = sampleCount;             // capture provenance; 1024 by upstream gate
+  fDoc["axis_order"]     = "xyz";
+  fDoc["unit"]           = "raw_int16";             // unscaled sensor LSB -- no calibration applied
+  // AccelSnapshot_t documents rpmAtCapture's 0.0f as "not known", never as
+  // "0 RPM". Omit the key entirely in that case rather than publish a zero a
+  // consumer could read as a measurement -- the same omit-when-invalid
+  // contract processPendingAccelSnapshot() already applies to its
+  // dominant_frequency_* and velocity_1x/2x_* keys.
+  if (rpmAtCapture > 0.0f) {
+    fDoc["rpm"]          = rpmAtCapture;
+  }
+  fDoc["chunk_total"]    = 8;
+  fDoc["data_present"]   = false;                   // [Phase 0] explicit: no samples in this message
+  fDoc["d"]              = "";                      // [Phase 0] placeholder, populated from Phase 2
+
+  char fBuf[448];
+  const size_t needF = measureJson(fDoc);
+  if (needF + 1u > sizeof(fBuf)) {
+    Serial.printf("[FIFO-RAW] payload %u B exceeds buffer %u B -- event dropped\n",
+                  (unsigned)needF, (unsigned)sizeof(fBuf));
+    return;
+  }
+
+  const size_t szF = serializeJson(fDoc, fBuf, sizeof(fBuf));
+  if (enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_FIFO_RAW, fBuf, szF, MQTT_QOS)) {
+    g_fifoRawArmPublished++;
+    Serial.printf("[FIFO-RAW] METADATA enqueued snapshot_id=%lu capture_id=%lu level=%s "
+                  "sr=%luHz n=%u szF=%u published_total=%lu\n",
+                  (unsigned long)snapshotId, (unsigned long)captureId, alarmLevelStrP0,
+                  (unsigned long)srHz, (unsigned)sampleCount, (unsigned)szF,
+                  (unsigned long)g_fifoRawArmPublished);
+  } else {
+    // Queue full or handle null. enqueueMqttOutbound() already applies the
+    // established drop-newest policy and increments its own counter; nothing
+    // queued ahead of this is evicted, so /trend and /event are unaffected.
+    Serial.printf("[FIFO-RAW] METADATA enqueue REJECTED snapshot_id=%lu szF=%u "
+                  "(outbound queue full) -- diagnostic dropped, telemetry unaffected\n",
+                  (unsigned long)snapshotId, (unsigned)szF);
+  }
+}
+
+// ----------------------------------------------------------------------------
 // [Phase 3B] Core 1 half of the waveform hand-off: consume one snapshot, run
 // the acceleration RMS, publish. Called once per taskAnalytics tick (1 Hz)
 // against a ~0.5 Hz capture cadence, so it keeps up with a 2x margin.
@@ -11772,6 +11990,40 @@ static void processPendingAccelSnapshot() {
   } else {
     szA = serializeJson(aDoc, aBuf, sizeof(aBuf));
     enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_EVENT, aBuf, szA, MQTT_QOS);
+  }
+
+  // [v16.5-P0-FIFORAW] Diagnostic FIFO_RAW snapshot, metadata only.
+  //
+  // Placed AFTER the accel_rms enqueue so the diagnostic path can never delay
+  // or displace the existing event: by the time control reaches here, every
+  // pre-existing publish this function performs has already been handed to the
+  // outbound queue.
+  //
+  // Consumed HERE, inside the fresh-snapshot flow, rather than on its own
+  // timer. The function has already returned early if no new capture arrived
+  // this tick, so reaching this line proves g_accelWork holds a real,
+  // just-completed capture -- which is what lets captureId, srHz and
+  // sampleCount be genuine provenance instead of a stale or fabricated value.
+  //
+  // CONSEQUENCE, DISCLOSED: the metadata event is emitted on the first capture
+  // AFTER the alarm edge, i.e. up to one capture period (2 s) later. This is
+  // deliberate and matches ADR-0006's own rule that a fault "consumes the most
+  // recent completed periodic capture... at most one capture period old". A
+  // corollary is that if the motor stops immediately after an alarm, captures
+  // stop too and the arm waits in the depth-1 queue until captures resume;
+  // Phase 0 accepts that rather than publishing metadata describing a capture
+  // that does not exist.
+  //
+  // timeout 0 on the receive: taskAnalytics never blocks waiting for an arm,
+  // and a tick with no pending alarm costs one non-blocking queue peek.
+  if (queueFifoRawArm != NULL) {
+    FifoRawArm_t arm;
+    if (xQueueReceive(queueFifoRawArm, &arm, 0) == pdTRUE) {
+      static uint32_t s_fifoRawSnapshotId = 0;   // monotonic per boot, groups a capture's chunks from Phase 2 on
+      s_fifoRawSnapshotId++;
+      publishFifoRawMetadata(arm.evCode, arm.tsEpoch, captureId,
+                             s_fifoRawSnapshotId, srHz, sampleCount, rpmAtCap);
+    }
   }
 
   // [M1A] Hand the velocity figure to Core 0's alarm/health/latch path.
@@ -12486,6 +12738,10 @@ void setup() {
   // path with it -- see the PUBLISH 4 of 4 block in publishTelemetry().
   snprintf(g_mqttTopicDeviceHealth, sizeof(g_mqttTopicDeviceHealth),
            "factory/%s/machine/%s/device-health", PLANT_ID, MACHINE_ID);
+  // [v16.5-P0-FIFORAW] Outbound-only diagnostic topic. Built with the same
+  // factory/{plant}/machine/{machine}/<leaf> convention as every topic above.
+  snprintf(g_mqttTopicFifoRaw,      sizeof(g_mqttTopicFifoRaw),
+           "factory/%s/machine/%s/vibration/fifo_raw", PLANT_ID, MACHINE_ID);
 
   Serial.println("[Init] MQTT Pipeline Topics:");
   Serial.printf("  /vibration (compat): %s\n", g_mqttTopic);
@@ -12495,6 +12751,7 @@ void setup() {
   Serial.printf("  /event:              %s\n", g_mqttTopicEvent);            // V14.4
   Serial.printf("  /command (inbound):  %s\n", g_mqttTopicCommand);          // [Commit 7A]
   Serial.printf("  /device-health:      %s\n", g_mqttTopicDeviceHealth);       // [P1-S3]
+  Serial.printf("  /fifo_raw (diag):    %s\n", g_mqttTopicFifoRaw);            // [v16.5-P0-FIFORAW]
 
   // [Commit 7A] Register the inbound message callback once, at boot --
   // independent of connection state (the library dispatches to this
@@ -12718,6 +12975,14 @@ void setup() {
   // Phase 3 decision #3 makes the whole FIFO/acceleration path best-effort, so
   // failing to create it must degrade acceleration RMS only, never halt boot.
   queueAccelSnapshot = xQueueCreate(1, sizeof(AccelSnapshotReady_t));
+  // [v16.5-P0-FIFORAW] Depth 1, for the same reason queueAccelSnapshot is:
+  // a backlog of alarm arms has no diagnostic value, since the freshest arm
+  // is the only one whose waveform is still recent. Deliberately EXCLUDED
+  // from the FATAL check below -- like the acceleration path above, the
+  // diagnostic snapshot is best-effort and a creation failure must degrade
+  // only itself, never halt boot. Every producer and consumer null-checks the
+  // handle, so a NULL here is silently inert.
+  queueFifoRawArm = xQueueCreate(1, sizeof(FifoRawArm_t));
 
   if (queueSensorData == NULL || queueButtonEvent == NULL || queueDisplayUpdate == NULL
       || queueMaintEvent == NULL || queueFifoTrigger == NULL) {
