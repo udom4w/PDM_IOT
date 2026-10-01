@@ -874,7 +874,7 @@ GqxIBNFsqLdGN189BwBlBPnWscWJg+oGqLtT
 #define QUEUE_SIZE_BUTTON 3
 #define QUEUE_SIZE_DISPLAY 3
 #define QUEUE_SIZE_MAINT 2   // V14.4: maintenance reset events (Button -> Network)
-#define QUEUE_SIZE_MQTT_OUTBOUND 6  // [v16.5] Section 7 Item 3: dormant outbound MQTT queue (Analytics -> Network4G, not wired yet)
+#define QUEUE_SIZE_MQTT_OUTBOUND 10  // [v16.5] Section 7 Item 3; [v16.5-P1-FIFOCHUNK] expanded 6->10: 1 metadata + 8 chunks per snapshot + 1 headroom
 #define QUEUE_SIZE_FIFO_TRIGGER 1  // [Broker, Commit 1] SDS SS14.1 depth-1 request queue (any task -> taskModbusRead)
 
 // [M1B-3] 1024 -> 1536. REQUIRED, not cosmetic.
@@ -961,6 +961,7 @@ TinyGsmClient rawClient(modem, 1);  // Plain TCP on mux 1 (used for TCP reachabi
 #include "mbedtls/pk.h"
 #include "mbedtls/error.h"
 #include "mbedtls/debug.h"  // TLS debug trace via mbedtls_debug_set_threshold()
+#include "mbedtls/base64.h" // [v16.5-P1-FIFOCHUNK] Base64 encode for FIFO raw chunk payload (no new dep -- mbedtls already linked for mTLS)
 #include "esp_task_wdt.h"   // WDT: reconfigure timeout, subscribe/reset Network task
 #include "esp_system.h"     // v15.3: esp_reset_reason() -- detect reboot cause
 
@@ -11813,7 +11814,7 @@ static void publishFifoRawMetadata(uint8_t  evCode,
     fDoc["rpm"]          = rpmAtCapture;
   }
   fDoc["chunk_total"]    = 8;
-  fDoc["data_present"]   = false;                   // [Phase 0] explicit: no samples in this message
+  fDoc["data_present"]   = true;                    // [v16.5-P1-FIFOCHUNK] data chunks follow via publishFifoRawChunk()
   fDoc["d"]              = "";                      // [Phase 0] placeholder, populated from Phase 2
 
   char fBuf[448];
@@ -11839,6 +11840,82 @@ static void publishFifoRawMetadata(uint8_t  evCode,
     Serial.printf("[FIFO-RAW] METADATA enqueue REJECTED snapshot_id=%lu szF=%u "
                   "(outbound queue full) -- diagnostic dropped, telemetry unaffected\n",
                   (unsigned long)snapshotId, (unsigned)szF);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// [v16.5-P1-FIFOCHUNK] Encode one 128-sample XYZ chunk and enqueue it on
+// MQTT_OUTBOUND_TOPIC_FIFO_RAW. Called 8x per snapshot by the loop added to
+// processPendingAccelSnapshot() below. Processes one chunk at a time.
+//
+// Raw layout: XYZ interleaved, little-endian int16, 128 samples per chunk.
+//   128 samples * 3 axes * 2 bytes = 768 raw bytes
+//   Base64(768) = 1024 chars (no padding waste: 768 % 3 == 0)
+//   JSON overhead ~230 B -> total ~1254 B < MQTT_OUTBOUND_PAYLOAD_MAX (1536).
+//
+// Static buffers: non-reentrant by design (Core 1 only, sequential loop).
+// No heap allocation. No new library (mbedtls already linked for mTLS).
+// Stack impact: StaticJsonDocument<384> local (~430 B frame) + small locals.
+// ----------------------------------------------------------------------------
+static void publishFifoRawChunk(uint32_t       snapshotId,
+                                uint8_t        chunkIdx,
+                                uint8_t        chunkTotal,
+                                const int16_t* xPtr,
+                                const int16_t* yPtr,
+                                const int16_t* zPtr,
+                                uint32_t       srHz,
+                                uint32_t       tsEpoch) {
+  // [v16.5-P1-FIFOCHUNK] Static buffers -- non-reentrant, Core 1 sequential only.
+  static uint8_t s_rawBuf[768];                      // 128 * 3 axes * 2 bytes
+  static char    s_b64Buf[1025];                     // Base64(768) = 1024 chars + NUL
+  static char    s_cBuf[MQTT_OUTBOUND_PAYLOAD_MAX];  // 1536 B JSON output
+
+  // [v16.5-P1-FIFOCHUNK] Interleave 128 samples XYZ, little-endian int16.
+  const uint16_t SAMPLES = 128u;
+  uint8_t* dst = s_rawBuf;
+  for (uint16_t i = 0; i < SAMPLES; i++) {
+    int16_t xv = xPtr[i];
+    int16_t yv = yPtr[i];
+    int16_t zv = zPtr[i];
+    memcpy(dst, &xv, 2); dst += 2;
+    memcpy(dst, &yv, 2); dst += 2;
+    memcpy(dst, &zv, 2); dst += 2;
+  }
+
+  // [v16.5-P1-FIFOCHUNK] Base64 via mbedtls -- already linked, no new dep.
+  size_t b64Len = 0;
+  int rc = mbedtls_base64_encode(
+      (unsigned char*)s_b64Buf, sizeof(s_b64Buf),
+      &b64Len, s_rawBuf, sizeof(s_rawBuf));
+  if (rc != 0) {
+    Serial.printf("[FIFO-RAW] chunk %u/%u base64 failed rc=%d -- dropped\n",
+                  (unsigned)chunkIdx, (unsigned)chunkTotal, rc);
+    return;
+  }
+  s_b64Buf[b64Len] = '\0';
+
+  // [v16.5-P1-FIFOCHUNK] Build chunk JSON.
+  // "d" stored as a linked const char* -- pool holds only pointer, not 1024 chars.
+  // 384 B pool handles 12 key-value nodes with margin (ref: 448 B for 18 keys
+  // in publishFifoRawMetadata()).
+  StaticJsonDocument<384> cDoc;
+  cDoc["schema"]       = "fifo_raw_v1";
+  cDoc["snapshot_id"]  = snapshotId;
+  cDoc["chunk_index"]  = (unsigned)chunkIdx;
+  cDoc["chunk_total"]  = (unsigned)chunkTotal;
+  cDoc["ts_epoch"]     = tsEpoch;
+  cDoc["sr_hz"]        = srHz;
+  cDoc["axis_order"]   = "xyz";
+  cDoc["unit"]         = "raw_int16";
+  cDoc["sample_count"] = (unsigned)SAMPLES;
+  cDoc["data_present"] = true;
+  cDoc["crc32"]        = 0u;  // [v16.5-P1-FIFOCHUNK] reserved, not implemented in Phase 1 v1
+  cDoc["d"]            = (const char*)s_b64Buf;  // linked pointer; valid until serializeJson() returns
+
+  const size_t szC = serializeJson(cDoc, s_cBuf, sizeof(s_cBuf));
+  if (!enqueueMqttOutbound(MQTT_OUTBOUND_TOPIC_FIFO_RAW, s_cBuf, szC, MQTT_QOS)) {
+    Serial.printf("[FIFO-RAW] chunk %u/%u enqueue REJECTED snapshot_id=%lu\n",
+                  (unsigned)chunkIdx, (unsigned)chunkTotal, (unsigned long)snapshotId);
   }
 }
 
@@ -12023,6 +12100,18 @@ static void processPendingAccelSnapshot() {
       s_fifoRawSnapshotId++;
       publishFifoRawMetadata(arm.evCode, arm.tsEpoch, captureId,
                              s_fifoRawSnapshotId, srHz, sampleCount, rpmAtCap);
+      // [v16.5-P1-FIFOCHUNK] Send 8 raw waveform chunks from g_accelWork (Core 1 private copy).
+      // Mutex was released at the top of this function; DSP completed above.
+      // Core 1 has exclusive ownership of g_accelWork here -- no lock needed.
+      const uint8_t  CHUNK_TOTAL        = 8u;
+      const uint16_t SAMPLES_PER_CHUNK  = 128u;
+      for (uint8_t ci = 0; ci < CHUNK_TOTAL; ci++) {
+        publishFifoRawChunk(s_fifoRawSnapshotId, ci, CHUNK_TOTAL,
+                            g_accelWork.x + (uint16_t)ci * SAMPLES_PER_CHUNK,
+                            g_accelWork.y + (uint16_t)ci * SAMPLES_PER_CHUNK,
+                            g_accelWork.z + (uint16_t)ci * SAMPLES_PER_CHUNK,
+                            srHz, arm.tsEpoch);
+      }
     }
   }
 
