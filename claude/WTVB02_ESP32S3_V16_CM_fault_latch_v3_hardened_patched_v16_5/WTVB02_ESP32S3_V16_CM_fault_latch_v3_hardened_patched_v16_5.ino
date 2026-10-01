@@ -962,6 +962,7 @@ TinyGsmClient rawClient(modem, 1);  // Plain TCP on mux 1 (used for TCP reachabi
 #include "mbedtls/error.h"
 #include "mbedtls/debug.h"  // TLS debug trace via mbedtls_debug_set_threshold()
 #include "mbedtls/base64.h" // [v16.5-P1-FIFOCHUNK] Base64 encode for FIFO raw chunk payload (no new dep -- mbedtls already linked for mTLS)
+#include "esp_rom_crc.h"    // [v16.5-P1B-CRC32] ROM CRC32 table (no new dep -- in ESP32-S3 boot ROM, zero flash footprint)
 #include "esp_task_wdt.h"   // WDT: reconfigure timeout, subscribe/reset Network task
 #include "esp_system.h"     // v15.3: esp_reset_reason() -- detect reboot cause
 
@@ -11746,6 +11747,45 @@ bool publishTelemetry(const TelemetrySnapshot* snap) {
 
 
 // ----------------------------------------------------------------------------
+// [v16.5-P1B-CRC32] Compute standard CRC-32 (poly 0x04C11DB7, init 0xFFFFFFFF,
+// refin=true, refout=true, xorout 0xFFFFFFFF -- identical to zlib/PKZIP/Python
+// zlib.crc32) over the full 1024-sample XYZ-interleaved stream in a pre-pass.
+//
+// Called BEFORE publishFifoRawMetadata() so the snapshot CRC can ride in the
+// metadata and the receiver knows the expected value before any chunk arrives.
+// A separate pre-pass also catches a torn g_accelWork read (Core 0 overwriting
+// while Core 1 encodes) that accumulating during the encode pass would not.
+//
+// Takes raw int16_t pointers rather than AccelSnapshot_t to avoid the .ino
+// auto-prototype constraint (CLAUDE.md: custom struct params need typedef ahead
+// of the file's first function).
+//
+// [v16.5-P1B-CRC32-fix] ROM API convention (validated against esp_rom_crc.h +
+// hardware broker verification):
+//   esp_rom_crc32_le() applies internal ~ at both input and output, so calling
+//   it with init=0u directly yields standard CRC-32 with no outer inversion:
+//     crc = 0u;
+//     crc = esp_rom_crc32_le(crc, buf, len);  // chain across blocks
+//     return crc;                             // no final ~ needed
+//   Confirmed: crc == zlib.crc32(data) & 0xFFFFFFFF for all test vectors
+//   and all 8 hardware chunks + snapshot (broker PASS 2026-10-01).
+// ----------------------------------------------------------------------------
+static uint32_t fifoRawSnapshotCrc32(const int16_t* xPtr,
+                                     const int16_t* yPtr,
+                                     const int16_t* zPtr,
+                                     uint16_t       n) {
+  uint32_t crc = 0u;          // [v16.5-P1B-CRC32-fix] init=0u: rom internally uses ~0=0xFFFF as table init
+  uint8_t  t[6];
+  for (uint16_t i = 0; i < n; i++) {
+    memcpy(&t[0], &xPtr[i], 2);
+    memcpy(&t[2], &yPtr[i], 2);
+    memcpy(&t[4], &zPtr[i], 2);
+    crc = esp_rom_crc32_le(crc, t, sizeof(t));
+  }
+  return crc;                 // [v16.5-P1B-CRC32-fix] no outer ~: rom output already has xorout baked in
+}
+
+// ----------------------------------------------------------------------------
 // [v16.5-P0-FIFORAW] Build and enqueue ONE metadata-only fifo_raw_v1 message.
 //
 // PHASE 0 SCOPE, STATED AS A CONTRACT: this function carries NO sample bytes.
@@ -11782,7 +11822,8 @@ static void publishFifoRawMetadata(uint8_t  evCode,
                                    uint32_t snapshotId,
                                    uint32_t srHz,
                                    uint16_t sampleCount,
-                                   float    rpmAtCapture) {
+                                   float    rpmAtCapture,
+                                   uint32_t snapshotCrc32) {  // [v16.5-P1B-CRC32] CRC-32 of the full 6144 B reassembly
   // Only WARNING and CRITICAL ever arm, so this mapping is total. Derived from
   // evCode rather than read from g_systemState.state on purpose: the alarm
   // level that belongs on this message is the one that fired the edge on
@@ -11790,7 +11831,7 @@ static void publishFifoRawMetadata(uint8_t  evCode,
   // ~1-2 s later.
   const char* alarmLevelStrP0 = (evCode == FL_EVT_CRITICAL) ? "CRITICAL" : "WARNING";
 
-  StaticJsonDocument<448> fDoc;
+  StaticJsonDocument<512> fDoc;  // [v16.5-P1B-CRC32] bumped from 448 to accommodate snapshot_crc32 node
   fDoc["schema"]         = "fifo_raw_v1";
   fDoc["plant_id"]       = PLANT_ID;
   fDoc["machine_id"]     = MACHINE_ID;
@@ -11815,6 +11856,7 @@ static void publishFifoRawMetadata(uint8_t  evCode,
   }
   fDoc["chunk_total"]    = 8;
   fDoc["data_present"]   = true;                    // [v16.5-P1-FIFOCHUNK] data chunks follow via publishFifoRawChunk()
+  fDoc["snapshot_crc32"] = snapshotCrc32;           // [v16.5-P1B-CRC32] CRC-32 of 6144 B reassembly (8 chunks × 768 B XYZ-interleaved)
   fDoc["d"]              = "";                      // [Phase 0] placeholder, populated from Phase 2
 
   char fBuf[448];
@@ -11882,6 +11924,10 @@ static void publishFifoRawChunk(uint32_t       snapshotId,
     memcpy(dst, &zv, 2); dst += 2;
   }
 
+  // [v16.5-P1B-CRC32-fix] Per-chunk CRC-32 over 768 raw bytes before Base64.
+  // esp_rom_crc32_le has internal ~: rom(0u,buf)=~raw(~0u,buf)=~raw(0xFFFF,buf)=standard CRC32.
+  const uint32_t chunkCrc32 = esp_rom_crc32_le(0u, s_rawBuf, sizeof(s_rawBuf));
+
   // [v16.5-P1-FIFOCHUNK] Base64 via mbedtls -- already linked, no new dep.
   size_t b64Len = 0;
   int rc = mbedtls_base64_encode(
@@ -11909,7 +11955,7 @@ static void publishFifoRawChunk(uint32_t       snapshotId,
   cDoc["unit"]         = "raw_int16";
   cDoc["sample_count"] = (unsigned)SAMPLES;
   cDoc["data_present"] = true;
-  cDoc["crc32"]        = 0u;  // [v16.5-P1-FIFOCHUNK] reserved, not implemented in Phase 1 v1
+  cDoc["crc32"]        = chunkCrc32;  // [v16.5-P1B-CRC32] CRC-32 over 768 raw bytes before Base64 (was reserved 0u in Phase 1A)
   cDoc["d"]            = (const char*)s_b64Buf;  // linked pointer; valid until serializeJson() returns
 
   const size_t szC = serializeJson(cDoc, s_cBuf, sizeof(s_cBuf));
@@ -12098,8 +12144,13 @@ static void processPendingAccelSnapshot() {
     if (xQueueReceive(queueFifoRawArm, &arm, 0) == pdTRUE) {
       static uint32_t s_fifoRawSnapshotId = 0;   // monotonic per boot, groups a capture's chunks from Phase 2 on
       s_fifoRawSnapshotId++;
+      // [v16.5-P1B-CRC32] Snapshot CRC pre-pass: over all 1024 samples before any chunk encoding.
+      // Separate pass is deliberate -- it also detects a torn g_accelWork read,
+      // which accumulating CRC during the encode pass would not catch.
+      const uint32_t snapCrc32 = fifoRawSnapshotCrc32(
+          g_accelWork.x, g_accelWork.y, g_accelWork.z, sampleCount);
       publishFifoRawMetadata(arm.evCode, arm.tsEpoch, captureId,
-                             s_fifoRawSnapshotId, srHz, sampleCount, rpmAtCap);
+                             s_fifoRawSnapshotId, srHz, sampleCount, rpmAtCap, snapCrc32);
       // [v16.5-P1-FIFOCHUNK] Send 8 raw waveform chunks from g_accelWork (Core 1 private copy).
       // Mutex was released at the top of this function; DSP completed above.
       // Core 1 has exclusive ownership of g_accelWork here -- no lock needed.
